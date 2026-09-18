@@ -80,6 +80,13 @@ for Python HAPPY, `0.55 s` for CPU Fortran, and `0.76 s` for CUDA 13.1: the
 Fortran implementations are respectively `12.25x` and `8.87x` faster than
 Python. The isolated CUDA density kernel has a `0.011865 s` median for 5000
 iterations. The complete raw samples are included in the same benchmark JSON.
+An 800 eV scaling probe increases the basis from 725 to 2085 plane waves. At
+that size the Blackwell node completes the internal workflow in `2.011 s`
+versus `2.275 s` on the RTX 4090, reversing the small-case ordering. The
+Blackwell cuSOLVER stage alone remains slower (`0.517 s` versus `0.436 s`),
+but its deficit narrows from about 62% at 725 plane waves to about 19% at 2085.
+This confirms that fixed overhead and small-matrix utilization dominate the
+original comparison; the different host CPUs also affect H/S assembly.
 
 ## HALF versus Python HAPPY
 

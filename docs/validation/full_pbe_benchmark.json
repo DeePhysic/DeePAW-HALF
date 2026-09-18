@@ -43,5 +43,31 @@
     "cuda13_status": "passed numerical parity after the driver upgrade",
     "cuda12_status": "passed numerical parity"
   },
-  "interpretation": "After upgrading the RTX 4090 node to driver 595.84, the CUDA 13/cc89 build passes the full Si Gamma parity test with a 1.62e-11 eV maximum error. Five fresh-process runs have a 0.69 s wall-clock median, 10.23x faster than Python HAPPY but 1.23x slower than the 0.56 s CPU Fortran median for this small 725-plane-wave problem. The warm CUDA 13 medians are about 0.184 s for H/S assembly and 0.123 s for the two GPU eigensolves. The isolated CUDA 13 density kernel takes about 0.01240 s for 5000 iterations, 41.86x faster than one CPU thread. Larger matrices, persistent processes, and batched k points remain the intended GPU regime."
+  "bh000_rtx_pro_6000_blackwell_port2222": {
+    "os": "Rocky Linux 10.1",
+    "gpu_count": 2,
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition 96GB",
+    "driver": "590.44.01",
+    "compute_capability": "12.0",
+    "cuda": "13.1 with NVHPC 26.3, cc120",
+    "python_happy_seconds": [6.99, 6.74, 6.09, 6.30, 6.85],
+    "python_happy_median_seconds": 6.74,
+    "half_cpu_fortran_seconds": [0.57, 0.55, 0.55, 0.55, 0.55],
+    "half_cpu_fortran_median_seconds": 0.55,
+    "half_cpu_speedup_vs_python": 12.254545454545454,
+    "half_cuda13_seconds": [0.80, 0.76, 0.76, 0.77, 0.76],
+    "half_cuda13_median_seconds": 0.76,
+    "half_cuda13_speedup_vs_python": 8.868421052631579,
+    "half_cuda13_slowdown_vs_cpu": 1.3818181818181818,
+    "half_cuda13_max_abs_error_vs_same_node_happy_eV": 8.306244581035571e-12,
+    "half_cuda13_internal_elapsed_seconds_median": 0.655805,
+    "half_cuda13_internal_matrix_assembly_seconds_median": 0.140230,
+    "half_cuda13_internal_gpu_eigensolver_seconds_median": 0.200365,
+    "cuda13_density_kernel_seconds_5000_iterations": [0.0119550, 0.0118900, 0.0118470, 0.0115779, 0.0118649],
+    "cuda13_density_kernel_seconds_5000_iterations_median": 0.0118649,
+    "cuda13_density_kernel_speedup_vs_one_cpu_thread_median": 27.8266,
+    "gpu1_max_abs_difference_vs_gpu0_eV": 0.0,
+    "status": "both GPUs passed numerical parity"
+  },
+  "interpretation": "After upgrading the RTX 4090 node to driver 595.84, its CUDA 13/cc89 build passes the full Si Gamma parity test and has a 0.69 s fresh-process median, 10.23x faster than Python HAPPY. On the dual RTX PRO 6000 Blackwell node, the native CUDA 13.1/cc120 build passes on both GPUs; its 0.76 s median is 8.87x faster than the same-node Python HAPPY median of 6.74 s. CPU Fortran remains faster on both nodes for this small 725-plane-wave problem. Larger matrices, persistent processes, and batched k points remain the intended GPU regime."
 }

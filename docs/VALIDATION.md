@@ -71,6 +71,16 @@ isolated CUDA 13 density kernel completes 5000 iterations in about `0.01240 s`,
 `41.86x` faster than one CPU thread. Full samples and environment details are
 in [`validation/full_pbe_benchmark.json`](validation/full_pbe_benchmark.json).
 
+Port 2222 at `hpc.icqms.group` is `BH000`, a Rocky Linux 10.1 workstation with
+two RTX PRO 6000 Blackwell 96 GB GPUs. The native CUDA 13.1/NVHPC 26.3 `cc120`
+build passed on both devices, and GPU0/GPU1 produced identical first-eight
+eigenvalues. Against HAPPY run on the same node and inputs, the maximum
+eigenvalue difference is `8.31e-12 eV`. Five fresh-process medians are `6.74 s`
+for Python HAPPY, `0.55 s` for CPU Fortran, and `0.76 s` for CUDA 13.1: the
+Fortran implementations are respectively `12.25x` and `8.87x` faster than
+Python. The isolated CUDA density kernel has a `0.011865 s` median for 5000
+iterations. The complete raw samples are included in the same benchmark JSON.
+
 ## HALF versus Python HAPPY
 
 For the implemented Si slice (CHGCAR read, smooth electron count, and 400 eV

@@ -41,29 +41,48 @@ points, potential-dependent MIMIC_US D, energy/forces and `vaspwave.h5` output
 are tracked in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md); HALF is not
 yet a complete replacement for every HAPPY workflow.
 
-## Numerical model and execution flow
+## Numerical model, derived step by step
 
-HALF solves the fixed-density generalized Hermitian problem
+HALF is a **fixed-density** reconstruction: it reads the smooth valence
+density `rho~(r)` from `CHGCAR` and does not run an SCF cycle. At a chosen
+cutoff, the wavefunction is expanded in plane waves `|k+G>` and the following
+generalized Hermitian problem is solved:
 
-$$
-H(\mathbf{k}) c_n = \epsilon_n S(\mathbf{k}) c_n.
-$$
+```text
+H(k) c_n = epsilon_n S(k) c_n
+```
 
-At the implemented Gamma-point level, the linearized PAW/USPP-like operator is
+In atomic units, the dense matrices assembled by the Gamma path have the form
 
-$$
-\begin{aligned}
-H &= T + V_{\mathrm{eff}}
- + \sum_{Iij} |\beta_i^I\rangle D_{ij}^I\langle\beta_j^I|,\\
-S &= I + \sum_{Iij} |\beta_i^I\rangle Q_{ij}^I\langle\beta_j^I|,\\
-V_{\mathrm{eff}} &= V_{\mathrm{ion}}^{\mathrm{local}}
- + V_H[\tilde\rho] + V_{xc}[\tilde\rho+\tilde\rho_c],\\
-D_{ij}^I &= D_{ij}^{\mathrm{ION}} +
- \int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r)\,d\mathbf r.
-\end{aligned}
-\]
+```text
+H_GG' = |k+G|^2/2 * delta_GG' + Veff(G-G')
+        + sum_(I,i,j) beta_i^I(G) D_ij^I beta_j^I*(G')
 
-The execution path is deliberately direct:
+S_GG' = delta_GG' + sum_(I,i,j) beta_i^I(G) Q_ij^I beta_j^I*(G')
+```
+
+The first term is kinetic energy. `Veff(G-G')` is the Fourier coefficient of
+the fixed-density local effective potential. The last terms are the PAW/USPP
+augmentation corrections: `beta` are reciprocal PAW projectors, `Q` augments
+the overlap, and `D` is the onsite Hamiltonian matrix.
+
+The potential is derived from the fixed smooth density as
+
+```text
+Veff(r) = Vion_local(r) + VH[rho~](r) + Vxc[rho~ + rho_core](r)
+VH(G)   = 4*pi*rho~(G)/|G|^2,  G != 0
+D_ij^I = DION_ij^I + integral Veff(r) QDEP_ij^I(r) dr
+```
+
+`rho_core` is the POTCAR partial-core density used by NLCC. `DION` is the
+frozen onsite term from POTCAR; `QDEP` supplies the potential-dependent
+MIMIC_US contribution. `VH(G=0)` is handled by the chosen electrostatic gauge.
+Since `S` is positive definite, the generalized problem can be reduced through
+a Cholesky factorization `S = L L^H` to the ordinary Hermitian problem
+`L^-1 H L^-H y = epsilon y`, followed by `c = L^-H y`. MKL and cuSOLVER perform
+this dense generalized-Hermitian solve.
+
+The execution path follows the derivation directly:
 
 ```text
 CHGCAR + POTCAR

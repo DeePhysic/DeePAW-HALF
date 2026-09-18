@@ -13,31 +13,41 @@ HAPPY 是移植过程中的数值 oracle。当前完整验证通过的是 Si 的
 固定密度路径；HfO2 的大矩阵性能已经记录，但其与 HAPPY 的逐本征值一致性仍是
 独立验证门槛。
 
-## 数值模型
+## 数值模型：从固定密度到本征值
 
-HALF 求解广义厄米本征问题：
+HALF 是**固定密度**重建：它读取 `CHGCAR` 中的平滑价电子密度 `rho~(r)`，不做
+自洽场（SCF）迭代。在给定 ENCUT 下，波函数用平面波 `|k+G>` 展开，并求解：
 
-$$
-H(\mathbf{k})c_n=\epsilon_nS(\mathbf{k})c_n.
-$$
+```text
+H(k) c_n = epsilon_n S(k) c_n
+```
 
-Gamma 点已实现的线性化 PAW/USPP 类算符为：
+在原子单位制下，Gamma 路径实际组装的稠密矩阵为：
 
-$$
-\begin{aligned}
-H &= T+V_{\mathrm{eff}}
- +\sum_{Iij}|\beta_i^I\rangle D_{ij}^I\langle\beta_j^I|,\\
-S &= I+\sum_{Iij}|\beta_i^I\rangle Q_{ij}^I\langle\beta_j^I|,\\
-V_{\mathrm{eff}} &= V_{\mathrm{ion}}^{\mathrm{local}}
- +V_H[\tilde\rho]+V_{xc}[\tilde\rho+\tilde\rho_c],\\
-D_{ij}^I &= D_{ij}^{\mathrm{ION}}
- +\int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r)\,d\mathbf r.
-\end{aligned}
-$$
+```text
+H_GG' = |k+G|^2/2 * delta_GG' + Veff(G-G')
+        + sum_(I,i,j) beta_i^I(G) D_ij^I beta_j^I*(G')
 
-其中，\(\tilde\rho\) 是平滑价电子密度，\(\tilde\rho_c\) 是 POTCAR 的部分
-芯密度；\(\beta\)、\(Q\) 与 \(D\) 分别为 PAW 投影子、重叠增强和 onsite
-矩阵。GPU 使用复双精度（complex128）构造并求解该问题。
+S_GG' = delta_GG' + sum_(I,i,j) beta_i^I(G) Q_ij^I beta_j^I*(G')
+```
+
+第一项是动能；`Veff(G-G')` 是固定密度有效局域势的傅里叶系数。最后两项是
+PAW/USPP 增强：`beta` 是倒空间 PAW 投影子，`Q` 修正重叠矩阵，`D` 是 onsite
+哈密顿量矩阵。
+
+有效势由固定平滑密度推出：
+
+```text
+Veff(r) = Vion_local(r) + VH[rho~](r) + Vxc[rho~ + rho_core](r)
+VH(G)   = 4*pi*rho~(G)/|G|^2,  G != 0
+D_ij^I = DION_ij^I + integral Veff(r) QDEP_ij^I(r) dr
+```
+
+`rho_core` 是 POTCAR 中用于 NLCC 的部分芯密度；`DION` 是 POTCAR 固定 onsite
+项；`QDEP` 给出势依赖的 MIMIC_US 校正。`VH(G=0)` 由选定的静电规范处理。由于
+`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，把问题化为
+`L^-1 H L^-H y = epsilon y`，再以 `c = L^-H y` 恢复广义本征矢。CPU 的 MKL 和
+GPU 的 cuSOLVER 都执行这一稠密广义厄米求解。
 
 ## 代码逻辑与工作流
 
@@ -52,8 +62,9 @@ CHGCAR + POTCAR
   -> 输出本征值及 JSON 验证报告
 ```
 
-CUDA 路径将势构造、投影子计算、H/S 组装和本征值求解全部保留在设备端，避免
-传输完整的复数 H/S 稠密矩阵。主要源码模块为：
+CUDA 路径将 FFT 势构造、投影子计算、H/S 组装和本征值求解全部保留在设备端，
+避免传输完整的复数 H/S 稠密矩阵。平面波数增加后，三次标度的稠密广义本征
+求解会成为主要耗时。主要源码模块为：
 
 | 模块 | 职责 |
 | --- | --- |

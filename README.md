@@ -31,7 +31,8 @@ Version 0.3 provides a numerically closed Si Gamma fixed-density path:
 - independent CPU Fortran and CUDA Fortran backends;
 - CUDA 12.4 and CUDA 13.0 build presets;
 - a correctness-checked backend benchmark;
-- an `half-inspect` executable and parity-oriented tests.
+- a unified `half` CLI, HAPPY-compatible command aliases, and parity-oriented
+  tests.
 
 The Si Gamma/DION path matches HAPPY to about `1.6e-11 eV`. Arbitrary k
 points, potential-dependent MIMIC_US D, energy/forces and `vaspwave.h5` output
@@ -77,7 +78,34 @@ cmake --preset cuda13-release
 cmake --build --preset cuda13-release
 ```
 
-Inspect a DeepAW or VASP smooth-density input:
+## Command-line interface
+
+The unified CLI follows the argument style of HAPPY while allowing explicit
+CPU/CUDA backend selection:
+
+```bash
+# Inspect a DeepAW or VASP smooth-density input.
+./build/cuda12-cc89-release/half inspect CHGCAR.smooth --encut 400
+
+# Reconstruct and validate the Gamma eigenspectrum; a JSON report is written.
+./build/cuda12-cc89-release/half gamma CHGCAR.smooth POTCAR \
+  --encut 400 --bands 8 --xc pbe --backend cuda \
+  --reference-eigenval EIGENVAL --output gamma_validation.json
+
+# Inspect parsed POTCAR or PAW data.
+./build/cpu-release/half potcar POTCAR
+./build/cpu-release/half paw CHGCAR.smooth POTCAR --encut 400
+```
+
+`half-validate-gamma` is a compatibility alias for `half gamma`. The build also
+creates `half-bands` and `half-energy` aliases so scripts can adopt the HAPPY-
+style command names now; in version 0.3 those two commands exit with a clear
+unsupported-feature error because arbitrary-k bands and total energy are not
+yet numerically complete. Run `half --help` or `half gamma --help` for the
+complete option list.
+
+The older focused executables remain available during the transition. For
+example:
 
 ```bash
 ./build/cuda12-release/half-inspect CHGCAR.smooth 400

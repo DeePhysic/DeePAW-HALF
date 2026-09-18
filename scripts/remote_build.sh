@@ -35,4 +35,4 @@ ssh -t -p "${remote_port}" "${remote_host}" \
     && cmake --fresh --preset '${build_preset}' \
     && cmake --build --preset '${build_preset}' --parallel \
     && ctest --preset '${build_preset}' \
-    && ./build/'${build_preset}'/half-inspect ../fixtures/Si.CHGCAR.smooth 400"
+    && ./build/'${build_preset}'/half inspect ../fixtures/Si.CHGCAR.smooth --encut 400"

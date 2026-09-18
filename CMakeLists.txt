@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 
 project(HALF VERSION 0.3.0 LANGUAGES Fortran)
+include(GNUInstallDirs)
 
 option(HALF_ENABLE_CUDA "Build the CUDA Fortran backend" ON)
 option(HALF_ENABLE_GPU_DEBUG "Enable CUDA bounds checks and synchronous launches" OFF)
@@ -70,6 +71,30 @@ endif()
 if(HALF_ENABLE_GPU_DEBUG)
   target_compile_options(half_core PRIVATE -Mbounds -gpu=debug)
   target_compile_definitions(half_core PRIVATE HALF_GPU_DEBUG=1)
+endif()
+
+# Unified command-line interface.  It remains buildable without oneMKL so that
+# input inspection and help/version are always available; Gamma reconstruction
+# is enabled automatically when MKL is discovered.
+add_executable(half app/half_cli.F90)
+half_set_fortran_options(half)
+target_link_libraries(half PRIVATE half_core)
+if(HALF_HAVE_MKL)
+  target_compile_definitions(half PRIVATE HALF_CLI_HAVE_MKL=1)
+  half_link_mkl(half)
+  set_target_properties(half PROPERTIES INSTALL_RPATH "${HALF_MKL_LIBRARY_DIR}")
+endif()
+if(HALF_ENABLE_CUDA)
+  target_compile_definitions(half PRIVATE HALF_CLI_CUDA=1)
+  target_compile_options(half PRIVATE -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC},lineinfo)
+  target_link_options(half PRIVATE -cuda -cudalib=cusolver -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC})
+endif()
+if(UNIX)
+  add_custom_command(TARGET half POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:half> $<TARGET_FILE_DIR:half>/half-validate-gamma
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:half> $<TARGET_FILE_DIR:half>/half-bands
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE_NAME:half> $<TARGET_FILE_DIR:half>/half-energy
+    VERBATIM)
 endif()
 
 if(HALF_ENABLE_CUDA)
@@ -142,6 +167,14 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   add_test(NAME half_inspect_help COMMAND half-inspect --help)
+  add_test(NAME half_cli_help COMMAND half --help)
+  add_test(NAME half_cli_version COMMAND half --version)
+  add_test(NAME half_cli_gamma_help COMMAND half gamma --help)
 endif()
 
-install(TARGETS half_core half-inspect)
+install(TARGETS half_core half half-inspect)
+if(UNIX)
+  install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink half \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/half-validate-gamma\")")
+  install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink half \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/half-bands\")")
+  install(CODE "execute_process(COMMAND \"${CMAKE_COMMAND}\" -E create_symlink half \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/half-energy\")")
+endif()

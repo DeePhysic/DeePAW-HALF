@@ -1,0 +1,305 @@
+module half_cuda_assembly
+  use cudafor
+  use cufft
+  use half_kinds, only: dp
+  use half_constants,only:pi
+  use half_types, only: plane_wave_basis_t,crystal_t,potcar_t
+  use half_paw, only: paw_species_t
+  implicit none
+  private
+  public :: assemble_dense_gamma_cuda,assemble_dense_gamma_cuda_device,assemble_dense_gamma_cuda_full
+contains
+  attributes(global) subroutine real_to_complex_kernel(input,output,n)
+    real(dp),device,intent(in)::input(*)
+    complex(dp),device,intent(out)::output(*)
+    integer,value::n
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)output(i)=cmplx(input(i),0.0_dp,dp)
+  end subroutine
+
+  attributes(global) subroutine assemble_local_kernel(vg,gvectors,kinetic,h,s,n,n1,n2,n3,ngrid)
+    complex(dp),device,intent(in)::vg(*)
+    integer,device,intent(in)::gvectors(*)
+    real(dp),device,intent(in)::kinetic(*)
+    complex(dp),device,intent(out)::h(*),s(*)
+    integer,value::n,n1,n2,n3,ngrid
+    integer::i,j,a,b,c,fft_index,matrix_index
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    j=(blockIdx%y-1)*blockDim%y+threadIdx%y
+    if(i<=n.and.j<=n)then
+      a=modulo(gvectors(i)-gvectors(j),n1)
+      b=modulo(gvectors(n+i)-gvectors(n+j),n2)
+      c=modulo(gvectors(2*n+i)-gvectors(2*n+j),n3)
+      fft_index=a*n2*n3+b*n3+c+1
+      matrix_index=(j-1)*n+i
+      h(matrix_index)=vg(fft_index)/real(ngrid,dp)
+      s(matrix_index)=(0.0_dp,0.0_dp)
+      if(i==j)then
+        h(matrix_index)=h(matrix_index)+kinetic(i)
+        s(matrix_index)=(1.0_dp,0.0_dp)
+      end if
+    end if
+  end subroutine
+
+  attributes(global) subroutine add_paw_kernel(h,s,projectors,dij,qij,n,nlm)
+    complex(dp),device,intent(inout)::h(*),s(*)
+    complex(dp),device,intent(in)::projectors(*)
+    real(dp),device,intent(in)::dij(*),qij(*)
+    integer,value::n,nlm
+    integer::i,j,a,b,matrix_index
+    complex(dp)::zh,zs,pi,pj
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    j=(blockIdx%y-1)*blockDim%y+threadIdx%y
+    if(i<=n.and.j<=n)then
+      zh=(0.0_dp,0.0_dp); zs=(0.0_dp,0.0_dp)
+      do b=1,nlm
+        pj=conjg(projectors((j-1)*nlm+b))
+        do a=1,nlm
+          pi=projectors((i-1)*nlm+a)
+          zh=zh+pi*dij((b-1)*nlm+a)*pj
+          zs=zs+pi*qij((b-1)*nlm+a)*pj
+        end do
+      end do
+      matrix_index=(j-1)*n+i
+      h(matrix_index)=h(matrix_index)+zh
+      s(matrix_index)=s(matrix_index)+zs
+    end if
+  end subroutine
+
+  attributes(device) function spline_eval_projector_d(y,m2,xmax,x,nrad)result(value)
+    real(dp),device,intent(in)::y(*),m2(*)
+    real(dp),value::xmax,x
+    integer,value::nrad
+    real(dp)::value,h,t
+    integer::k
+    h=xmax/real(nrad,dp);k=max(1,min(nrad-1,int(floor(x/h))+1));t=(x-real(k-1,dp)*h)/h
+    value=(1-t)*y(k)+t*y(k+1)+h*h*(((1-t)**3-(1-t))*m2(k)+(t**3-t)*m2(k+1))/6
+  end function
+
+  attributes(device) function factorial_d(n)result(v)
+    integer,value::n
+    real(dp)::v
+    integer::i
+    v=1;do i=2,n;v=v*i;end do
+  end function
+
+  attributes(device) function assoc_legendre_d(l,m,x)result(p)
+    integer,value::l,m
+    real(dp),value::x
+    real(dp)::p,pmm,pmmp1,pll,fact
+    integer::i,ll
+    pmm=1
+    if(m>0)then
+      fact=1;do i=1,m;pmm=-pmm*fact*sqrt(max(0.0_dp,(1-x)*(1+x)));fact=fact+2;end do
+    end if
+    if(l==m)then;p=pmm;return;end if
+    pmmp1=x*real(2*m+1,dp)*pmm;if(l==m+1)then;p=pmmp1;return;end if
+    do ll=m+2,l;pll=(real(2*ll-1,dp)*x*pmmp1-real(ll+m-1,dp)*pmm)/real(ll-m,dp);pmm=pmmp1;pmmp1=pll;end do
+    p=pmmp1
+  end function
+
+  attributes(device) function real_ylm_d(l,m,theta,phi)result(y)
+    integer,value::l,m
+    real(dp),value::theta,phi
+    real(dp)::y,p,norm,x
+    integer::am
+    am=abs(m);x=cos(theta);p=assoc_legendre_d(l,am,x)
+    norm=sqrt(real(2*l+1,dp)/(4*pi)*factorial_d(l-am)/factorial_d(l+am))
+    if(m>0)then;y=sqrt(2.0_dp)*(-1.0_dp)**m*norm*p*cos(real(am,dp)*phi)
+    else if(m<0)then;y=sqrt(2.0_dp)*(-1.0_dp)**m*norm*p*sin(real(am,dp)*phi)
+    else;y=norm*p;end if
+  end function
+
+  attributes(global) subroutine projector_kernel(projectors,qvectors,positions,radial,m2,n,natoms,nlm,ilm,l,m,nrad,gmax,pref,ilfac)
+    complex(dp),device,intent(out)::projectors(*)
+    real(dp),device,intent(in)::qvectors(*),positions(*),radial(*),m2(*)
+    integer,value::n,natoms,nlm,ilm,l,m,nrad
+    real(dp),value::gmax,pref
+    complex(dp),value::ilfac
+    integer::linear,iat,ig,index
+    real(dp)::qx,qy,qz,qn,theta,phi,rval,ylm,phase
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=n*natoms)then
+      iat=mod(linear-1,natoms)+1;ig=(linear-1)/natoms+1
+      qx=qvectors(ig);qy=qvectors(n+ig);qz=qvectors(2*n+ig);qn=sqrt(qx*qx+qy*qy+qz*qz)
+      if(qn>1.0e-10_dp)then;theta=acos(max(-1.0_dp,min(1.0_dp,qz/qn)));phi=atan2(qy,qx)
+      else;theta=0;phi=0;end if
+      rval=spline_eval_projector_d(radial,m2,gmax,qn,nrad);if(qn>.99_dp*gmax)rval=0
+      ylm=real_ylm_d(l,m,theta,phi)
+      phase=qx*positions(iat)+qy*positions(natoms+iat)+qz*positions(2*natoms+iat)
+      index=(ig-1)*natoms*nlm+(ilm-1)*natoms+iat
+      projectors(index)=pref*ilfac*rval*ylm*cmplx(cos(phase),-sin(phase),dp)
+    end if
+  end subroutine
+
+  attributes(global) subroutine add_paw_full_kernel(h,s,projectors,dij,qij,n,natoms,nlm,iat)
+    complex(dp),device,intent(inout)::h(*),s(*)
+    complex(dp),device,intent(in)::projectors(*)
+    real(dp),device,intent(in)::dij(*),qij(*)
+    integer,value::n,natoms,nlm,iat
+    integer::i,j,a,b,matrix_index,pi_index,pj_index
+    complex(dp)::zh,zs,pi,pj
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x;j=(blockIdx%y-1)*blockDim%y+threadIdx%y
+    if(i<=n.and.j<=n)then
+      zh=(0.0_dp,0.0_dp);zs=(0.0_dp,0.0_dp)
+      do b=1,nlm
+        pj_index=(j-1)*natoms*nlm+(b-1)*natoms+iat;pj=conjg(projectors(pj_index))
+        do a=1,nlm
+          pi_index=(i-1)*natoms*nlm+(a-1)*natoms+iat;pi=projectors(pi_index)
+          zh=zh+pi*dij((b-1)*nlm+a)*pj;zs=zs+pi*qij((b-1)*nlm+a)*pj
+        end do
+      end do
+      matrix_index=(j-1)*n+i;h(matrix_index)=h(matrix_index)+zh;s(matrix_index)=s(matrix_index)+zs
+    end if
+  end subroutine
+
+  attributes(global) subroutine hermitize_kernel(h,s,n)
+    complex(dp),device,intent(inout)::h(*),s(*)
+    integer,value::n
+    integer::i,j,ij,ji
+    complex(dp)::zh,zs
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    j=(blockIdx%y-1)*blockDim%y+threadIdx%y
+    if(i<=n.and.j<=n.and.i<=j)then
+      ij=(j-1)*n+i; ji=(i-1)*n+j
+      zh=0.5_dp*(h(ij)+conjg(h(ji)))
+      zs=0.5_dp*(s(ij)+conjg(s(ji)))
+      h(ij)=zh; h(ji)=conjg(zh)
+      s(ij)=zs; s(ji)=conjg(zs)
+    end if
+  end subroutine
+
+  subroutine assemble_dense_gamma_cuda(veff,basis,paw,h,s)
+    real(dp),intent(in)::veff(:)
+    type(plane_wave_basis_t),intent(in)::basis
+    type(paw_species_t),intent(in)::paw(:)
+    complex(dp),device,allocatable,intent(out)::h(:,:),s(:,:)
+    real(dp),device,allocatable::dveff(:)
+    integer::n
+    n=size(veff); allocate(dveff(n)); dveff=veff
+    call assemble_dense_gamma_cuda_device(dveff,basis,paw,h,s)
+  end subroutine
+
+  subroutine assemble_dense_gamma_cuda_device(dveff,basis,paw,h,s)
+    real(dp),device,intent(in)::dveff(:)
+    type(plane_wave_basis_t),intent(in)::basis
+    type(paw_species_t),intent(in)::paw(:)
+    complex(dp),device,allocatable,intent(out)::h(:,:),s(:,:)
+    complex(dp),allocatable::projectors(:,:)
+    complex(dp),device,allocatable::dvin(:),dvg(:),dprojectors(:,:)
+    integer,device,allocatable::dgvectors(:,:)
+    real(dp),device,allocatable::dkinetic(:),ddij(:,:),dqij(:,:)
+    type(dim3)::threads,blocks
+    integer::n,ngrid,plan,status,it,iat,nlm,ierr
+    n=int(basis%npw); ngrid=size(dveff)
+    allocate(dvin(ngrid),dvg(ngrid),dgvectors(n,3),dkinetic(n),h(n,n),s(n,n))
+    call real_to_complex_kernel<<<(ngrid+255)/256,256>>>(dveff,dvin,ngrid)
+    dgvectors=basis%gvectors; dkinetic=basis%kinetic
+    status=cufftPlan3d(plan,basis%shape(1),basis%shape(2),basis%shape(3),CUFFT_Z2Z)
+    if(status/=CUFFT_SUCCESS)error stop 'HALF: cuFFT plan creation failed'
+    status=cufftExecZ2Z(plan,dvin,dvg,CUFFT_FORWARD)
+    if(status/=CUFFT_SUCCESS)error stop 'HALF: cuFFT forward transform failed'
+    status=cufftDestroy(plan)
+    threads=dim3(16,16,1); blocks=dim3((n+15)/16,(n+15)/16,1)
+    call assemble_local_kernel<<<blocks,threads>>>(dvg,dgvectors,dkinetic,h,s,n, &
+      basis%shape(1),basis%shape(2),basis%shape(3),ngrid)
+    ierr=cudaGetLastError(); if(ierr/=cudaSuccess)error stop 'HALF: local matrix CUDA kernel launch failed'
+    do it=1,size(paw)
+      nlm=paw(it)%nlm
+      allocate(projectors(nlm,n),dprojectors(nlm,n),ddij(nlm,nlm),dqij(nlm,nlm))
+      ddij=paw(it)%dij; dqij=paw(it)%qij
+      do iat=1,paw(it)%natoms
+        projectors=paw(it)%projectors(iat,:,:); dprojectors=projectors
+        call add_paw_kernel<<<blocks,threads>>>(h,s,dprojectors,ddij,dqij,n,nlm)
+        ierr=cudaGetLastError(); if(ierr/=cudaSuccess)error stop 'HALF: PAW matrix CUDA kernel launch failed'
+      end do
+      deallocate(projectors,dprojectors,ddij,dqij)
+    end do
+    call hermitize_kernel<<<blocks,threads>>>(h,s,n)
+    ierr=cudaGetLastError(); if(ierr/=cudaSuccess)error stop 'HALF: Hermitian CUDA kernel launch failed'
+    ierr=cudaDeviceSynchronize(); if(ierr/=cudaSuccess)error stop 'HALF: CUDA matrix assembly failed'
+  end subroutine
+
+  subroutine assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,h,s)
+    real(dp),device,intent(in)::dveff(:)
+    type(plane_wave_basis_t),intent(in)::basis
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    complex(dp),device,allocatable,intent(out)::h(:,:),s(:,:)
+    complex(dp),device,allocatable::dvin(:),dvg(:),dprojectors(:,:,:)
+    integer,device,allocatable::dgvectors(:,:)
+    real(dp),device,allocatable::dkinetic(:),dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:),ddij(:,:),dqij(:,:)
+    real(dp),allocatable::positions(:,:),m2(:),dij(:,:),qij(:,:)
+    type(dim3)::threads,blocks
+    integer::n,ngrid,plan,status,it,iat,ich,jch,m,mj,l,ilm,jlm,nlm,nrad,ion0,ierr
+    complex(dp)::ilfac
+    n=int(basis%npw);ngrid=size(dveff)
+    allocate(dvin(ngrid),dvg(ngrid),dgvectors(n,3),dkinetic(n),h(n,n),s(n,n))
+    call real_to_complex_kernel<<<(ngrid+255)/256,256>>>(dveff,dvin,ngrid)
+    dgvectors=basis%gvectors;dkinetic=basis%kinetic
+    status=cufftPlan3d(plan,basis%shape(1),basis%shape(2),basis%shape(3),CUFFT_Z2Z)
+    if(status/=CUFFT_SUCCESS)error stop 'HALF: cuFFT plan creation failed'
+    status=cufftExecZ2Z(plan,dvin,dvg,CUFFT_FORWARD);if(status/=CUFFT_SUCCESS)error stop 'HALF: cuFFT forward transform failed'
+    status=cufftDestroy(plan)
+    threads=dim3(16,16,1);blocks=dim3((n+15)/16,(n+15)/16,1)
+    call assemble_local_kernel<<<blocks,threads>>>(dvg,dgvectors,dkinetic,h,s,n,basis%shape(1),basis%shape(2),basis%shape(3),ngrid)
+    allocate(dqvectors(n,3));dqvectors=basis%qvectors;ion0=0
+    do it=1,size(potcars)
+      nlm=0;do ich=1,potcars(it)%channels;nlm=nlm+2*potcars(it)%lps(ich)+1;end do
+      allocate(dij(nlm,nlm),qij(nlm,nlm));dij=0;qij=0;ilm=0
+      do ich=1,potcars(it)%channels
+        l=potcars(it)%lps(ich)
+        do m=-l,l
+          ilm=ilm+1;jlm=0
+          do jch=1,potcars(it)%channels
+            do mj=-potcars(it)%lps(jch),potcars(it)%lps(jch)
+              jlm=jlm+1
+              if(l==potcars(it)%lps(jch).and.m==mj)then
+                dij(ilm,jlm)=potcars(it)%dion(ich,jch);qij(ilm,jlm)=potcars(it)%qpaw(ich,jch)
+              end if
+            end do
+          end do
+        end do
+      end do
+      allocate(ddij(nlm,nlm),dqij(nlm,nlm),dprojectors(crystal%counts(it),nlm,n), &
+        positions(crystal%counts(it),3),dpositions(crystal%counts(it),3))
+      ddij=dij;dqij=qij
+      do iat=1,crystal%counts(it);positions(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do
+      dpositions=positions;ilm=0
+      do ich=1,potcars(it)%channels
+        l=potcars(it)%lps(ich);nrad=size(potcars(it)%pspnl,1);allocate(m2(nrad),dradial(nrad),dm2(nrad))
+        call spline_second_projector_host(potcars(it)%pspnl(:,ich),potcars(it)%pspnl_gmax,m2)
+        dradial=potcars(it)%pspnl(:,ich);dm2=m2;ilfac=(-cmplx(0.0_dp,1.0_dp,dp))**l
+        do m=-l,l
+          ilm=ilm+1
+          call projector_kernel<<<(n*crystal%counts(it)+255)/256,256>>>(dprojectors,dqvectors,dpositions,dradial,dm2, &
+            n,crystal%counts(it),nlm,ilm,l,m,nrad,potcars(it)%pspnl_gmax,1.0_dp/sqrt(crystal%volume),ilfac)
+        end do
+        deallocate(m2,dradial,dm2)
+      end do
+      do iat=1,crystal%counts(it)
+        call add_paw_full_kernel<<<blocks,threads>>>(h,s,dprojectors,ddij,dqij,n,crystal%counts(it),nlm,iat)
+      end do
+      deallocate(dij,qij,positions,ddij,dqij,dprojectors,dpositions);ion0=ion0+crystal%counts(it)
+    end do
+    call hermitize_kernel<<<blocks,threads>>>(h,s,n)
+    ierr=cudaGetLastError();if(ierr/=cudaSuccess)error stop 'HALF: full CUDA assembly kernel launch failed'
+    ierr=cudaDeviceSynchronize();if(ierr/=cudaSuccess)error stop 'HALF: full CUDA matrix assembly failed'
+  end subroutine
+
+  subroutine spline_second_projector_host(y,xmax,m2)
+    real(dp),intent(in)::y(:),xmax
+    real(dp),intent(out)::m2(:)
+    real(dp)::h,w
+    real(dp),allocatable::diag(:),rhs(:),upper(:)
+    integer::n,i
+    n=size(y);h=xmax/real(n,dp);allocate(diag(n),rhs(n),upper(n));diag=0;rhs=0;upper=0
+    diag(2)=1;rhs(2)=((y(3)-y(2))/h-(y(2)-y(1))/h)/h
+    do i=3,n-2;diag(i)=4*h;upper(i)=h;rhs(i)=6*((y(i+1)-y(i))/h-(y(i)-y(i-1))/h);end do
+    diag(n-1)=1;rhs(n-1)=((y(n)-y(n-1))/h-(y(n-1)-y(n-2))/h)/h
+    do i=3,n-1;w=merge(h,0.0_dp,i<=n-2)/diag(i-1);diag(i)=diag(i)-w*upper(i-1);rhs(i)=rhs(i)-w*rhs(i-1);end do
+    m2(n-1)=rhs(n-1)/diag(n-1);do i=n-2,2,-1;m2(i)=(rhs(i)-upper(i)*m2(i+1))/diag(i);end do
+    m2(1)=2*m2(2)-m2(3);m2(n)=2*m2(n-1)-m2(n-2)
+  end subroutine
+end module half_cuda_assembly

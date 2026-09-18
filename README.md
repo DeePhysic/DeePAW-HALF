@@ -17,7 +17,7 @@ the port is developed.
 
 ## Current milestone
 
-Version 0.3 provides a numerically closed Si Gamma fixed-density path:
+Version 0.4 provides a numerically closed Si Gamma fixed-density path:
 
 - VASP CHGCAR structure and smooth-grid reader that stops after exactly
   `NGX*NGY*NGZ` values;
@@ -25,8 +25,10 @@ Version 0.3 provides a numerically closed Si Gamma fixed-density path:
 - Gamma-point plane-wave selection using HAPPY's cutoff convention;
 - smooth-electron-count validation;
 - multi-dataset text POTCAR parsing;
-- complete-grid Hartree, ionic, NLCC, LDA and PBE potentials;
-- PAW reciprocal projectors and DION/QPAW overlap matrices;
+- complete-grid Hartree, ionic, NLCC, LDA and PBE potentials on CPU and GPU;
+- PAW reciprocal projectors and DION/QPAW overlap matrices on CPU and GPU;
+- device-resident cuFFT potential construction, H/S assembly, Hermitian
+  cleanup and cuSOLVER eigensolution without full-matrix host transfers;
 - dense generalized H/S solvers using MKL on CPU and cuSOLVER on GPU;
 - independent CPU Fortran and CUDA Fortran backends;
 - CUDA 12.4 and CUDA 13.0 build presets;
@@ -58,9 +60,10 @@ tools/half-cmake cuda13 all
 HALF_GPU_CC=89 tools/half-cmake cuda12 all
 ```
 
-Set `MKLROOT` (or pass `-DHALF_MKL_ROOT=...`) to enable the complete-grid FFT
-and dense Gamma solver. Without oneMKL, the input, basis, PAW inspection, and
-backend benchmark targets remain available.
+Set `MKLROOT` (or pass `-DHALF_MKL_ROOT=...`) to enable the CPU complete-grid
+FFT and dense Gamma solver. The CUDA Gamma pipeline uses cuFFT and cuSOLVER and
+does not require oneMKL; without MKL, `half gamma --backend cuda` remains fully
+available while the CPU Gamma backend is disabled.
 
 The equivalent direct CMake commands are:
 
@@ -99,7 +102,7 @@ CPU/CUDA backend selection:
 
 `half-validate-gamma` is a compatibility alias for `half gamma`. The build also
 creates `half-bands` and `half-energy` aliases so scripts can adopt the HAPPY-
-style command names now; in version 0.3 those two commands exit with a clear
+style command names now; in version 0.4 those two commands exit with a clear
 unsupported-feature error because arbitrary-k bands and total energy are not
 yet numerically complete. Run `half --help` or `half gamma --help` for the
 complete option list.

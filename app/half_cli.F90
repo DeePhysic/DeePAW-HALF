@@ -9,9 +9,9 @@ program half_cli
 #ifdef HALF_CLI_HAVE_MKL
   use half_potential, only: build_veff_lda, build_veff_pbe
   use half_dense_solver, only: solve_dense_gamma
-#ifdef HALF_CLI_CUDA
-  use half_cuda_solver, only: solve_dense_gamma_cuda
 #endif
+#ifdef HALF_CLI_CUDA
+  use half_cuda_solver, only: solve_dense_gamma_cuda_full
 #endif
   implicit none
   character(len=1024) :: invocation, command
@@ -38,7 +38,7 @@ program half_cli
   case ('help', '--help', '-h')
     call print_help(6)
   case ('version', '--version', '-V')
-    write(*,'(A)') 'DeePAW-HALF 0.3.0'
+    write(*,'(A)') 'DeePAW-HALF 0.4.0'
   case ('gamma', 'validate-gamma')
     call command_gamma(argument_offset)
   case ('inspect')
@@ -96,7 +96,7 @@ contains
     type(potcar_t),allocatable::potcars(:)
     type(paw_species_t),allocatable::paw(:)
     real(dp),allocatable::veff(:),eigenvalues(:),reference(:)
-    real(dp)::eh,exc,smin,smax,encut,elapsed,assembly_seconds,gpu_seconds
+    real(dp)::eh,exc,smin,smax,encut,elapsed,potential_seconds,assembly_seconds,gpu_seconds
     integer::nbands,i,narg,ios,tick0,tick1,rate,unit
     character(len=1024)::charge_path,potential_path,arg,value,output_path,reference_path
     character(len=16)::xc,backend,actual_backend
@@ -105,8 +105,8 @@ contains
       call get_command_argument(offset+1,arg)
       if(trim(arg)=='--help'.or.trim(arg)=='-h')then; call print_gamma_help(6); return; end if
     end if
-#ifndef HALF_CLI_HAVE_MKL
-    call fail('gamma requires oneMKL; set MKLROOT and rebuild HALF')
+#if !defined(HALF_CLI_HAVE_MKL) && !defined(HALF_CLI_CUDA)
+    call fail('gamma requires either CUDA or oneMKL; enable a numerical backend and rebuild HALF')
 #else
     if(narg<offset+2)then; call print_gamma_help(0); call fail('gamma requires CHARGE and POTENTIAL'); end if
     call get_command_argument(offset+1,charge_path)
@@ -148,24 +148,29 @@ contains
     call read_chgcar(trim(charge_path),crystal,rho)
     call read_potcar(trim(potential_path),potcars)
     call build_plane_wave_basis(crystal,rho%shape,encut,[0.0_dp,0.0_dp,0.0_dp],basis)
-    call build_paw_operators(potcars,crystal,basis,paw)
-    if(trim(xc)=='pbe')then
-      call build_veff_pbe(rho,potcars,crystal,veff,eh,exc)
-    else
-      call build_veff_lda(rho,potcars,crystal,veff,eh,exc)
-    end if
-    assembly_seconds=0.0_dp; gpu_seconds=0.0_dp
+    potential_seconds=0.0_dp;assembly_seconds=0.0_dp;gpu_seconds=0.0_dp
 #ifdef HALF_CLI_CUDA
     if(trim(backend)=='auto'.or.trim(backend)=='cuda')then
       actual_backend='cuda'
-      call solve_dense_gamma_cuda(veff,basis,paw,eigenvalues,smin,smax,assembly_seconds,gpu_seconds)
+      call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',eigenvalues,smin,smax, &
+        potential_seconds,assembly_seconds,gpu_seconds)
     else
       actual_backend='cpu'
+#ifndef HALF_CLI_HAVE_MKL
+      call fail('the CPU gamma backend requires oneMKL; use --backend cuda or rebuild with MKLROOT')
+#else
+      call build_paw_operators(potcars,crystal,basis,paw)
+      if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc)
+      else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc);end if
       call solve_dense_gamma(veff,basis,paw,eigenvalues,smin,smax)
+#endif
     end if
 #else
     if(trim(backend)=='cuda')call fail('this HALF build has no CUDA backend')
     actual_backend='cpu'
+    call build_paw_operators(potcars,crystal,basis,paw)
+    if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc)
+    else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc);end if
     call solve_dense_gamma(veff,basis,paw,eigenvalues,smin,smax)
 #endif
     call system_clock(tick1)
@@ -180,26 +185,26 @@ contains
       open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
       if(ios/=0)call fail('cannot write output: '//trim(output_path))
       call write_gamma_json(unit,charge_path,potential_path,xc,actual_backend,encut,basis%npw, &
-        eigenvalues(:nbands),reference,smin,smax,elapsed,assembly_seconds,gpu_seconds)
+        eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds)
       close(unit)
     end if
     call write_gamma_json(6,charge_path,potential_path,xc,actual_backend,encut,basis%npw, &
-      eigenvalues(:nbands),reference,smin,smax,elapsed,assembly_seconds,gpu_seconds)
+      eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds)
 #endif
   end subroutine
 
   subroutine write_gamma_json(unit,charge,potential,xc,backend,encut,npw,eigenvalues,reference, &
-      smin,smax,elapsed,assembly_seconds,gpu_seconds)
+      smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds)
     integer,intent(in)::unit
     integer(i64),intent(in)::npw
     character(len=*),intent(in)::charge,potential,xc,backend
-    real(dp),intent(in)::encut,eigenvalues(:),reference(:),smin,smax,elapsed,assembly_seconds,gpu_seconds
+    real(dp),intent(in)::encut,eigenvalues(:),reference(:),smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds
     real(dp),allocatable::errors(:)
     integer::n
     n=min(size(eigenvalues),size(reference)); allocate(errors(n))
     if(n>0)errors=eigenvalues(:n)-reference(:n)
     write(unit,'(A)') '{'
-    write(unit,'(A)') '  "implementation": "DeePAW-HALF 0.3.0",'
+    write(unit,'(A)') '  "implementation": "DeePAW-HALF 0.4.0",'
     write(unit,'(A,A,A)') '  "charge": "',trim(charge),'",'
     write(unit,'(A,A,A)') '  "potential": "',trim(potential),'",'
     write(unit,'(A,A,A)') '  "xc": "',trim(xc),'",'
@@ -219,6 +224,7 @@ contains
     write(unit,'(A,ES24.16,A)') '  "overlap_eigenvalue_min": ',smin,','
     write(unit,'(A,ES24.16,A)') '  "overlap_eigenvalue_max": ',smax,','
     write(unit,'(A,ES24.16,A)') '  "elapsed_seconds": ',elapsed,','
+    write(unit,'(A,ES24.16,A)') '  "potential_seconds": ',potential_seconds,','
     write(unit,'(A,ES24.16,A)') '  "assembly_seconds": ',assembly_seconds,','
     write(unit,'(A,ES24.16)') '  "gpu_solver_seconds": ',gpu_seconds
     write(unit,'(A)') '}'
@@ -357,7 +363,7 @@ contains
         write(*,'(A)')'Planned HAPPY-compatible options: --output-prefix, --encut, --bands,'
         write(*,'(A)')'--npoints, --path, --xc, and --vaspwave-h5.'
         write(*,'(A)')''
-        write(*,'(A)')'Status: arbitrary-k Hamiltonians are not available in HALF 0.3.0.'
+        write(*,'(A)')'Status: arbitrary-k Hamiltonians are not available in HALF 0.4.0.'
         return
       end if
     end if
@@ -376,7 +382,7 @@ contains
         write(*,'(A)')'Planned HAPPY-compatible options: --encut, --kspacing, --kpoints-file,'
         write(*,'(A)')'--bands, --sigma, --xc, --forces, --vaspwave-h5, and --output-prefix.'
         write(*,'(A)')''
-        write(*,'(A)')'Status: total-energy and force terms are not available in HALF 0.3.0.'
+        write(*,'(A)')'Status: total-energy and force terms are not available in HALF 0.4.0.'
         return
       end if
     end if
@@ -394,7 +400,7 @@ contains
 
   subroutine unavailable(name,reason)
     character(len=*),intent(in)::name,reason
-    call fail(trim(name)//' is not available in HALF 0.3.0: '//trim(reason))
+    call fail(trim(name)//' is not available in HALF 0.4.0: '//trim(reason))
   end subroutine
 
   subroutine fail(message)

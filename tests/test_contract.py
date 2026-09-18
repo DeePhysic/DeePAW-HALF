@@ -14,6 +14,8 @@ def test_expected_project_surface_exists():
         "src/half_chgcar.F90",
         "src/half_basis.F90",
         "src/half_cuda.cuf",
+        "src/half_cuda_potential.cuf",
+        "src/half_cuda_assembly.cuf",
         "src/half_cpu.F90",
         "app/half_inspect.F90",
         "app/half_inspect_cpu.F90",
@@ -40,6 +42,17 @@ def test_cuda_fortran_kernel_is_real_cuda_code():
     assert "attributes(global)" in source
     assert "<<<blocks,threads>>>" in source
     assert "cudadevicesynchronize" in source
+
+
+def test_full_cuda_gamma_pipeline_is_device_resident():
+    potential = (ROOT / "src/half_cuda_potential.cuf").read_text().lower()
+    assembly = (ROOT / "src/half_cuda_assembly.cuf").read_text().lower()
+    solver = (ROOT / "src/half_cuda_solver.cuf").read_text().lower()
+    assert "use cufft" in potential
+    assert "evaluate_pbe_kernel" in potential
+    assert "projector_kernel" in assembly
+    assert "assemble_dense_gamma_cuda_full" in assembly
+    assert "cusolverdnzhegvd" in solver
 
 
 def test_physical_constants_follow_happy_definition():

@@ -3,12 +3,13 @@ module half_cuda_solver
   use cusolverdn
   use cublas
   use half_kinds,only:dp
-  use half_types,only:plane_wave_basis_t
+  use half_types,only:plane_wave_basis_t,crystal_t,charge_grid_t,potcar_t
   use half_paw,only:paw_species_t
-  use half_dense_solver,only:assemble_dense_gamma
+  use half_cuda_assembly,only:assemble_dense_gamma_cuda,assemble_dense_gamma_cuda_full
+  use half_cuda_potential,only:build_veff_cuda
   implicit none
   private
-  public::solve_dense_gamma_cuda
+  public::solve_dense_gamma_cuda,solve_dense_gamma_cuda_full
 contains
   subroutine solve_dense_gamma_cuda(veff,basis,paw,eigenvalues,overlap_min,overlap_max,assembly_seconds,gpu_seconds)
     real(dp),intent(in)::veff(:)
@@ -17,28 +18,61 @@ contains
     real(dp),allocatable,intent(out)::eigenvalues(:)
     real(dp),intent(out)::overlap_min,overlap_max
     real(dp),intent(out),optional::assembly_seconds,gpu_seconds
-    complex(dp),allocatable::h(:,:),s(:,:)
-    complex(dp),device,allocatable::dh(:,:),ds(:,:),dwork(:)
+    complex(dp),device,allocatable::dh(:,:),ds(:,:)
+    integer(8)::tick0,tick1,rate
+    call system_clock(tick0,rate)
+    call assemble_dense_gamma_cuda(veff,basis,paw,dh,ds)
+    call system_clock(tick1); if(present(assembly_seconds))assembly_seconds=real(tick1-tick0,dp)/real(rate,dp); tick0=tick1
+    call solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max)
+    call system_clock(tick1); if(present(gpu_seconds))gpu_seconds=real(tick1-tick0,dp)/real(rate,dp)
+  end subroutine
+
+  subroutine solve_dense_gamma_cuda_full(charge,potcars,crystal,basis,use_pbe,eigenvalues,overlap_min,overlap_max, &
+      potential_seconds,assembly_seconds,gpu_seconds)
+    type(charge_grid_t),intent(in)::charge
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    type(plane_wave_basis_t),intent(in)::basis
+    logical,intent(in)::use_pbe
+    real(dp),allocatable,intent(out)::eigenvalues(:)
+    real(dp),intent(out)::overlap_min,overlap_max
+    real(dp),intent(out),optional::potential_seconds,assembly_seconds,gpu_seconds
+    real(dp),device,allocatable::dveff(:)
+    complex(dp),device,allocatable::dh(:,:),ds(:,:)
+    real(dp)::eh,exc
+    integer(8)::tick0,tick1,rate
+    call system_clock(tick0,rate)
+    ! Diagnostic energy reductions are unused here; avoid copying whole grids
+    ! back to the host in the device-resident eigensolver path.
+    call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.false.)
+    call system_clock(tick1);if(present(potential_seconds))potential_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
+    call assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,dh,ds)
+    call system_clock(tick1);if(present(assembly_seconds))assembly_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
+    call solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max)
+    call system_clock(tick1);if(present(gpu_seconds))gpu_seconds=real(tick1-tick0,dp)/real(rate,dp)
+  end subroutine
+
+  subroutine solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max)
+    complex(dp),device,intent(inout)::dh(:,:),ds(:,:)
+    real(dp),allocatable,intent(out)::eigenvalues(:)
+    real(dp),intent(out)::overlap_min,overlap_max
+    complex(dp),device,allocatable::ds_original(:,:),dwork(:)
     real(dp),device,allocatable::dw(:)
     integer,device::dinfo
     type(cusolverDnHandle)::handle
     integer::n,lwork,status,infohost
-    integer(8)::tick0,tick1,rate
-    call system_clock(tick0,rate)
-    call assemble_dense_gamma(veff,basis,paw,h,s); n=basis%npw
-    call system_clock(tick1); if(present(assembly_seconds))assembly_seconds=real(tick1-tick0,dp)/real(rate,dp); tick0=tick1
-    allocate(dh(n,n),ds(n,n),dw(n),eigenvalues(n)); dh=h; ds=s
+    n=size(dh,1)
+    allocate(ds_original(n,n),dw(n),eigenvalues(n)); ds_original=ds
     status=cusolverDnCreate(handle); if(status/=0)error stop 'HALF: cusolver create failed'
     status=cusolverDnZheevd_bufferSize(handle,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,ds,n,dw,lwork)
     if(status/=0)error stop 'HALF: cusolver Zheevd buffer query failed'
     allocate(dwork(lwork)); status=cusolverDnZheevd(handle,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,ds,n,dw,dwork,lwork,dinfo)
     infohost=dinfo; if(status/=0.or.infohost/=0)error stop 'HALF: cusolver overlap eigensolve failed'
-    eigenvalues=dw; overlap_min=eigenvalues(1); overlap_max=eigenvalues(n); deallocate(dwork); ds=s
+    eigenvalues=dw; overlap_min=eigenvalues(1); overlap_max=eigenvalues(n); deallocate(dwork); ds=ds_original
     status=cusolverDnZhegvd_bufferSize(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,dw,lwork)
     if(status/=0)error stop 'HALF: cusolver Zhegvd buffer query failed'
     allocate(dwork(lwork)); status=cusolverDnZhegvd(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,dw,dwork,lwork,dinfo)
     infohost=dinfo; if(status/=0.or.infohost/=0)error stop 'HALF: cusolver generalized eigensolve failed'
     eigenvalues=dw; status=cusolverDnDestroy(handle)
-    call system_clock(tick1); if(present(gpu_seconds))gpu_seconds=real(tick1-tick0,dp)/real(rate,dp)
   end subroutine
 end module half_cuda_solver

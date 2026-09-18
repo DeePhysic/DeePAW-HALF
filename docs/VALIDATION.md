@@ -63,30 +63,30 @@ dominate.
 
 Port 6666 is `cmu006` with an RTX 4090 24 GB. After its driver was upgraded to
 595.84, the CUDA 13.0/NVHPC 25.9 `cc89` build passed the same full Gamma
-comparison with a `1.62e-11 eV` maximum error. Five fresh-process runs gave a
-`0.69 s` median, versus the existing `7.06 s` Python HAPPY and `0.56 s` CPU
-Fortran medians: CUDA 13 is therefore `10.23x` faster than Python but remains
-`1.23x` slower than CPU Fortran for this small 725-plane-wave workload. The
-isolated CUDA 13 density kernel completes 5000 iterations in about `0.01240 s`,
+comparison. HALF 0.4's device-resident potential, projector, H/S and cuSOLVER
+pipeline has a `2.45e-11 eV` maximum error. Five fresh-process runs gave a
+`0.36 s` median, versus `7.06 s` Python HAPPY and `0.56 s` CPU Fortran:
+CUDA 13 is `19.61x` faster than Python and `1.56x` faster than CPU. The older
+hybrid CUDA path, retained in the raw historical record, had a `0.69 s` median.
+The isolated CUDA 13 density kernel completes 5000 iterations in about `0.01240 s`,
 `41.86x` faster than one CPU thread. Full samples and environment details are
 in [`validation/full_pbe_benchmark.json`](validation/full_pbe_benchmark.json).
 
 Port 2222 at `hpc.icqms.group` is `BH000`, a Rocky Linux 10.1 workstation with
 two RTX PRO 6000 Blackwell 96 GB GPUs. The native CUDA 13.1/NVHPC 26.3 `cc120`
-build passed on both devices, and GPU0/GPU1 produced identical first-eight
-eigenvalues. Against HAPPY run on the same node and inputs, the maximum
-eigenvalue difference is `8.31e-12 eV`. Five fresh-process medians are `6.74 s`
-for Python HAPPY, `0.55 s` for CPU Fortran, and `0.76 s` for CUDA 13.1: the
-Fortran implementations are respectively `12.25x` and `8.87x` faster than
-Python. The isolated CUDA density kernel has a `0.011865 s` median for 5000
+build passed on both devices. The full GPU PBE path has a `2.46e-11 eV`
+maximum error. Five fresh-process medians are `6.74 s` for Python HAPPY and
+`0.55 s` for both CPU Fortran and CUDA 13.1: both Fortran implementations are
+`12.25x` faster than Python. The older hybrid CUDA path took `0.76 s`. The
+isolated CUDA density kernel has a `0.011865 s` median for 5000
 iterations. The complete raw samples are included in the same benchmark JSON.
-An 800 eV scaling probe increases the basis from 725 to 2085 plane waves. At
-that size the Blackwell node completes the internal workflow in `2.011 s`
-versus `2.275 s` on the RTX 4090, reversing the small-case ordering. The
-Blackwell cuSOLVER stage alone remains slower (`0.517 s` versus `0.436 s`),
-but its deficit narrows from about 62% at 725 plane waves to about 19% at 2085.
-This confirms that fixed overhead and small-matrix utilization dominate the
-original comparison; the different host CPUs also affect H/S assembly.
+An 800 eV scaling probe increases the basis from 725 to 2085 plane waves. The
+full GPU internal medians are `0.564 s` on the RTX 4090 and `0.693 s` on
+Blackwell. GPU H/S assembly itself is only `0.0148 s` and `0.0097 s`;
+cuSOLVER takes `0.398 s` and `0.503 s`, respectively, and explains the
+remaining ordering. The older hybrid path favored Blackwell because its host
+CPU assembled H/S faster, illustrating why device-resident comparisons are
+needed for meaningful GPU conclusions.
 
 ## HALF versus Python HAPPY
 

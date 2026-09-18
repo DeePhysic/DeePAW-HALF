@@ -10,11 +10,11 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | CUDA device bootstrap/kernel | n/a | `half_cuda.cuf` | done |
 | HDF5 charge/structure input | `chgcar.py`, `hdf5io.py` | `half_hdf5.F90` | planned |
 | Multi-dataset POTCAR parser | `potcar.py` | `half_potcar.F90` | done; Si and HfO2 parsed |
-| LDA/PBE and NLCC | `xc.py`, `potential.py` | `half_xc.F90` | done on CPU; Si parity |
-| Local ionic and Hartree potential | `potential.py` | `half_potential.F90` | done on CPU; Si parity |
-| PAW projectors and overlap | `paw.py` | `half_paw.F90` | done on CPU; Si parity |
+| LDA/PBE and NLCC | `xc.py`, `potential.py` | `half_xc.F90`, `half_cuda_potential.cuf` | done on CPU/GPU; Si parity |
+| Local ionic and Hartree potential | `potential.py` | `half_potential.F90`, `half_cuda_potential.cuf` | done on CPU/GPU; Si parity |
+| PAW projectors and overlap | `paw.py` | `half_paw.F90`, `half_cuda_assembly.cuf` | done on CPU/GPU; Si parity |
 | Potential-dependent MIMIC_US D | `uspp_dij.py` | `half_uspp.cuf` | planned |
-| Dense H/S parity solver | `reconstruct_bandstructure.py` | `half_dense_solver.F90`, `half_cuda_solver.cuf` | done for Gamma/DION; MKL CPU and cuSOLVER GPU |
+| Dense H/S parity solver | `reconstruct_bandstructure.py` | `half_dense_solver.F90`, `half_cuda_assembly.cuf`, `half_cuda_solver.cuf` | done for Gamma/DION; MKL CPU and device-resident CUDA/cuSOLVER GPU |
 | Matrix-free H/S application | `hamiltonian.py` | `half_operator.cuf` | planned |
 | Block iterative eigensolver | n/a | `half_lobpcg.cuf` | planned |
 | k meshes and symmetry reduction | `kpoints.py` | `half_kpoints.F90` | planned |

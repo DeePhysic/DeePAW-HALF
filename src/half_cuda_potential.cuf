@@ -1,0 +1,332 @@
+module half_cuda_potential
+  use cudafor
+  use cufft
+  use half_kinds,only:dp
+  use half_constants,only:pi,autoa,hatoev,felect,edeps
+  use half_types,only:crystal_t,charge_grid_t,potcar_t
+  implicit none
+  private
+  public::build_veff_cuda
+contains
+  attributes(device) function spline_eval_d(y,m2,xmax,x,n)result(value)
+    real(dp),device,intent(in)::y(*),m2(*)
+    real(dp),value::xmax,x
+    integer,value::n
+    real(dp)::value,h,t
+    integer::k
+    h=xmax/real(n,dp); k=max(1,min(n-1,int(floor(x/h))+1)); t=(x-real(k-1,dp)*h)/h
+    value=(1-t)*y(k)+t*y(k+1)+h*h*(((1-t)**3-(1-t))*m2(k)+(t**3-t)*m2(k+1))/6
+  end function
+
+  attributes(device) subroutine reciprocal_vector(index0,n1,n2,n3,reciprocal,qx,qy,qz,g2)
+    integer,value::index0,n1,n2,n3
+    real(dp),device,intent(in)::reciprocal(*)
+    real(dp),intent(out)::qx,qy,qz,g2
+    integer::i1,i2,i3,k1,k2,k3,t
+    t=index0; i3=mod(t,n3); t=t/n3; i2=mod(t,n2); i1=t/n2
+    if(i1<=(n1-1)/2)then;k1=i1;else;k1=i1-n1;end if
+    if(i2<=(n2-1)/2)then;k2=i2;else;k2=i2-n2;end if
+    if(i3<=(n3-1)/2)then;k3=i3;else;k3=i3-n3;end if
+    qx=k1*reciprocal(1)+k2*reciprocal(2)+k3*reciprocal(3)
+    qy=k1*reciprocal(4)+k2*reciprocal(5)+k3*reciprocal(6)
+    qz=k1*reciprocal(7)+k2*reciprocal(8)+k3*reciprocal(9)
+    g2=qx*qx+qy*qy+qz*qz
+  end subroutine
+
+  attributes(global) subroutine charge_to_complex_kernel(charge,work,n,scale)
+    real(dp),device,intent(in)::charge(*)
+    complex(dp),device,intent(out)::work(*)
+    integer,value::n
+    real(dp),value::scale
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)work(i)=cmplx(charge(i)*scale,0.0_dp,dp)
+  end subroutine
+
+  attributes(global) subroutine initialize_reciprocal_kernel(rho_g,local_g,core_g,eh_terms,reciprocal,n,n1,n2,n3,volume)
+    complex(dp),device,intent(in)::rho_g(*)
+    complex(dp),device,intent(out)::local_g(*),core_g(*)
+    real(dp),device,intent(out)::eh_terms(*)
+    real(dp),device,intent(in)::reciprocal(*)
+    integer,value::n,n1,n2,n3
+    real(dp),value::volume
+    integer::i
+    real(dp)::qx,qy,qz,g2
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      call reciprocal_vector(i-1,n1,n2,n3,reciprocal,qx,qy,qz,g2)
+      local_g(i)=(0.0_dp,0.0_dp);core_g(i)=(0.0_dp,0.0_dp);eh_terms(i)=0
+      if(g2>1.0e-12_dp)then
+        local_g(i)=edeps*rho_g(i)/(g2*volume)
+        eh_terms(i)=0.5_dp*real(conjg(rho_g(i))*local_g(i),dp)
+      end if
+    end if
+  end subroutine
+
+  attributes(global) subroutine add_ionic_species_kernel(local_g,core_g,radial_values,radial_m2,core_values,core_m2, &
+      positions,reciprocal,n,n1,n2,n3,nrad,natoms,gmax,zval,volume,has_core)
+    complex(dp),device,intent(inout)::local_g(*),core_g(*)
+    real(dp),device,intent(in)::radial_values(*),radial_m2(*),core_values(*),core_m2(*),positions(*),reciprocal(*)
+    integer,value::n,n1,n2,n3,nrad,natoms,has_core
+    real(dp),value::gmax,zval,volume
+    integer::i,iat
+    real(dp)::qx,qy,qz,g2,gn,radial,core_radial,phase
+    complex(dp)::structure
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      call reciprocal_vector(i-1,n1,n2,n3,reciprocal,qx,qy,qz,g2);gn=sqrt(g2)
+      radial=spline_eval_d(radial_values,radial_m2,gmax,gn,nrad)
+      if(g2>1.0e-12_dp)radial=radial-4*pi*zval*felect/g2
+      if(g2<=1.0e-12_dp.or.gn>gmax-gmax/real(nrad,dp))radial=0
+      core_radial=0
+      if(has_core/=0.and.gn<=gmax-3*gmax/real(nrad,dp))core_radial=spline_eval_d(core_values,core_m2,gmax,gn,nrad)
+      structure=(0.0_dp,0.0_dp)
+      do iat=1,natoms
+        phase=qx*positions(iat)+qy*positions(natoms+iat)+qz*positions(2*natoms+iat)
+        structure=structure+cmplx(cos(phase),-sin(phase),dp)
+      end do
+      local_g(i)=local_g(i)+radial*structure/volume
+      core_g(i)=core_g(i)+core_radial*structure
+    end if
+  end subroutine
+
+  attributes(global) subroutine extract_real_kernel(input,output,n,scale)
+    complex(dp),device,intent(in)::input(*)
+    real(dp),device,intent(out)::output(*)
+    integer,value::n
+    real(dp),value::scale
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)output(i)=real(input(i),dp)*scale
+  end subroutine
+
+  attributes(global) subroutine prepare_pbe_density_kernel(charge,core,density,work,n,volume)
+    real(dp),device,intent(in)::charge(*),core(*)
+    real(dp),device,intent(out)::density(*)
+    complex(dp),device,intent(out)::work(*)
+    integer,value::n
+    real(dp),value::volume
+    integer::i
+    real(dp)::rhoau,total
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      total=charge(i)+core(i);rhoau=total/volume*autoa**3
+      density(i)=max(rhoau,1.0e-20_dp);work(i)=cmplx(total/volume,0.0_dp,dp)
+    end if
+  end subroutine
+
+  attributes(global) subroutine spectral_derivative_kernel(freq,deriv,reciprocal,n,n1,n2,n3,alpha)
+    complex(dp),device,intent(in)::freq(*)
+    complex(dp),device,intent(out)::deriv(*)
+    real(dp),device,intent(in)::reciprocal(*)
+    integer,value::n,n1,n2,n3,alpha
+    integer::i
+    real(dp)::qx,qy,qz,g2,q
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      call reciprocal_vector(i-1,n1,n2,n3,reciprocal,qx,qy,qz,g2)
+      if(alpha==1)then;q=qx;else if(alpha==2)then;q=qy;else;q=qz;end if
+      deriv(i)=cmplx(0.0_dp,q,dp)*freq(i)
+    end if
+  end subroutine
+
+  attributes(global) subroutine accumulate_gradient_kernel(work,grad,sigma,n,alpha)
+    complex(dp),device,intent(in)::work(*)
+    real(dp),device,intent(inout)::grad(*),sigma(*)
+    integer,value::n,alpha
+    integer::i
+    real(dp)::g
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      g=real(work(i),dp)/real(n,dp)*autoa**4
+      grad((alpha-1)*n+i)=g;sigma(i)=sigma(i)+g*g
+    end if
+  end subroutine
+
+  attributes(device) subroutine pw92_d(rs,ec,dec)
+    real(dp),value::rs
+    real(dp),intent(out)::ec,dec
+    real(dp)::sr,q,dq,la
+    real(dp),parameter::a=.031091_dp,a1=.21370_dp,b1=7.5957_dp,b2=3.5876_dp,b3=1.6382_dp,b4=.49294_dp
+    sr=sqrt(rs);q=2*a*(b1*sr+b2*rs+b3*rs*sr+b4*rs*rs)
+    dq=a*(b1/sr+2*b2+3*b3*sr+4*b4*rs);la=log(1+1/q)
+    ec=-2*a*(1+a1*rs)*la;dec=-2*a*a1*la+2*a*(1+a1*rs)*dq/(q*q+q)
+  end subroutine
+
+  attributes(device) function pbe_energy_density_d(density,sigma)result(f)
+    real(dp),value::density,sigma
+    real(dp)::f,n,s,rs,kf,exlda,s2,fx,ec,de,ks2,t2,aa,at2,ratio,hh
+    real(dp),parameter::mu=.2195149727645171_dp,kappa=.804_dp,beta=.06672455060314922_dp
+    real(dp),parameter::gamma=(1.0_dp-log(2.0_dp))/(pi*pi)
+    n=max(density,1.0e-30_dp);s=max(sigma,0.0_dp);rs=(3/(4*pi*n))**(1.0_dp/3.0_dp)
+    kf=(3*pi*pi*n)**(1.0_dp/3.0_dp);exlda=-3*kf/(4*pi);s2=s/(4*kf*kf*n*n)
+    fx=1+kappa-kappa/(1+mu*s2/kappa);call pw92_d(rs,ec,de);ks2=4*kf/pi;t2=s/(4*ks2*n*n)
+    aa=beta/gamma/(exp(-ec/gamma)-1);at2=aa*t2
+    if(t2==0)then;ratio=0
+    else if(at2<1.0e100_dp)then;ratio=t2*(1+at2)/(1+at2+at2*at2)
+    else;ratio=(1/aa)*(1+1/at2)/(1+1/at2+(1/at2)**2);end if
+    hh=gamma*log(1+beta/gamma*ratio);f=n*(exlda*fx+ec+hh)
+  end function
+
+  attributes(global) subroutine evaluate_pbe_kernel(charge,density,sigma,fn,fs,edens,n,volume)
+    real(dp),device,intent(in)::charge(*),density(*),sigma(*)
+    real(dp),device,intent(out)::fn(*),fs(*),edens(*)
+    integer,value::n
+    real(dp),value::volume
+    integer::i
+    real(dp)::dn,np,nm,ds,sp,sm,rhoau
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      rhoau=density(i)
+      dn=max(abs(density(i))*2.0e-5_dp,1.0e-12_dp);nm=max(density(i)-dn,1.0e-30_dp);np=density(i)+dn
+      fn(i)=(pbe_energy_density_d(np,sigma(i))-pbe_energy_density_d(nm,sigma(i)))/(np-nm)
+      ds=max(abs(sigma(i))*2.0e-5_dp,1.0e-14_dp);sm=max(sigma(i)-ds,0.0_dp);sp=sigma(i)+ds
+      fs(i)=(pbe_energy_density_d(density(i),sp)-pbe_energy_density_d(density(i),sm))/(sp-sm)
+      edens(i)=pbe_energy_density_d(density(i),sigma(i))
+      if(rhoau<=1.0e-20_dp)fs(i)=0
+    end if
+  end subroutine
+
+  attributes(global) subroutine prepare_flux_kernel(fs,grad,flux,work,n,alpha)
+    real(dp),device,intent(in)::fs(*),grad(*)
+    real(dp),device,intent(out)::flux(*)
+    complex(dp),device,intent(out)::work(*)
+    integer,value::n,alpha
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then;flux(i)=2*fs(i)*grad((alpha-1)*n+i);work(i)=cmplx(flux(i),0.0_dp,dp);end if
+  end subroutine
+
+  attributes(global) subroutine subtract_divergence_kernel(work,vxc,n)
+    complex(dp),device,intent(in)::work(*)
+    real(dp),device,intent(inout)::vxc(*)
+    integer,value::n
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)vxc(i)=vxc(i)-autoa*real(work(i),dp)/real(n,dp)
+  end subroutine
+
+  attributes(global) subroutine finish_pbe_kernel(density,local_r,vxc,veff,n,volume)
+    real(dp),device,intent(in)::density(*),local_r(*)
+    real(dp),device,intent(inout)::vxc(*)
+    real(dp),device,intent(out)::veff(*)
+    integer,value::n
+    real(dp),value::volume
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      if(density(i)<=1.0e-20_dp)vxc(i)=0
+      veff(i)=local_r(i)+vxc(i)*hatoev
+    end if
+  end subroutine
+
+  attributes(global) subroutine lda_kernel(charge,core,local_r,veff,edens,n,volume)
+    real(dp),device,intent(in)::charge(*),core(*),local_r(*)
+    real(dp),device,intent(out)::veff(*),edens(*)
+    integer,value::n
+    real(dp),value::volume
+    integer::i
+    real(dp)::density,rs,ex,vx,ec,vc,sr,denom,lnrs,rhoau
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      density=(charge(i)+core(i))/volume;rhoau=density*autoa**3
+      if(rhoau<=1.0e-30_dp)then;veff(i)=local_r(i);edens(i)=0
+      else
+        rs=(3.0_dp/(4*pi*rhoau))**(1.0_dp/3.0_dp);ex=-.4582_dp/rs;vx=-(4.0_dp/3.0_dp)*.4582_dp/rs
+        if(rs>=1)then
+          sr=sqrt(rs);denom=1+1.0529_dp*sr+.3334_dp*rs;ec=-.1423_dp/denom
+          vc=ec*(1+(7.0_dp/6.0_dp)*1.0529_dp*sr+(4.0_dp/3.0_dp)*.3334_dp*rs)/denom
+        else
+          lnrs=log(rs);ec=.0311_dp*lnrs-.048_dp+.002_dp*rs*lnrs-.0116_dp*rs
+          vc=.0311_dp*lnrs+(-.048_dp-.0311_dp/3)+(2.0_dp/3.0_dp)*.002_dp*rs*lnrs+(-.0232_dp-.002_dp)*rs/3
+        end if
+        veff(i)=local_r(i)+(vx+vc)*hatoev;edens(i)=(ex+ec)*rhoau
+      end if
+    end if
+  end subroutine
+
+  subroutine build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,e_hartree,e_xc,compute_energies)
+    type(charge_grid_t),intent(in)::charge
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    logical,intent(in)::use_pbe
+    logical,intent(in),optional::compute_energies
+    real(dp),device,allocatable,intent(out)::dveff(:)
+    real(dp),intent(out)::e_hartree,e_xc
+    real(dp),device,allocatable::dcharge(:),drec(:,:),dlocal_r(:),dcore_r(:),deh(:),density(:),sigma(:),grad(:,:), &
+      fs(:),fn(:),flux(:),edens(:),dradial(:),dm2(:),dcore_values(:),dcore_m2(:),dpositions(:,:)
+    complex(dp),device,allocatable::work(:),rho_g(:),local_g(:),core_g(:),freq(:),deriv(:)
+    real(dp),allocatable::m2(:),m2core(:),positions(:,:),host_terms(:)
+    integer::n,n1,n2,n3,it,iat,ion0,nrad,plan,status,blocks,alpha,ierr
+    n=size(charge%values);n1=charge%shape(1);n2=charge%shape(2);n3=charge%shape(3);blocks=(n+255)/256
+    allocate(dcharge(n),drec(3,3),dlocal_r(n),dcore_r(n),deh(n),dveff(n),work(n),rho_g(n),local_g(n),core_g(n))
+    dcharge=charge%values;drec=crystal%reciprocal
+    status=cufftPlan3d(plan,n1,n2,n3,CUFFT_Z2Z);if(status/=CUFFT_SUCCESS)error stop 'HALF: potential cuFFT plan failed'
+    call charge_to_complex_kernel<<<blocks,256>>>(dcharge,work,n,1.0_dp/real(n,dp))
+    status=cufftExecZ2Z(plan,work,rho_g,CUFFT_FORWARD);if(status/=CUFFT_SUCCESS)error stop 'HALF: density cuFFT failed'
+    call initialize_reciprocal_kernel<<<blocks,256>>>(rho_g,local_g,core_g,deh,drec,n,n1,n2,n3,crystal%volume)
+    ion0=0
+    do it=1,size(potcars)
+      nrad=size(potcars(it)%psp_local);allocate(m2(nrad),m2core(nrad));m2core=0
+      call spline_second_host(potcars(it)%psp_local,potcars(it)%psp_gmax,m2)
+      if(potcars(it)%has_core)call spline_second_host(potcars(it)%pspcor,potcars(it)%psp_gmax,m2core)
+      allocate(dradial(nrad),dm2(nrad),dcore_values(nrad),dcore_m2(nrad),positions(crystal%counts(it),3),dpositions(crystal%counts(it),3))
+      dradial=potcars(it)%psp_local;dm2=m2;dcore_values=0;dcore_m2=m2core
+      if(potcars(it)%has_core)dcore_values=potcars(it)%pspcor
+      do iat=1,crystal%counts(it);positions(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do
+      dpositions=positions
+      call add_ionic_species_kernel<<<blocks,256>>>(local_g,core_g,dradial,dm2,dcore_values,dcore_m2,dpositions,drec, &
+        n,n1,n2,n3,nrad,crystal%counts(it),potcars(it)%psp_gmax,potcars(it)%zval,crystal%volume,merge(1,0,potcars(it)%has_core))
+      deallocate(m2,m2core,positions,dradial,dm2,dcore_values,dcore_m2,dpositions);ion0=ion0+crystal%counts(it)
+    end do
+    status=cufftExecZ2Z(plan,local_g,work,CUFFT_INVERSE);call extract_real_kernel<<<blocks,256>>>(work,dlocal_r,n,1.0_dp)
+    status=cufftExecZ2Z(plan,core_g,work,CUFFT_INVERSE);call extract_real_kernel<<<blocks,256>>>(work,dcore_r,n,1.0_dp)
+    allocate(edens(n))
+    if(use_pbe)then
+      allocate(density(n),sigma(n),grad(3,n),fs(n),fn(n),flux(n),freq(n),deriv(n));sigma=0
+      call prepare_pbe_density_kernel<<<blocks,256>>>(dcharge,dcore_r,density,work,n,crystal%volume)
+      status=cufftExecZ2Z(plan,work,freq,CUFFT_FORWARD)
+      do alpha=1,3
+        call spectral_derivative_kernel<<<blocks,256>>>(freq,deriv,drec,n,n1,n2,n3,alpha)
+        status=cufftExecZ2Z(plan,deriv,work,CUFFT_INVERSE)
+        call accumulate_gradient_kernel<<<blocks,256>>>(work,grad,sigma,n,alpha)
+      end do
+      call evaluate_pbe_kernel<<<blocks,256>>>(dcharge,density,sigma,fn,fs,edens,n,crystal%volume)
+      do alpha=1,3
+        call prepare_flux_kernel<<<blocks,256>>>(fs,grad,flux,work,n,alpha)
+        status=cufftExecZ2Z(plan,work,freq,CUFFT_FORWARD)
+        call spectral_derivative_kernel<<<blocks,256>>>(freq,deriv,drec,n,n1,n2,n3,alpha)
+        status=cufftExecZ2Z(plan,deriv,work,CUFFT_INVERSE)
+        call subtract_divergence_kernel<<<blocks,256>>>(work,fn,n)
+      end do
+      call finish_pbe_kernel<<<blocks,256>>>(density,dlocal_r,fn,dveff,n,crystal%volume)
+    else
+      call lda_kernel<<<blocks,256>>>(dcharge,dcore_r,dlocal_r,dveff,edens,n,crystal%volume)
+    end if
+    ierr=cudaDeviceSynchronize();if(ierr/=cudaSuccess)error stop 'HALF: CUDA potential construction failed'
+    e_hartree=0.0_dp;e_xc=0.0_dp
+    if(.not.present(compute_energies).or.compute_energies)then
+      allocate(host_terms(n))
+      host_terms=deh;e_hartree=sum(host_terms)
+      host_terms=edens;e_xc=sum(host_terms)*(crystal%volume/real(n,dp))/autoa**3*hatoev
+      deallocate(host_terms)
+    end if
+    status=cufftDestroy(plan)
+  end subroutine
+
+  subroutine spline_second_host(y,xmax,m2)
+    real(dp),intent(in)::y(:),xmax
+    real(dp),intent(out)::m2(:)
+    real(dp)::h,w
+    real(dp),allocatable::diag(:),rhs(:),upper(:)
+    integer::n,i
+    n=size(y);h=xmax/real(n,dp);allocate(diag(n),rhs(n),upper(n));diag=0;rhs=0;upper=0
+    diag(2)=1;rhs(2)=((y(3)-y(2))/h-(y(2)-y(1))/h)/h
+    do i=3,n-2;diag(i)=4*h;upper(i)=h;rhs(i)=6*((y(i+1)-y(i))/h-(y(i)-y(i-1))/h);end do
+    diag(n-1)=1;rhs(n-1)=((y(n)-y(n-1))/h-(y(n-1)-y(n-2))/h)/h
+    do i=3,n-1;w=merge(h,0.0_dp,i<=n-2)/diag(i-1);diag(i)=diag(i)-w*upper(i-1);rhs(i)=rhs(i)-w*rhs(i-1);end do
+    m2(n-1)=rhs(n-1)/diag(n-1)
+    do i=n-2,2,-1;m2(i)=(rhs(i)-upper(i)*m2(i+1))/diag(i);end do
+    m2(1)=2*m2(2)-m2(3);m2(n)=2*m2(n-1)-m2(n-2)
+  end subroutine
+end module half_cuda_potential

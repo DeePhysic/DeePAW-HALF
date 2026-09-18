@@ -23,7 +23,8 @@ CHGCAR/HDF5   POTCAR/vaspout.h5
 
 1. Large FFT-grid, wavefunction and projector arrays remain device-resident.
 2. cuFFT performs real/reciprocal transforms.
-3. cuBLAS performs projector contractions and dense block operations.
+3. CUDA Fortran kernels construct PAW projectors and dense DION/QPAW terms;
+   cuBLAS contraction is reserved for larger multi-species workloads.
 4. cuSOLVER is used only by the small-system dense reference path.
 5. The production path applies H and S matrix-free and uses a block iterative
    eigensolver.
@@ -50,7 +51,9 @@ Fortran sources so version comparisons do not mix in algorithm changes.
 | `half_basis` | `happy/basis.py` |
 | `half_potcar` | `happy/potcar.py` |
 | `half_potential` | `happy/potential.py`, `happy/xc.py` |
+| `half_cuda_potential` | GPU Hartree, ionic, NLCC, LDA and PBE pipeline |
 | `half_paw` | `happy/paw.py`, `happy/uspp_dij.py` |
+| `half_cuda_assembly` | GPU projector and device-resident H/S construction |
 | `half_operator` | `happy/hamiltonian.py` |
 | `half_solver` | SciPy generalized `eigh` call sites |
 | `half_energy` | `happy/total_energy.py`, `happy/ewald.py` |

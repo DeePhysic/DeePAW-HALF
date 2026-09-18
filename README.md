@@ -45,13 +45,13 @@ yet a complete replacement for every HAPPY workflow.
 
 HALF solves the fixed-density generalized Hermitian problem
 
-\[
+$$
 H(\mathbf{k}) c_n = \epsilon_n S(\mathbf{k}) c_n.
-\]
+$$
 
 At the implemented Gamma-point level, the linearized PAW/USPP-like operator is
 
-\[
+$$
 \begin{aligned}
 H &= T + V_{\mathrm{eff}}
  + \sum_{Iij} |\beta_i^I\rangle D_{ij}^I\langle\beta_j^I|,\\

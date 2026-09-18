@@ -17,13 +17,13 @@ HAPPY 是移植过程中的数值 oracle。当前完整验证通过的是 Si 的
 
 HALF 求解广义厄米本征问题：
 
-\[
+$$
 H(\mathbf{k})c_n=\epsilon_nS(\mathbf{k})c_n.
-\]
+$$
 
 Gamma 点已实现的线性化 PAW/USPP 类算符为：
 
-\[
+$$
 \begin{aligned}
 H &= T+V_{\mathrm{eff}}
  +\sum_{Iij}|\beta_i^I\rangle D_{ij}^I\langle\beta_j^I|,\\
@@ -33,7 +33,7 @@ V_{\mathrm{eff}} &= V_{\mathrm{ion}}^{\mathrm{local}}
 D_{ij}^I &= D_{ij}^{\mathrm{ION}}
  +\int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r)\,d\mathbf r.
 \end{aligned}
-\]
+$$
 
 其中，\(\tilde\rho\) 是平滑价电子密度，\(\tilde\rho_c\) 是 POTCAR 的部分
 芯密度；\(\beta\)、\(Q\) 与 \(D\) 分别为 PAW 投影子、重叠增强和 onsite

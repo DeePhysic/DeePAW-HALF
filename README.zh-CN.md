@@ -15,14 +15,15 @@ HAPPY 是移植过程中的数值 oracle。当前完整验证通过的是 Si 的
 
 ## 数值模型：从固定密度到本征值
 
-HALF 是**固定密度**重建：它读取 `CHGCAR` 中的平滑价电子密度 `rho~(r)`，不做
-自洽场（SCF）迭代。在给定 ENCUT 下，波函数用平面波 `|k+G>` 展开，并求解：
+HAPPY 的目标模型、也是 HALF 的长期移植目标，是**固定密度**重建：它读取
+`CHGCAR` 中的平滑价电子密度 `rho~(r)`，不做自洽场（SCF）迭代。在给定 ENCUT
+下，波函数用平面波 `|k+G>` 展开，并求解：
 
 ```text
 H(k) c_n = epsilon_n S(k) c_n
 ```
 
-在原子单位制下，Gamma 路径实际组装的稠密矩阵为：
+对于完整的 HAPPY `MIMIC_US` 算符，稠密矩阵为：
 
 ```text
 H_GG' = |k+G|^2/2 * delta_GG' + Veff(G-G')
@@ -39,13 +40,30 @@ PAW/USPP 增强：`beta` 是倒空间 PAW 投影子，`Q` 修正重叠矩阵，`
 
 ```text
 Veff(r) = Vion_local(r) + VH[rho~](r) + Vxc[rho~ + rho_core](r)
-VH(G)   = 4*pi*rho~(G)/|G|^2,  G != 0
+VH(G)   = 4*pi*e^2*rho~_G/(Omega*|G|^2),  G != 0
 D_ij^I = DION_ij^I + integral Veff(r) QDEP_ij^I(r) dr
 ```
 
-`rho_core` 是 POTCAR 中用于 NLCC 的部分芯密度；`DION` 是 POTCAR 固定 onsite
-项；`QDEP` 给出势依赖的 MIMIC_US 校正。`VH(G=0)` 由选定的静电规范处理。由于
-`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，把问题化为
+这里 `rho~_G` 是 HAPPY 的电子数归一化密度系数，`Omega` 是胞体积，`e^2` 是
+eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用于 NLCC 的
+部分芯密度，不会重复加入 Hartree 密度。`DION` 是 POTCAR 固定 onsite 项，
+`QDEP` 才给出势依赖的 MIMIC_US 校正；`VH(G=0)` 是势规范并设为零。
+
+### HALF 当前实际实现的范围
+
+HALF 0.4 当前实现的只是上述方程的 **DION 子集**：
+
+```text
+D_ij^I = DION_ij^I
+DeltaD_ij^I = integral Veff(r) QDEP_ij^I(r) dr   # 尚未实现
+```
+
+因此，已完成的数值结论是 Si Gamma/DION 与 HAPPY 一致，而不是完整 MIMIC_US
+一致。CLI 会拒绝 `--uspp-dij`；势依赖的 `QDEP`/`DeltaD` 构造、矩阵自由算符、
+任意 k 点能带、能量和力仍是计划项。唯一权威的功能状态见
+[`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
+
+对已实现的 DION 问题，`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，化为
 `L^-1 H L^-H y = epsilon y`，再以 `c = L^-H y` 恢复广义本征矢。CPU 的 MKL 和
 GPU 的 cuSOLVER 都执行这一稠密广义厄米求解。
 
@@ -56,7 +74,7 @@ CHGCAR + POTCAR
   -> 解析晶体结构、平滑密度和多元素 PAW 数据集
   -> 按 ENCUT 选择 Gamma 平面波基
   -> 以 FFT 构造 Veff：Hartree、局域离子势、XC 与 NLCC
-  -> 生成倒空间 PAW 投影子，构造 D/Q 矩阵
+  -> 生成倒空间 PAW 投影子，构造 DION/QPAW 矩阵
   -> 组装稠密复数 H、S 矩阵并进行厄米化
   -> 广义厄米对角化：CPU 使用 MKL，GPU 使用 cuSOLVER
   -> 输出本征值及 JSON 验证报告
@@ -64,7 +82,8 @@ CHGCAR + POTCAR
 
 CUDA 路径将 FFT 势构造、投影子计算、H/S 组装和本征值求解全部保留在设备端，
 避免传输完整的复数 H/S 稠密矩阵。平面波数增加后，三次标度的稠密广义本征
-求解会成为主要耗时。主要源码模块为：
+求解会成为主要耗时；但这种设备驻留优化不改变当前仅 DION 的科学范围。主要
+源码模块为：
 
 | 模块 | 职责 |
 | --- | --- |
@@ -134,7 +153,9 @@ Gamma 点，对应 3407×3407 的 complex128 广义本征问题。CPU 测试将�
 
 HALF CPU 单核比 HAPPY Python 快 **1.46×**；RTX 4090 与 RTX PRO 6000 相比
 单核 HALF CPU 分别快 **24.47×** 与 **27.41×**。同一矩阵规模下，PRO 6000
-约比 4090 快 **12%**。完整原始时间、环境和约束见
+约比 4090 快 **12%**。这里的输入、截断与基组规模一致，但并非数值等价的
+HfO2 对比：HALF 使用 DION，而计时的 HAPPY 使用了 `--uspp-dij`。HfO2 的
+数值一致性仍是独立验证门槛。完整原始时间、环境和约束见
 [`docs/validation/hfo2_single_core_benchmark.json`](docs/validation/hfo2_single_core_benchmark.json)。
 
 ## 验证状态

@@ -43,16 +43,17 @@ yet a complete replacement for every HAPPY workflow.
 
 ## Numerical model, derived step by step
 
-HALF is a **fixed-density** reconstruction: it reads the smooth valence
-density `rho~(r)` from `CHGCAR` and does not run an SCF cycle. At a chosen
-cutoff, the wavefunction is expanded in plane waves `|k+G>` and the following
-generalized Hermitian problem is solved:
+HAPPY's target model, and HALF's long-term porting target, is a
+**fixed-density** reconstruction: it reads the smooth valence density
+`rho~(r)` from `CHGCAR` and does not run an SCF cycle. At a chosen cutoff, the
+wavefunction is expanded in plane waves `|k+G>` and the following generalized
+Hermitian problem is solved:
 
 ```text
 H(k) c_n = epsilon_n S(k) c_n
 ```
 
-In atomic units, the dense matrices assembled by the Gamma path have the form
+For the full HAPPY `MIMIC_US` operator, the dense matrices have the form
 
 ```text
 H_GG' = |k+G|^2/2 * delta_GG' + Veff(G-G')
@@ -70,17 +71,35 @@ The potential is derived from the fixed smooth density as
 
 ```text
 Veff(r) = Vion_local(r) + VH[rho~](r) + Vxc[rho~ + rho_core](r)
-VH(G)   = 4*pi*rho~(G)/|G|^2,  G != 0
+VH(G)   = 4*pi*e^2*rho~_G/(Omega*|G|^2),  G != 0
 D_ij^I = DION_ij^I + integral Veff(r) QDEP_ij^I(r) dr
 ```
 
-`rho_core` is the POTCAR partial-core density used by NLCC. `DION` is the
-frozen onsite term from POTCAR; `QDEP` supplies the potential-dependent
-MIMIC_US contribution. `VH(G=0)` is handled by the chosen electrostatic gauge.
-Since `S` is positive definite, the generalized problem can be reduced through
-a Cholesky factorization `S = L L^H` to the ordinary Hermitian problem
-`L^-1 H L^-H y = epsilon y`, followed by `c = L^-H y`. MKL and cuSOLVER perform
-this dense generalized-Hermitian solve.
+Here `rho~_G` is HAPPY's electron-number-normalized density coefficient,
+`Omega` is the cell volume, and `e^2` is the electrostatic conversion factor
+in the eV/angstrom convention. `rho_core` is the POTCAR partial-core density
+used by NLCC only; it is not added to the Hartree density. `DION` is the frozen
+onsite term from POTCAR, whereas `QDEP` supplies the potential-dependent
+MIMIC_US contribution. `VH(G=0)` is a potential gauge and is set to zero.
+
+### What HALF implements today
+
+HALF 0.4 implements the **DION subset** of the equation above:
+
+```text
+D_ij^I = DION_ij^I
+DeltaD_ij^I = integral Veff(r) QDEP_ij^I(r) dr   # not implemented
+```
+
+Consequently, the completed numerical claim is Si Gamma/DION parity with
+HAPPY, not full MIMIC_US parity. The CLI rejects `--uspp-dij`; the
+potential-dependent `QDEP`/`DeltaD` construction, matrix-free operator,
+arbitrary-k bands, energy and forces remain planned. The authoritative status
+is [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
+
+For the implemented DION problem, `S` is positive definite and the generalized
+problem can be reduced through `S = L L^H` to `L^-1 H L^-H y = epsilon y`, then
+`c = L^-H y`. MKL and cuSOLVER perform this dense generalized-Hermitian solve.
 
 The execution path follows the derivation directly:
 
@@ -89,15 +108,17 @@ CHGCAR + POTCAR
   -> parse structure, smooth density, PAW datasets
   -> select the cutoff plane-wave basis
   -> FFT construction of Veff (Hartree + local ionic + XC/NLCC)
-  -> reciprocal PAW projectors and D/Q matrices
+  -> reciprocal PAW projectors and DION/QPAW matrices
   -> dense H and S assembly
   -> generalized Hermitian EVD (MKL on CPU, cuSOLVER on GPU)
   -> eigenvalues and a JSON validation report
 ```
 
-The CUDA path keeps the potential construction, projector work, dense matrix
-assembly and eigensolution resident on the device. This avoids host transfers
-of the full complex H/S matrices.
+The CUDA path keeps FFT potential construction, projector work, dense matrix
+assembly, and eigensolution resident on the device. It avoids transfers of the
+full complex H/S matrices; the cubic dense eigensolve consequently dominates
+as the plane-wave count grows. This device-resident path does not change the
+current DION-only scientific scope.
 
 ## Large-matrix performance
 
@@ -114,9 +135,10 @@ BLAS/OpenMP thread controls were set to one.
 
 Thus HALF CPU is 1.46x faster than HAPPY Python on one core. The RTX 4090 and
 RTX PRO 6000 are respectively 24.47x and 27.41x faster than the one-core HALF
-CPU path. This is a workload-matched performance record; HfO2 numerical parity
-with HAPPY remains an independent validation gate. Raw measurements and exact
-environment controls are in
+CPU path. The input, cutoff and basis size are matched, but this is not a
+numerically equivalent HfO2 comparison: HALF uses DION while the timed HAPPY
+command used `--uspp-dij`. HfO2 numerical parity remains an independent
+validation gate. Raw measurements and exact environment controls are in
 [`docs/validation/hfo2_single_core_benchmark.json`](docs/validation/hfo2_single_core_benchmark.json).
 
 ## Requirements

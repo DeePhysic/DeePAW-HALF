@@ -107,8 +107,10 @@ PRO 6000 was about `12%` faster than the 4090 at this matrix size. Exact
 commands, environment, and raw timing values are recorded in
 [`validation/hfo2_single_core_benchmark.json`](validation/hfo2_single_core_benchmark.json).
 
-This is a workload-matched performance record only: HfO2 eigenvalue parity
-between HALF and HAPPY remains an independent validation gate.
+The input, cutoff and basis size are matched, but this is not a numerically
+equivalent HfO2 comparison: HALF uses DION whereas the timed HAPPY command
+used `--uspp-dij`. HfO2 eigenvalue parity remains an independent validation
+gate.
 
 ## HALF versus Python HAPPY
 

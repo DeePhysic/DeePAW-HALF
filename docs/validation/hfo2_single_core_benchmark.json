@@ -38,5 +38,5 @@
     "rtx_pro_6000_vs_happy_python": 40.070,
     "rtx_pro_6000_vs_rtx4090": 1.120
   },
-  "scope": "This is a workload-matched performance record. HfO2 eigenvalue parity between HALF and HAPPY remains a separate validation gate."
+  "scope": "Input, cutoff and basis size are matched, but this is not a numerically equivalent comparison: HALF uses DION while the timed HAPPY command uses --uspp-dij. HfO2 eigenvalue parity remains a separate validation gate."
 }

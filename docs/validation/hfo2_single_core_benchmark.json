@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-18",
+  "method": "Bare-metal wall-clock timing. CPU commands were pinned with taskset -c 0 and OMP_NUM_THREADS, MKL_NUM_THREADS, OPENBLAS_NUM_THREADS, BLIS_NUM_THREADS, and NUMEXPR_NUM_THREADS were all set to 1.",
+  "workload": "HfO2 smooth CHGCAR, concatenated PBE Hf_pv+O POTCAR, PBE, 520 eV, 60 bands, Gamma point, 3407 plane waves, complex128 generalized Hermitian eigensystem.",
+  "half_cpu_fortran": {
+    "host": "hpc.icqms.group:2222",
+    "logical_cpu_cores": 1,
+    "wall_seconds": 43.94
+  },
+  "happy_python": {
+    "host": "hpc.icqms.group:2222",
+    "logical_cpu_cores": 1,
+    "command_option": "--uspp-dij",
+    "wall_seconds": 64.23
+  },
+  "half_cuda_rtx4090": {
+    "host": "hz.icqms.group:6666",
+    "gpu": "NVIDIA GeForce RTX 4090",
+    "driver": "595.84",
+    "toolchain": "NVHPC 25.9 / CUDA 13.0, cc89",
+    "wall_seconds_warm": 1.795444,
+    "gpu_solver_seconds_warm": 1.1889088
+  },
+  "half_cuda_rtx_pro_6000": {
+    "host": "hpc.icqms.group:2222",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+    "driver": "595.84",
+    "toolchain": "NVHPC 25.9 / CUDA 13.0, cc120",
+    "wall_seconds_warm_samples": [1.646461, 1.55936],
+    "wall_seconds_warm_mean": 1.6029105,
+    "gpu_solver_seconds_warm_mean": 1.0576755
+  },
+  "speedups": {
+    "half_cpu_vs_happy_python": 1.46222,
+    "rtx4090_vs_half_cpu": 24.472,
+    "rtx_pro_6000_vs_half_cpu": 27.413,
+    "rtx4090_vs_happy_python": 35.775,
+    "rtx_pro_6000_vs_happy_python": 40.070,
+    "rtx_pro_6000_vs_rtx4090": 1.120
+  },
+  "scope": "This is a workload-matched performance record. HfO2 eigenvalue parity between HALF and HAPPY remains a separate validation gate."
+}

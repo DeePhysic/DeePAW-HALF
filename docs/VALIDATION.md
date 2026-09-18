@@ -88,6 +88,28 @@ remaining ordering. The older hybrid path favored Blackwell because its host
 CPU assembled H/S faster, illustrating why device-resident comparisons are
 needed for meaningful GPU conclusions.
 
+## HfO2 large-matrix, single-core comparison
+
+The HfO2 fixture uses its smooth `CHGCAR`, the matching concatenated PBE
+`Hf_pv`+`O` POTCAR, PBE, 520 eV, 60 bands, and Gamma point. This creates a
+3407-by-3407 complex128 generalized Hermitian problem. On `hpc.icqms.group`,
+both CPU executables were pinned to one logical CPU with `taskset -c 0`; all
+OpenMP and BLAS thread controls were set to one. HALF CPU Fortran took
+`43.94 s`; HAPPY Python with `--uspp-dij` took `64.23 s`, so HALF CPU was
+`1.46x` faster.
+
+The matching device-resident CUDA runs took `1.795 s` on the RTX 4090
+(including `1.189 s` in cuSOLVER) and `1.60 s` mean on the RTX PRO 6000
+(including `1.058 s` in cuSOLVER). Consequently, the RTX 4090 and RTX PRO
+6000 were respectively `24.47x` and `27.41x` faster than the one-core HALF
+CPU run, and `35.78x` and `40.07x` faster than one-core HAPPY Python. The
+PRO 6000 was about `12%` faster than the 4090 at this matrix size. Exact
+commands, environment, and raw timing values are recorded in
+[`validation/hfo2_single_core_benchmark.json`](validation/hfo2_single_core_benchmark.json).
+
+This is a workload-matched performance record only: HfO2 eigenvalue parity
+between HALF and HAPPY remains an independent validation gate.
+
 ## HALF versus Python HAPPY
 
 For the implemented Si slice (CHGCAR read, smooth electron count, and 400 eV

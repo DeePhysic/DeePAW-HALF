@@ -41,6 +41,65 @@ points, potential-dependent MIMIC_US D, energy/forces and `vaspwave.h5` output
 are tracked in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md); HALF is not
 yet a complete replacement for every HAPPY workflow.
 
+## Numerical model and execution flow
+
+HALF solves the fixed-density generalized Hermitian problem
+
+\[
+H(\mathbf{k}) c_n = \epsilon_n S(\mathbf{k}) c_n.
+\]
+
+At the implemented Gamma-point level, the linearized PAW/USPP-like operator is
+
+\[
+\begin{aligned}
+H &= T + V_{\mathrm{eff}}
+ + \sum_{Iij} |\beta_i^I\rangle D_{ij}^I\langle\beta_j^I|,\\
+S &= I + \sum_{Iij} |\beta_i^I\rangle Q_{ij}^I\langle\beta_j^I|,\\
+V_{\mathrm{eff}} &= V_{\mathrm{ion}}^{\mathrm{local}}
+ + V_H[\tilde\rho] + V_{xc}[\tilde\rho+\tilde\rho_c],\\
+D_{ij}^I &= D_{ij}^{\mathrm{ION}} +
+ \int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r)\,d\mathbf r.
+\end{aligned}
+\]
+
+The execution path is deliberately direct:
+
+```text
+CHGCAR + POTCAR
+  -> parse structure, smooth density, PAW datasets
+  -> select the cutoff plane-wave basis
+  -> FFT construction of Veff (Hartree + local ionic + XC/NLCC)
+  -> reciprocal PAW projectors and D/Q matrices
+  -> dense H and S assembly
+  -> generalized Hermitian EVD (MKL on CPU, cuSOLVER on GPU)
+  -> eigenvalues and a JSON validation report
+```
+
+The CUDA path keeps the potential construction, projector work, dense matrix
+assembly and eigensolution resident on the device. This avoids host transfers
+of the full complex H/S matrices.
+
+## Large-matrix performance
+
+The HfO2 benchmark uses PBE, 520 eV, 60 bands and a 3407-by-3407 complex128
+generalized eigensystem. CPU commands were pinned to one logical CPU and all
+BLAS/OpenMP thread controls were set to one.
+
+| implementation | resource | wall time |
+| --- | --- | ---: |
+| HALF CUDA | RTX PRO 6000 | 1.60 s |
+| HALF CUDA | RTX 4090 | 1.795 s |
+| HALF CPU Fortran | one logical CPU | 43.94 s |
+| HAPPY Python (`--uspp-dij`) | one logical CPU | 64.23 s |
+
+Thus HALF CPU is 1.46x faster than HAPPY Python on one core. The RTX 4090 and
+RTX PRO 6000 are respectively 24.47x and 27.41x faster than the one-core HALF
+CPU path. This is a workload-matched performance record; HfO2 numerical parity
+with HAPPY remains an independent validation gate. Raw measurements and exact
+environment controls are in
+[`docs/validation/hfo2_single_core_benchmark.json`](docs/validation/hfo2_single_core_benchmark.json).
+
 ## Requirements
 
 - Linux x86-64 with an NVIDIA GPU;
@@ -113,28 +172,6 @@ example:
 ```bash
 ./build/cuda12-release/half-inspect CHGCAR.smooth 400
 ```
-
-For the configured project environment, use:
-
-```bash
-scripts/remote_build.sh hz.icqms.group 8122
-scripts/remote_benchmark.sh hz.icqms.group 8122 5000
-scripts/remote_cuda13_build.sh hz.icqms.group 8122 5000
-```
-
-The optional fourth argument overrides the GPU compute capability; by default
-it is detected with `nvidia-smi` (for example, `86` for RTX 3080 and `89` for
-RTX 4090). Architecture-specific build directories prevent collisions when
-nodes share the same user directory.
-
-The CUDA 12 helpers synchronize HALF and the licensed-data-free Si CHGCAR,
-then build with the cluster's NVHPC 24.5 installation and run on its RTX 3080.
-The CUDA 13 helper is container-free: it uses the existing mamba installation
-to create the persistent `half-cuda13` environment under the shared user
-installation, verifies NVIDIA's native RHEL/Rocky NVHPC 25.9 RPM, and extracts
-NVHPC under `/share/home/limusen/app`. No mamba environment is installed in
-`/tmp`.
-POTCAR files are never copied by these scripts.
 
 ## Accuracy policy
 

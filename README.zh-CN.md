@@ -1,89 +1,136 @@
 # DeePAW–HALF
 
-**HALF** 是 DeePAW–HAPPY 固定密度电子结构重构器的 CPU/CUDA Fortran 实现。项目名
-沿用 **H**arris **A**ssociative **L**inearized Augmented Plane Wave **F**ortran。
-
-科学计算契约与 HAPPY 保持一致：
+**HALF**（**H**arris **A**ssociative **L**inearized **A**ugmented **P**lane
+**W**ave **F**ortran）是 DeePAW–HAPPY 的 CPU/CUDA Fortran 固定密度电子结构
+重建实现。它不是新的机器学习哈密顿量：输入是 DeepAW 或 VASP 产生的平滑
+`CHGCAR` 密度以及匹配的 PAW `POTCAR`，输出为固定密度下的本征值与验证报告。
 
 ```text
-周期结构 -> DeepAW -> 平滑 CHGCAR -> HALF -> H(k), S(k), 能带、波函数、能量
+结构 -> DeepAW -> 平滑 CHGCAR -> HALF -> H(k), S(k), 能带/本征值
 ```
 
-HALF 不是新的神经网络 Hamiltonian。它从预测的平滑密度和严格匹配的 VASP PAW
-数据重构局域势与线性化 PAW/USPP-like 算符。移植期间，HAPPY 是逐项数值基准。
+HAPPY 是移植过程中的数值 oracle。当前完整验证通过的是 Si 的 Gamma/DION
+固定密度路径；HfO2 的大矩阵性能已经记录，但其与 HAPPY 的逐本征值一致性仍是
+独立验证门槛。
 
-## 当前里程碑
+## 数值模型
 
-0.3 版本已经闭合 Si Gamma 固定密度 PBE 路径：
+HALF 求解广义厄米本征问题：
 
-- 读取 CHGCAR 的结构头和平滑密度，并在恰好 `NGX*NGY*NGZ` 个数值后停止；
-- 晶格、倒格矢和平面波基数据结构；
-- 与 HAPPY 相同截断约定的 Gamma 点平面波筛选；
-- 平滑电子数检查；
-- 多数据集文本 POTCAR 读取；
-- 完整 FFT 网格上的 Hartree、离子势、NLCC、LDA/PBE；
-- PAW 倒空间投影子和 DION/QPAW 重叠矩阵；
-- MKL CPU 与 cuSOLVER GPU 广义本征求解；
-- 完全独立的 CPU Fortran 与 CUDA Fortran 后端；
-- CUDA 12.4 与 CUDA 13.0 构建配置；
-- 带 checksum 校验的 CPU/GPU 性能基准；
-- `half-inspect` 命令和面向数值对齐的测试。
+\[
+H(\mathbf{k})c_n=\epsilon_nS(\mathbf{k})c_n.
+\]
 
-Si Gamma/DION 路径与 HAPPY 的本征值误差约为 `1.6e-11 eV`。任意 k 点、
-势依赖 MIMIC_US D、能量/力和 `vaspwave.h5` 的进度见
-[`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)，因此当前版本还不是 HAPPY
-所有工作流的完整替代品。
+Gamma 点已实现的线性化 PAW/USPP 类算符为：
 
-## 构建与远端验证
+\[
+\begin{aligned}
+H &= T+V_{\mathrm{eff}}
+ +\sum_{Iij}|\beta_i^I\rangle D_{ij}^I\langle\beta_j^I|,\\
+S &= I+\sum_{Iij}|\beta_i^I\rangle Q_{ij}^I\langle\beta_j^I|,\\
+V_{\mathrm{eff}} &= V_{\mathrm{ion}}^{\mathrm{local}}
+ +V_H[\tilde\rho]+V_{xc}[\tilde\rho+\tilde\rho_c],\\
+D_{ij}^I &= D_{ij}^{\mathrm{ION}}
+ +\int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r)\,d\mathbf r.
+\end{aligned}
+\]
 
-推荐使用仓库内统一的 CMake 工具；它会配置独立构建目录、编译并运行 CTest：
+其中，\(\tilde\rho\) 是平滑价电子密度，\(\tilde\rho_c\) 是 POTCAR 的部分
+芯密度；\(\beta\)、\(Q\) 与 \(D\) 分别为 PAW 投影子、重叠增强和 onsite
+矩阵。GPU 使用复双精度（complex128）构造并求解该问题。
+
+## 代码逻辑与工作流
+
+```text
+CHGCAR + POTCAR
+  -> 解析晶体结构、平滑密度和多元素 PAW 数据集
+  -> 按 ENCUT 选择 Gamma 平面波基
+  -> 以 FFT 构造 Veff：Hartree、局域离子势、XC 与 NLCC
+  -> 生成倒空间 PAW 投影子，构造 D/Q 矩阵
+  -> 组装稠密复数 H、S 矩阵并进行厄米化
+  -> 广义厄米对角化：CPU 使用 MKL，GPU 使用 cuSOLVER
+  -> 输出本征值及 JSON 验证报告
+```
+
+CUDA 路径将势构造、投影子计算、H/S 组装和本征值求解全部保留在设备端，避免
+传输完整的复数 H/S 稠密矩阵。主要源码模块为：
+
+| 模块 | 职责 |
+| --- | --- |
+| `src/half_chgcar.F90`、`src/half_potcar.F90` | 输入解析 |
+| `src/half_basis.F90`、`src/half_fft.F90` | 平面波基与 FFT |
+| `src/half_potential.F90`、`src/half_cuda_potential.cuf` | 有效势 |
+| `src/half_paw.F90`、`src/half_cuda_assembly.cuf` | PAW 项与 H/S 组装 |
+| `src/half_dense_solver.F90`、`src/half_cuda_solver.cuf` | CPU/GPU 广义本征求解 |
+| `app/half_cli.F90` | 统一 CLI |
+
+## 构建
+
+需要 Linux x86-64、CMake 3.24+ 与 NVIDIA HPC SDK（`nvfortran`）。CPU 完整
+Gamma 求解需要设置 `MKLROOT`；CUDA 路径使用 cuFFT 与 cuSOLVER。
 
 ```bash
+# CPU
 tools/half-cmake cpu all
-tools/half-cmake cuda12 all
+
+# CUDA；GPU 架构由工具探测，也可显式设置
 tools/half-cmake cuda13 all
-HALF_GPU_CC=89 tools/half-cmake cuda12 all
+HALF_GPU_CC=89 tools/half-cmake cuda13 all
 ```
 
-设置 `MKLROOT`（或传入 `-DHALF_MKL_ROOT=...`）可启用完整网格 FFT 和稠密
-Gamma 求解器。CUDA 后端要求 NVIDIA HPC SDK 的 `nvfortran`。
-
-对应的原始 CMake 命令为：
+也可以使用 CMake preset：
 
 ```bash
-# 纯 CPU Fortran，不编译 .cuf，也不链接 CUDA runtime
 cmake --preset cpu-release
 cmake --build --preset cpu-release
 
-# CUDA 12.4：NVHPC 24.5 或更新版本
-cmake --preset cuda12-release
-cmake --build --preset cuda12-release
-
-# CUDA 13.0：需要 NVHPC 25.9 或更新版本
 cmake --preset cuda13-release
 cmake --build --preset cuda13-release
 ```
 
-本项目配置的 RTX 3080 环境为 `hz.icqms.group:8122`：
+## CLI
 
 ```bash
-scripts/remote_build.sh hz.icqms.group 8122
-scripts/remote_benchmark.sh hz.icqms.group 8122 5000
-scripts/remote_cuda13_build.sh hz.icqms.group 8122 5000
+# 检查平滑密度输入
+half inspect CHGCAR.smooth --encut 400
+
+# Gamma 固定密度重建；写出 JSON 报告
+half gamma CHGCAR.smooth POTCAR \
+  --encut 400 --bands 8 --xc pbe --backend cuda \
+  --reference-eigenval EIGENVAL --output gamma_validation.json
+
+# 显式使用 CPU 后端
+half gamma CHGCAR.smooth POTCAR \
+  --encut 400 --bands 8 --xc pbe --backend cpu
 ```
 
-可选的第四个参数用于覆盖 GPU 计算能力；默认通过 `nvidia-smi` 自动检测（例如
-RTX 3080 为 `86`，RTX 4090 为 `89`）。不同架构使用独立构建目录，避免共享用户
-目录时互相覆盖。
+`half-validate-gamma` 是 `half gamma` 的兼容别名。`half-bands` 与
+`half-energy` 已保留兼容命令名，但在任意 k 点与总能量数值闭合前会明确报告
+该功能尚未完成。
 
-脚本仅同步 HALF 源码和不含许可数据的 Si 平滑 CHGCAR，不会复制 POTCAR。
-CUDA 12 使用集群已有的 NVHPC 24.5 构建。CUDA 13 脚本完全不使用容器：它调用
-用户已有的 mamba，在共享用户安装下创建持久的 `half-cuda13` 环境，验证 NVIDIA
-官方 RHEL/Rocky NVHPC 25.9 RPM，并将 NVHPC 安装到
-`/share/home/limusen/app`，不在 `/tmp` 中安装 mamba 环境。
+## HfO2 大矩阵速度
 
-## 验收原则
+条件：HfO2 平滑 CHGCAR、匹配的 PBE `Hf_pv+O` POTCAR、PBE、520 eV、60 bands、
+Gamma 点，对应 3407×3407 的 complex128 广义本征问题。CPU 测试将进程固定在
+一个逻辑核，所有 OpenMP/BLAS 线程控制均设为 1。
 
-每个生产模块必须先在完全相同输入上通过 HAPPY 对照，再做性能优化。Si 是第一
-道验收门，多元素 HfO2 是声明多元素支持前的必要门。误差阈值见
-[`docs/VALIDATION.md`](docs/VALIDATION.md)。
+| 实现 | 资源 | wall time |
+| --- | --- | ---: |
+| HALF CUDA | RTX PRO 6000 | 1.60 s |
+| HALF CUDA | RTX 4090 | 1.795 s |
+| HALF CPU Fortran | 单逻辑核 | 43.94 s |
+| HAPPY Python（`--uspp-dij`） | 单逻辑核 | 64.23 s |
+
+HALF CPU 单核比 HAPPY Python 快 **1.46×**；RTX 4090 与 RTX PRO 6000 相比
+单核 HALF CPU 分别快 **24.47×** 与 **27.41×**。同一矩阵规模下，PRO 6000
+约比 4090 快 **12%**。完整原始时间、环境和约束见
+[`docs/validation/hfo2_single_core_benchmark.json`](docs/validation/hfo2_single_core_benchmark.json)。
+
+## 验证状态
+
+- Si Gamma/DION：与 HAPPY 本征值最大偏差约 `1.6e-11 eV`。
+- HfO2：已用于大矩阵性能测试，但尚未完成与 HAPPY 的逐带数值验收。
+- 任意 k 点、势依赖 MIMIC_US `D`、总能量/力与 `vaspwave.h5` 输出仍在移植中。
+
+详细验证记录见 [`docs/VALIDATION.md`](docs/VALIDATION.md)，功能状态见
+[`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。

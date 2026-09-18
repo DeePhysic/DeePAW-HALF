@@ -61,15 +61,15 @@ Python for this complete small Gamma workload. The GPU loses to CPU Fortran at
 725 plane waves because startup, transfer, and small dense-solver overhead
 dominate.
 
-Port 6666 is `cmu006` with an RTX 4090 24 GB. Its driver 550.54.15 runs the
-CUDA 12.4/cc89 build, which passed the same eigenvalue comparison, but rejects
-the CUDA 13 runtime. On that node the medians were `7.06 s` Python, `0.56 s`
-CPU Fortran, and `1.58 s` CUDA 12.4. Full samples and environment details are
+Port 6666 is `cmu006` with an RTX 4090 24 GB. After its driver was upgraded to
+595.84, the CUDA 13.0/NVHPC 25.9 `cc89` build passed the same full Gamma
+comparison with a `1.62e-11 eV` maximum error. Five fresh-process runs gave a
+`0.69 s` median, versus the existing `7.06 s` Python HAPPY and `0.56 s` CPU
+Fortran medians: CUDA 13 is therefore `10.23x` faster than Python but remains
+`1.23x` slower than CPU Fortran for this small 725-plane-wave workload. The
+isolated CUDA 13 density kernel completes 5000 iterations in about `0.01240 s`,
+`41.86x` faster than one CPU thread. Full samples and environment details are
 in [`validation/full_pbe_benchmark.json`](validation/full_pbe_benchmark.json).
-The same 4090 completes the isolated 5000-iteration density kernel in
-`0.01290 s`, `40.17x` faster than one CPU thread and about `1.59x` faster than
-the measured RTX 3080 kernel. Thus the slow small end-to-end GPU result is
-startup/workflow overhead rather than weak 4090 arithmetic throughput.
 
 ## HALF versus Python HAPPY
 

@@ -27,14 +27,21 @@
     "half_cuda12_seconds": [1.58, 1.58, 1.58, 1.58, 1.29],
     "half_cuda12_median_seconds": 1.58,
     "half_cuda12_speedup_vs_python": 4.468354430379747,
+    "half_cuda13_seconds": [1.24, 0.71, 0.68, 0.69, 0.69],
+    "half_cuda13_median_seconds": 0.69,
+    "half_cuda13_speedup_vs_python": 10.231884057971016,
+    "half_cuda13_max_abs_error_eV": 1.6207479802687885e-11,
+    "half_cuda13_internal_matrix_assembly_seconds": 0.184469,
+    "half_cuda13_internal_gpu_eigensolver_seconds": 0.123407,
     "half_cuda12_internal_matrix_assembly_seconds": 0.208348,
     "half_cuda12_internal_gpu_eigensolver_seconds": 0.121973,
-    "density_kernel_seconds_5000_iterations": 0.0129049,
-    "density_kernel_speedup_vs_one_cpu_thread": 40.1672,
+    "cuda13_density_kernel_seconds_5000_iterations_median": 0.01240,
+    "cuda13_density_kernel_speedup_vs_one_cpu_thread_median": 41.8571,
     "gpu": "NVIDIA GeForce RTX 4090 24GB",
-    "driver": "550.54.15",
-    "cuda13_status": "compiled for cc89 but cannot run: driver insufficient for CUDA 13 runtime",
+    "driver": "595.84",
+    "cuda13": "13.0 with NVHPC 25.9, cc89",
+    "cuda13_status": "passed numerical parity after the driver upgrade",
     "cuda12_status": "passed numerical parity"
   },
-  "interpretation": "The RTX 4090 density kernel is 1.59x faster than the RTX 3080 result and 40.17x faster than one CPU thread, but CPU Fortran wins this small fresh-process workflow. On the 4090 only 0.208 s is H/S assembly and 0.122 s is the two GPU eigensolves; CUDA process/context initialization and the CPU potential path dominate the 1.58 s total. Persistent processes, larger matrices, and batched k points are the intended GPU regime."
+  "interpretation": "After upgrading the RTX 4090 node to driver 595.84, the CUDA 13/cc89 build passes the full Si Gamma parity test with a 1.62e-11 eV maximum error. Five fresh-process runs have a 0.69 s wall-clock median, 10.23x faster than Python HAPPY but 1.23x slower than the 0.56 s CPU Fortran median for this small 725-plane-wave problem. The warm CUDA 13 medians are about 0.184 s for H/S assembly and 0.123 s for the two GPU eigensolves. The isolated CUDA 13 density kernel takes about 0.01240 s for 5000 iterations, 41.86x faster than one CPU thread. Larger matrices, persistent processes, and batched k points remain the intended GPU regime."
 }

@@ -1,0 +1,44 @@
+module half_cuda_solver
+  use cudafor
+  use cusolverdn
+  use cublas
+  use half_kinds,only:dp
+  use half_types,only:plane_wave_basis_t
+  use half_paw,only:paw_species_t
+  use half_dense_solver,only:assemble_dense_gamma
+  implicit none
+  private
+  public::solve_dense_gamma_cuda
+contains
+  subroutine solve_dense_gamma_cuda(veff,basis,paw,eigenvalues,overlap_min,overlap_max,assembly_seconds,gpu_seconds)
+    real(dp),intent(in)::veff(:)
+    type(plane_wave_basis_t),intent(in)::basis
+    type(paw_species_t),intent(in)::paw(:)
+    real(dp),allocatable,intent(out)::eigenvalues(:)
+    real(dp),intent(out)::overlap_min,overlap_max
+    real(dp),intent(out),optional::assembly_seconds,gpu_seconds
+    complex(dp),allocatable::h(:,:),s(:,:)
+    complex(dp),device,allocatable::dh(:,:),ds(:,:),dwork(:)
+    real(dp),device,allocatable::dw(:)
+    integer,device::dinfo
+    type(cusolverDnHandle)::handle
+    integer::n,lwork,status,infohost
+    integer(8)::tick0,tick1,rate
+    call system_clock(tick0,rate)
+    call assemble_dense_gamma(veff,basis,paw,h,s); n=basis%npw
+    call system_clock(tick1); if(present(assembly_seconds))assembly_seconds=real(tick1-tick0,dp)/real(rate,dp); tick0=tick1
+    allocate(dh(n,n),ds(n,n),dw(n),eigenvalues(n)); dh=h; ds=s
+    status=cusolverDnCreate(handle); if(status/=0)error stop 'HALF: cusolver create failed'
+    status=cusolverDnZheevd_bufferSize(handle,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,ds,n,dw,lwork)
+    if(status/=0)error stop 'HALF: cusolver Zheevd buffer query failed'
+    allocate(dwork(lwork)); status=cusolverDnZheevd(handle,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,ds,n,dw,dwork,lwork,dinfo)
+    infohost=dinfo; if(status/=0.or.infohost/=0)error stop 'HALF: cusolver overlap eigensolve failed'
+    eigenvalues=dw; overlap_min=eigenvalues(1); overlap_max=eigenvalues(n); deallocate(dwork); ds=s
+    status=cusolverDnZhegvd_bufferSize(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,dw,lwork)
+    if(status/=0)error stop 'HALF: cusolver Zhegvd buffer query failed'
+    allocate(dwork(lwork)); status=cusolverDnZhegvd(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,dw,dwork,lwork,dinfo)
+    infohost=dinfo; if(status/=0.or.infohost/=0)error stop 'HALF: cusolver generalized eigensolve failed'
+    eigenvalues=dw; status=cusolverDnDestroy(handle)
+    call system_clock(tick1); if(present(gpu_seconds))gpu_seconds=real(tick1-tick0,dp)/real(rate,dp)
+  end subroutine
+end module half_cuda_solver

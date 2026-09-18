@@ -1,0 +1,15 @@
+build/
+build-*/
+.pytest_cache/
+__pycache__/
+*.mod
+*.o
+*.a
+half-inspect
+gamma_validation.json
+*.CHGCAR
+CHGCAR*
+POTCAR*
+WAVECAR*
+vaspout.h5
+.DS_Store

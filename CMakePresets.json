@@ -1,0 +1,55 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 24, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_Fortran_COMPILER": "nvfortran",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "cpu-release",
+      "displayName": "CPU-only Fortran release",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/cpu-release",
+      "cacheVariables": {"HALF_ENABLE_CUDA": "OFF"}
+    },
+    {
+      "name": "cuda12-release",
+      "displayName": "CUDA Fortran 12.4 release",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/cuda12-release",
+      "cacheVariables": {
+        "HALF_ENABLE_CUDA": "ON",
+        "HALF_CUDA_VERSION": "12.4",
+        "HALF_GPU_CC": "86"
+      }
+    },
+    {
+      "name": "cuda13-release",
+      "displayName": "CUDA Fortran 13.0 release",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/cuda13-release",
+      "cacheVariables": {
+        "HALF_ENABLE_CUDA": "ON",
+        "HALF_CUDA_VERSION": "13.0",
+        "HALF_GPU_CC": "86"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "cpu-release", "configurePreset": "cpu-release"},
+    {"name": "cuda12-release", "configurePreset": "cuda12-release"},
+    {"name": "cuda13-release", "configurePreset": "cuda13-release"}
+  ],
+  "testPresets": [
+    {"name": "cpu-release", "configurePreset": "cpu-release", "output": {"outputOnFailure": true}},
+    {"name": "cuda12-release", "configurePreset": "cuda12-release", "output": {"outputOnFailure": true}},
+    {"name": "cuda13-release", "configurePreset": "cuda13-release", "output": {"outputOnFailure": true}}
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "date": "2026-09-18",
+  "scope": "Si Gamma fixed-density PBE operator: POTCAR, NLCC, Hartree, ionic, PBE, PAW DION/QPAW, dense generalized eigensolve",
+  "input": {
+    "encut_eV": 400.0,
+    "fft_grid": [56, 56, 56],
+    "plane_waves": 725,
+    "bands_compared": 8,
+    "potcar_sha256": "2a6df1c19701e5d97aaa59e5470b14653ddbd76935b76dacdd8792eb2eba252c"
+  },
+  "python_happy_eigenvalues_eV": [-50.166459332528177, -49.366505012724005, 2.2198356036395674, 2.2198356036402007, 2.2198356144629945, 2.3998818555407655, 5.3558964785307648, 5.3558964785315144],
+  "half_cpu_eigenvalues_eV": [-50.166459332540200, -49.366505012734898, 2.2198356036392344, 2.2198356036408375, 2.2198356144643214, 2.3998818555386388, 5.3558964785312373, 5.3558964785316610],
+  "half_cpu_max_abs_error_eV": 1.2022383089060895e-11,
+  "half_cuda13_rtx3080_eigenvalues_eV": [-50.166459332544008, -49.366505012740149, 2.2198356036408406, 2.2198356036415547, 2.2198356144623741, 2.3998818555392885, 5.3558964785316387, 5.3558964785316698],
+  "half_cuda13_rtx3080_max_abs_error_eV": 1.6143530956469476e-11,
+  "overlap_eigenvalue_min": 0.41675750048811266,
+  "overlap_eigenvalue_max": 1.1121390847968233,
+  "limitations": [
+    "DION-only PAW Hamiltonian, matching HAPPY without --uspp-dij",
+    "Gamma point only",
+    "dense validation solver",
+    "no total-energy, occupations, wavefunction output, or arbitrary-k path yet"
+  ]
+}

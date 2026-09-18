@@ -1,0 +1,64 @@
+{
+  "date": "2026-09-18",
+  "benchmark": "repeated FP64 density axpby kernel",
+  "environment": {
+    "node": "cmu001",
+    "execution": "bare metal; compiler, CUDA environment, executable, and input on local /tmp",
+    "cpu": "2 x Intel Xeon Platinum 8581C, 60 cores per socket",
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "driver": "595.84",
+    "compiler": "NVHPC 25.9.0 from NVIDIA RHEL/Rocky RPM",
+    "cuda": "13.0.88 from mamba CUDA Compiler 13.0.3",
+    "container": false
+  },
+  "timing_scope": "compute loop only; allocation and host/device transfers excluded",
+  "correctness": "CPU and CUDA FP64 checksums identical in every run",
+  "cases": [
+    {
+      "grid_values": 175616,
+      "iterations": 5000,
+      "cpu_openmp_threads": 1,
+      "cpu_seconds": [0.3491618, 0.3142580, 0.3512628],
+      "cuda_seconds": [0.0206631, 0.0204749, 0.0204740],
+      "median_cpu_seconds": 0.3491618,
+      "median_cuda_seconds": 0.0204749,
+      "cuda_over_cpu_speedup": 17.0532
+    },
+    {
+      "grid_values": 175616,
+      "iterations": 5000,
+      "cpu_openmp_threads": 60,
+      "cpu_seconds": [0.0225830, 0.0219171, 0.0206410],
+      "cuda_seconds": [0.0205200, 0.0204811, 0.0205679],
+      "median_cpu_seconds": 0.0219171,
+      "median_cuda_seconds": 0.0205200,
+      "cuda_over_cpu_speedup": 1.0681
+    },
+    {
+      "grid_values": 2809856,
+      "iterations": 500,
+      "cpu_openmp_threads": 1,
+      "cpu_seconds": [0.6973130, 0.7280209, 0.6964430],
+      "cuda_seconds": [0.0502000, 0.0502081, 0.0502291],
+      "median_cpu_seconds": 0.6973130,
+      "median_cuda_seconds": 0.0502081,
+      "cuda_over_cpu_speedup": 13.8885
+    },
+    {
+      "grid_values": 2809856,
+      "iterations": 500,
+      "cpu_openmp_threads": 60,
+      "cpu_seconds": [0.0201439, 0.0187830, 0.0187489],
+      "cuda_seconds": [0.0502071, 0.0501740, 0.0502260],
+      "median_cpu_seconds": 0.0187830,
+      "median_cuda_seconds": 0.0502071,
+      "cuda_over_cpu_speedup": 0.3741
+    }
+  ],
+  "cuda12_comparison": {
+    "small_grid_one_thread_gpu_change_percent": 0.1079,
+    "large_grid_one_thread_gpu_change_percent": 0.0916,
+    "interpretation": "CUDA 13 and CUDA 12 kernel medians differ by about 0.1 percent and are effectively tied for this workload."
+  },
+  "interpretation": "CUDA 13 is 14-17x faster than one CPU thread. Sixty Sapphire Rapids cores are competitive on the small case and faster on the replicated case. This is not a full PAW eigensolver benchmark."
+}

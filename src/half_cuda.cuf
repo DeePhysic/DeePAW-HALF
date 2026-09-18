@@ -1,0 +1,95 @@
+module half_cuda
+  use cudafor
+  use half_kinds, only: dp, i64
+  implicit none
+  private
+  public :: cuda_density_mean, cuda_runtime_summary, cuda_density_benchmark
+contains
+  attributes(global) subroutine normalize_density_kernel(input, output, scale, n)
+    real(dp), device, intent(in) :: input(*)
+    real(dp), device, intent(out) :: output(*)
+    real(dp), value :: scale
+    integer(i64), value :: n
+    integer(i64) :: i
+    i = int(blockIdx%x-1,i64)*blockDim%x + threadIdx%x
+    if (i <= n) output(i) = scale*input(i)
+  end subroutine normalize_density_kernel
+
+  attributes(global) subroutine axpby_density_kernel(input, output, alpha, beta, n)
+    real(dp), device, intent(in) :: input(*)
+    real(dp), device, intent(inout) :: output(*)
+    real(dp), value :: alpha, beta
+    integer(i64), value :: n
+    integer(i64) :: i
+    i = int(blockIdx%x-1,i64)*blockDim%x + threadIdx%x
+    if (i <= n) output(i) = alpha*input(i) + beta*output(i)
+  end subroutine axpby_density_kernel
+
+  function cuda_density_mean(values) result(mean_value)
+    real(dp), intent(in) :: values(:)
+    real(dp) :: mean_value
+    real(dp), device, allocatable :: input_d(:), normalized_d(:)
+    real(dp), allocatable :: normalized(:)
+    integer :: ierr, blocks
+    integer, parameter :: threads = 256
+    integer(i64) :: n
+    n = size(values, kind=i64)
+    allocate(input_d(n), normalized_d(n), normalized(n))
+    input_d = values
+    blocks = int((n + threads - 1_i64)/threads)
+    call normalize_density_kernel<<<blocks,threads>>>(input_d, normalized_d, 1.0_dp/real(n,dp), n)
+    ierr = cudaGetLastError()
+    if (ierr /= cudaSuccess) error stop "HALF: CUDA kernel launch failed"
+    ierr = cudaDeviceSynchronize()
+    if (ierr /= cudaSuccess) error stop "HALF: CUDA kernel execution failed"
+    normalized = normalized_d
+    mean_value = sum(normalized)
+    deallocate(input_d, normalized_d, normalized)
+  end function cuda_density_mean
+
+  subroutine cuda_density_benchmark(values, iterations, elapsed_seconds, checksum)
+    real(dp), intent(in) :: values(:)
+    integer, intent(in) :: iterations
+    real(dp), intent(out) :: elapsed_seconds, checksum
+    real(dp), device, allocatable :: input_d(:), output_d(:)
+    real(dp), allocatable :: output(:)
+    integer :: ierr, blocks, iteration
+    integer(i64) :: n, tick_start, tick_stop, tick_rate
+    integer, parameter :: threads = 256
+    real(dp), parameter :: alpha = 0.999999_dp, beta = 0.000001_dp
+    n = size(values, kind=i64)
+    allocate(input_d(n), output_d(n), output(n))
+    input_d = values
+    output_d = 0.0_dp
+    blocks = int((n + threads - 1_i64)/threads)
+    call axpby_density_kernel<<<blocks,threads>>>(input_d, output_d, alpha, beta, n)
+    ierr = cudaDeviceSynchronize()
+    if (ierr /= cudaSuccess) error stop "HALF: CUDA benchmark warmup failed"
+    output_d = 0.0_dp
+    call system_clock(tick_start, tick_rate)
+    do iteration = 1, iterations
+      call axpby_density_kernel<<<blocks,threads>>>(input_d, output_d, alpha, beta, n)
+    end do
+    ierr = cudaDeviceSynchronize()
+    call system_clock(tick_stop)
+    if (ierr /= cudaSuccess) error stop "HALF: CUDA benchmark failed"
+    elapsed_seconds = real(tick_stop-tick_start,dp)/real(tick_rate,dp)
+    output = output_d
+    checksum = sum(output)
+    deallocate(input_d, output_d, output)
+  end subroutine cuda_density_benchmark
+
+  subroutine cuda_runtime_summary(name, capability_major, capability_minor, memory_bytes)
+    character(len=*), intent(out) :: name
+    integer, intent(out) :: capability_major, capability_minor
+    integer(i64), intent(out) :: memory_bytes
+    type(cudaDeviceProp) :: properties
+    integer :: ierr
+    ierr = cudaGetDeviceProperties(properties, 0)
+    if (ierr /= cudaSuccess) error stop "HALF: cannot query CUDA device 0"
+    name = trim(properties%name)
+    capability_major = properties%major
+    capability_minor = properties%minor
+    memory_bytes = properties%totalGlobalMem
+  end subroutine cuda_runtime_summary
+end module half_cuda

@@ -1,0 +1,34 @@
+{
+  "date": "2026-09-18",
+  "system": "two-atom diamond Si primitive cell",
+  "input": "happy/examples/si/CHGCAR.smooth",
+  "encut_eV": 400.0,
+  "fft_grid": [56, 56, 56],
+  "half_environment": {
+    "host": "hz.icqms.group:8122",
+    "node": "cmu001",
+    "compiler": "NVHPC nvfortran 24.5.1",
+    "cuda": "12.4",
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "compute_capability": "8.6"
+  },
+  "summary": {
+    "volume_A3": 40.3295268474,
+    "smooth_electrons": 8.0000000501,
+    "half_npw": 725,
+    "happy_npw": 725,
+    "gvectors_exact": true,
+    "fft_indices_exact": true,
+    "qvector_max_abs_error_1_per_A": 1.7763568394002505e-15,
+    "kinetic_max_abs_error_eV": 1.1368683772161603e-13,
+    "passed": true
+  },
+  "scope": "CHGCAR, crystal geometry, Gamma-point plane-wave basis, FFT mapping, kinetic energy and CUDA density kernel",
+  "not_yet_tested": [
+    "POTCAR parsing",
+    "local effective potential",
+    "PAW projectors and overlap",
+    "generalized eigenvalues and eigenvectors",
+    "Harris-Foulkes energy and forces"
+  ]
+}

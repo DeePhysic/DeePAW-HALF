@@ -1,0 +1,17 @@
+name: CMake CPU
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GNU Fortran
+        run: sudo apt-get update && sudo apt-get install -y gfortran
+      - name: Configure, build, and test
+        env:
+          HALF_FORTRAN_COMPILER: gfortran
+        run: tools/half-cmake cpu all

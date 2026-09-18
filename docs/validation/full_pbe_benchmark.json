@@ -1,0 +1,40 @@
+{
+  "date": "2026-09-18",
+  "method": "fresh-process wall clock, five samples, median, one CPU thread, bare metal",
+  "workload": "Si 56x56x56, 400 eV, 725 plane waves, PBE+NLCC, PAW H/S assembly, all generalized eigenvalues (first 8 printed)",
+  "cmu001_rtx3080": {
+    "python_happy_seconds": [5.23, 5.21, 5.32, 5.01, 5.14],
+    "python_happy_median_seconds": 5.21,
+    "half_cpu_fortran_seconds": [0.57, 0.53, 0.53, 0.53, 0.53],
+    "half_cpu_fortran_median_seconds": 0.53,
+    "half_cpu_speedup_vs_python": 9.830188679245282,
+    "half_cuda13_seconds": [0.64, 0.62, 0.62, 0.64, 0.63],
+    "half_cuda13_median_seconds": 0.63,
+    "half_cuda13_speedup_vs_python": 8.269841269841269,
+    "half_cuda12_seconds": [0.68, 0.68, 0.65, 0.66, 0.65],
+    "half_cuda12_median_seconds": 0.66,
+    "half_cuda12_speedup_vs_python": 7.893939393939394,
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "cuda13": "13.0.88 with NVHPC 25.9",
+    "cuda12": "12.4 with NVHPC 24.5.1"
+  },
+  "cmu006_rtx4090_port6666": {
+    "python_happy_seconds": [17.31, 8.10, 6.96, 6.99, 7.06],
+    "python_happy_median_seconds": 7.06,
+    "half_cpu_fortran_seconds": [0.75, 0.56, 0.56, 0.57, 0.56],
+    "half_cpu_fortran_median_seconds": 0.56,
+    "half_cpu_speedup_vs_python": 12.607142857142856,
+    "half_cuda12_seconds": [1.58, 1.58, 1.58, 1.58, 1.29],
+    "half_cuda12_median_seconds": 1.58,
+    "half_cuda12_speedup_vs_python": 4.468354430379747,
+    "half_cuda12_internal_matrix_assembly_seconds": 0.208348,
+    "half_cuda12_internal_gpu_eigensolver_seconds": 0.121973,
+    "density_kernel_seconds_5000_iterations": 0.0129049,
+    "density_kernel_speedup_vs_one_cpu_thread": 40.1672,
+    "gpu": "NVIDIA GeForce RTX 4090 24GB",
+    "driver": "550.54.15",
+    "cuda13_status": "compiled for cc89 but cannot run: driver insufficient for CUDA 13 runtime",
+    "cuda12_status": "passed numerical parity"
+  },
+  "interpretation": "The RTX 4090 density kernel is 1.59x faster than the RTX 3080 result and 40.17x faster than one CPU thread, but CPU Fortran wins this small fresh-process workflow. On the 4090 only 0.208 s is H/S assembly and 0.122 s is the two GPU eigensolves; CUDA process/context initialization and the CPU potential path dominate the 1.58 s total. Persistent processes, larger matrices, and batched k points are the intended GPU regime."
+}

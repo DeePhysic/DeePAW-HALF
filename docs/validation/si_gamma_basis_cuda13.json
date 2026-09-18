@@ -1,0 +1,20 @@
+{
+  "date": "2026-09-18",
+  "input": "happy/examples/si/CHGCAR.smooth",
+  "encut_eV": 400.0,
+  "environment": {
+    "node": "cmu001",
+    "execution": "bare metal",
+    "compiler": "NVHPC nvfortran 25.9.0",
+    "cuda": "13.0.88",
+    "gpu": "NVIDIA GeForce RTX 3080"
+  },
+  "half_npw": 725,
+  "happy_npw": 725,
+  "gvectors_exact": true,
+  "fft_indices_exact": true,
+  "qvector_max_abs_error_1_per_A": 1.7763568394002505e-15,
+  "kinetic_max_abs_error_eV": 1.1368683772161603e-13,
+  "smooth_electrons": 8.0000000501,
+  "passed": true
+}

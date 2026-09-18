@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: tools/half-cmake BACKEND [ACTION] [-- CMAKE_ARGS...]
+
+BACKEND  cpu | cuda12 | cuda13
+ACTION   configure | build | test | all (default: all)
+
+Environment:
+  HALF_GPU_CC            GPU compute capability (auto-detected when possible)
+  HALF_CMAKE             CMake executable (default: cmake)
+  HALF_BUILD_JOBS        parallel build jobs
+  HALF_FORTRAN_COMPILER  Fortran compiler override
+  MKLROOT                oneMKL prefix for the dense solver
+
+Examples:
+  tools/half-cmake cpu all
+  MKLROOT=/opt/intel/oneapi/mkl/latest tools/half-cmake cpu build
+  HALF_GPU_CC=89 tools/half-cmake cuda12 all
+  tools/half-cmake cuda13 configure -- -DHALF_ENABLE_GPU_DEBUG=ON
+EOF
+}
+
+if [[ $# -lt 1 || "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+backend="$1"
+shift
+action="${1:-all}"
+if [[ $# -gt 0 ]]; then shift; fi
+if [[ "${1:-}" == "--" ]]; then shift; fi
+extra_args=("$@")
+
+case "${backend}" in
+  cpu) preset="cpu-release"; build_dir="build/cpu-release" ;;
+  cuda12) preset="cuda12-release" ;;
+  cuda13) preset="cuda13-release" ;;
+  *) echo "Unknown backend: ${backend}" >&2; usage >&2; exit 2 ;;
+esac
+case "${action}" in
+  configure|build|test|all) ;;
+  *) echo "Unknown action: ${action}" >&2; usage >&2; exit 2 ;;
+esac
+
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cmake_command="${HALF_CMAKE:-cmake}"
+if [[ -n "${HALF_CTEST:-}" ]]; then
+  ctest_command="${HALF_CTEST}"
+elif [[ "${cmake_command}" == */* && -x "$(dirname "${cmake_command}")/ctest" ]]; then
+  ctest_command="$(dirname "${cmake_command}")/ctest"
+else
+  ctest_command="ctest"
+fi
+jobs="${HALF_BUILD_JOBS:-}"
+compiler_args=()
+if [[ -n "${HALF_FORTRAN_COMPILER:-}" ]]; then
+  compiler_args+=("-DCMAKE_Fortran_COMPILER=${HALF_FORTRAN_COMPILER}")
+fi
+
+gpu_args=()
+if [[ "${backend}" != "cpu" ]]; then
+  gpu_cc="${HALF_GPU_CC:-}"
+  if [[ -z "${gpu_cc}" ]] && command -v nvidia-smi >/dev/null 2>&1; then
+    gpu_cc="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d '.')"
+  fi
+  gpu_cc="${gpu_cc:-86}"
+  if [[ ! "${gpu_cc}" =~ ^[0-9]+$ ]]; then
+    echo "Invalid HALF_GPU_CC: ${gpu_cc}" >&2
+    exit 2
+  fi
+  build_dir="build/${backend}-cc${gpu_cc}-release"
+  gpu_args+=("-DHALF_GPU_CC=${gpu_cc}")
+fi
+
+configure() {
+  "${cmake_command}" --fresh --preset "${preset}" -B "${project_root}/${build_dir}" \
+    "${compiler_args[@]}" "${gpu_args[@]}" "${extra_args[@]}"
+}
+build() {
+  local parallel_args=()
+  if [[ -n "${jobs}" ]]; then parallel_args+=(--parallel "${jobs}"); else parallel_args+=(--parallel); fi
+  "${cmake_command}" --build "${project_root}/${build_dir}" "${parallel_args[@]}"
+}
+test_half() {
+  "${ctest_command}" --test-dir "${project_root}/${build_dir}" --output-on-failure
+}
+
+case "${action}" in
+  configure) configure ;;
+  build) [[ -f "${project_root}/${build_dir}/CMakeCache.txt" ]] || configure; build ;;
+  test) test_half ;;
+  all) configure; build; test_half ;;
+esac

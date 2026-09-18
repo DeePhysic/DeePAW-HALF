@@ -1,0 +1,34 @@
+{
+  "date": "2026-09-18",
+  "node": "cmu001",
+  "cpu": "2 x Intel Xeon Platinum 8581C, 60 cores per socket",
+  "input": "Si CHGCAR.smooth, 56x56x56 grid",
+  "scope": "read CHGCAR, compute smooth electron count, build 400 eV Gamma plane-wave basis",
+  "precision": "FP64",
+  "threads": 1,
+  "correctness": {
+    "gamma_plane_waves": 725,
+    "half_smooth_electrons": 8.00000005005443,
+    "happy_smooth_electrons": 8.000000050054512,
+    "half_kinetic_checksum_eV": 172858.94956152519,
+    "happy_kinetic_checksum_eV": 172858.94956152554,
+    "strict_gvectors_and_fft_indices": "exact, recorded separately in si_gamma_basis.json"
+  },
+  "warm_core": {
+    "description": "one warm-up, then repeated in-process calls; median wall time per iteration",
+    "half_fortran_samples_seconds": [0.024939010, 0.025090210, 0.024931747],
+    "half_fortran_median_seconds": 0.024939010,
+    "happy_python_samples_seconds": [0.6066640620, 0.6058090837, 0.6091774940, 0.6058685961, 0.6071509011, 0.6083358871, 0.6073286128],
+    "happy_python_median_seconds": 0.6071509011,
+    "half_speedup_over_happy": 24.3454
+  },
+  "command_end_to_end": {
+    "description": "nine fresh-process runs after one warm-up; includes interpreter and executable startup",
+    "half_fortran_samples_seconds": [0.0294778980, 0.0288870428, 0.0306953499, 0.0289546517, 0.0290015852, 0.0289334091, 0.0290805837, 0.0290396539, 0.0288135340],
+    "half_fortran_median_seconds": 0.0290015852,
+    "happy_python_samples_seconds": [0.6883313679, 0.6819167160, 0.6823368082, 0.6844362821, 0.6818123651, 0.6826320020, 0.6857619868, 0.6893339241, 0.6843982222],
+    "happy_python_median_seconds": 0.6843982222,
+    "half_speedup_over_happy": 23.5986
+  },
+  "limitation": "This compares only the HAPPY slice currently implemented in HALF, not PAW operator application, eigensolution, bands, or total energy."
+}

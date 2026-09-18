@@ -1,0 +1,48 @@
+{
+  "date": "2026-09-18",
+  "benchmark": "repeated FP64 density axpby kernel",
+  "environment": {
+    "node": "cmu001",
+    "cpu": "2 x Intel Xeon Platinum 8581C, 60 cores per socket",
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "compiler": "NVHPC 24.5.1",
+    "cuda": "12.4"
+  },
+  "timing_scope": "compute loop only; allocation and host/device transfers excluded",
+  "correctness": "CPU and CUDA FP64 checksums identical in every run",
+  "cases": [
+    {
+      "grid_values": 175616,
+      "iterations": 5000,
+      "cpu_openmp_threads": 1,
+      "median_cpu_seconds": 0.3459339,
+      "median_cuda_seconds": 0.0204970,
+      "cuda_over_cpu_speedup": 16.8773
+    },
+    {
+      "grid_values": 175616,
+      "iterations": 5000,
+      "cpu_openmp_threads": 60,
+      "median_cpu_seconds": 0.0184350,
+      "median_cuda_seconds": 0.0204589,
+      "cuda_over_cpu_speedup": 0.9011
+    },
+    {
+      "grid_values": 2809856,
+      "iterations": 500,
+      "cpu_openmp_threads": 1,
+      "median_cpu_seconds": 0.6753299,
+      "median_cuda_seconds": 0.0502541,
+      "cuda_over_cpu_speedup": 13.4383
+    },
+    {
+      "grid_values": 2809856,
+      "iterations": 500,
+      "cpu_openmp_threads": 60,
+      "median_cpu_seconds": 0.0124151,
+      "median_cuda_seconds": 0.0502300,
+      "cuda_over_cpu_speedup": 0.2472
+    }
+  ],
+  "interpretation": "CUDA is 13-17x faster than one CPU thread. For this cache-friendly elementwise microbenchmark, 60 Sapphire Rapids cores are faster than the RTX 3080. This is not a full PAW eigensolver benchmark."
+}

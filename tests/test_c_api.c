@@ -23,6 +23,13 @@ int main(void) {
                                      99, HALF_SOLVER_EVD, &handle, error,
                                      sizeof error) != HALF_ERROR_INVALID_ARGUMENT)
     return 7;
+  if (half_set_request_geometry(12345, NULL, error, sizeof error) !=
+      HALF_ERROR_INVALID_HANDLE)
+    return 8;
+  if (half_get_request_geometry(12345, NULL, NULL, NULL, NULL, 0, NULL, 0,
+                                NULL, error, sizeof error) !=
+      HALF_ERROR_INVALID_HANDLE)
+    return 9;
   puts("HALF C API 0.5.0: ok");
   return 0;
 }

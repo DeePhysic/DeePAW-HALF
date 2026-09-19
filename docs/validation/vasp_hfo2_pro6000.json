@@ -12,6 +12,18 @@
   "plane_waves": 3407,
   "bands": 56,
   "scf_steps": 1,
+  "direct_memory_request": {
+    "enabled": true,
+    "lattice_source": "LATT_CUR%A",
+    "fractional_positions_source": "T_INFO%POSION",
+    "species_source": "T_INFO%ITYP",
+    "grid_source": "GRIDC%NGPTAR",
+    "retained_nions": 12,
+    "retained_ntypes": 2,
+    "retained_grid": [54, 54, 54],
+    "used_by_current_numerical_path": false,
+    "runtime_log": "HALF retained VASP host system: 12 ions, 2 types, grid 54 54 54"
+  },
   "one_click_cmake": {
     "command": "tools/half-cmake vasp all",
     "build_root": "/data/limusen/half-vasp-oneclick/build/vasp-cuda13.2-cc120-release",
@@ -50,6 +62,7 @@
     "DeepAW supplies the smooth 54^3 density but no VASP PAW onsite occupancy block.",
     "The integration preserves the DeepAW smooth density and retains VASP's initialized atomic PAW onsite matrix.",
     "The HALF solve is a one-time startup cost; this one-step test is not an SCF time-to-solution benchmark.",
+    "The direct-memory request validation ran in /data/limusen/half-vasp-memory-request-hfo2 and reproduced the first Davidson rms of 0.000281.",
     "All remote files are under /data/limusen/half-vasp-api-check."
   ]
 }

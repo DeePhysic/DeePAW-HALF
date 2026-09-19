@@ -34,15 +34,24 @@ C 编译器链接。
 2. 用 `half_create_from_files_backend()` 创建 context；运行时可选 LDA/PBE、
    CPU/CUDA/AUTO、EVD/EVJ、ENCUT 及 MIMIC_US QDEP。简化函数
    `half_create_from_files()` 等价于 AUTO + EVD，并保持 ABI 稳定。
-3. 对每个分数倒空间 k 点，用 `half_get_basis_size()` 和可选的
+3. 宿主程序可用 `half_set_request_geometry()` 附加内存中已经解析好的晶格、
+   分数坐标、从 1 开始的物种编号和三维实空间网格。
+4. 对每个分数倒空间 k 点，用 `half_get_basis_size()` 和可选的
    `half_get_basis()` 得到 HALF 的精确 G 向量顺序。
-4. 按集成深度选择：`half_assemble_hs()` 返回稠密 H/S，`half_apply_hs()` 对一组
+5. 按集成深度选择：`half_assemble_hs()` 返回稠密 H/S，`half_apply_hs()` 对一组
    态施加算符，`half_solve_kpoint()` 直接返回本征对。
-5. 用 `half_destroy()` 释放不透明句柄。
+6. 用 `half_destroy()` 释放不透明句柄。
 
 矩阵与态块均为 complex128、BLAS 列主序；能量单位为 eV，长度为 Angstrom，k 点
 为分数倒空间坐标。把本征矢指针设为空即可只求本征值。每个函数都返回状态码，
 并写入调用方提供的错误缓冲区。
+
+`half_set_request_geometry()` 接收 `half_request_geometry_v1` 描述符，并在返回前
+深拷贝所有数组，调用方随后即可释放原缓冲区。`lattice` 采用“晶格矢量、笛卡尔
+分量”的行主序，`positions_fractional` 采用逐原子布局。调用
+`half_get_request_geometry()` 可查询或复制保存的值。ABI v1 先保存这份宿主请求
+元数据，为下一步 HALF 直接调用 DeepAW 内存 API 做准备；目前文件输入的数值路径
+故意不使用这些值。
 
 CUDA 构建中 AUTO 选择 CUDA；`half_solve_kpoint()` 的势构造、MIMIC_US/QDEP、
 H/S 组装和广义本征求解全部在 GPU 上执行，只把请求的本征对传回。ABI v1 的
@@ -52,8 +61,10 @@ H/S 组装和广义本征求解全部在 GPU 上执行，只把请求的本征�
 
 ## 接入 VASP 的方式
 
-最小 VASP 补丁在固定平滑密度和匹配 POTCAR 就绪后创建一次 context。对每个 VASP
-k 点，先查询 `npw` 与 G 向量映射，只做一次系数顺序转换，然后可选择：
+最小 VASP 补丁在固定平滑密度和匹配 POTCAR 就绪后创建一次 context，并把
+`LATT_CUR%A`、`T_INFO%POSION`、`T_INFO%ITYP`、`GRIDC%NGPTAR` 从内存直接传给
+HALF。对每个 VASP k 点，先查询 `npw` 与 G 向量映射，只做一次系数顺序转换，然后
+可选择：
 
 - 使用 CPU context，在 VASP 的迭代本征求解器中调用 `half_apply_hs()`；或
 - 调用 `half_solve_kpoint()`，直接使用 HALF 的 CPU 或全 GPU 稠密 EVD。

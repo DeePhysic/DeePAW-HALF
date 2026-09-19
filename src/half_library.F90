@@ -1,5 +1,5 @@
 module half_library
-  use half_kinds,only:dp
+  use half_kinds,only:dp,i32
   use half_types,only:crystal_t,charge_grid_t,plane_wave_basis_t,potcar_t
   use half_chgcar,only:read_chgcar
   use half_potcar,only:read_potcar,validate_potcar_structure
@@ -27,6 +27,11 @@ module half_library
     type(charge_grid_t)::charge
     type(potcar_t),allocatable::potcars(:)
     real(dp),allocatable::veff(:)
+    integer(i32),allocatable::request_species(:)
+    real(dp),allocatable::request_positions(:,:)
+    integer(i32)::request_grid(3)=0_i32,request_nions=0_i32,request_ntypes=0_i32
+    real(dp)::request_lattice(3,3)=0.0_dp
+    logical::has_request_geometry=.false.
     real(dp)::encut=0.0_dp,e_hartree=0.0_dp,e_xc=0.0_dp,e_xc_potential=0.0_dp
     integer::backend=HALF_BACKEND_AUTO
     character(len=3)::solver='evd'
@@ -35,6 +40,7 @@ module half_library
     procedure::initialize_files=>context_initialize_files
     procedure::clear=>context_clear
     procedure::make_basis=>context_make_basis
+    procedure::set_request_geometry=>context_set_request_geometry
     procedure::assemble_hs=>context_assemble_hs
     procedure::apply_hs=>context_apply_hs
     procedure::solve_kpoint=>context_solve_kpoint
@@ -105,13 +111,45 @@ contains
     class(half_context_t),intent(inout)::self
     if(allocated(self%potcars))deallocate(self%potcars)
     if(allocated(self%veff))deallocate(self%veff)
+    if(allocated(self%request_species))deallocate(self%request_species)
+    if(allocated(self%request_positions))deallocate(self%request_positions)
     if(allocated(self%charge%values))deallocate(self%charge%values)
     if(allocated(self%crystal%system_name))deallocate(self%crystal%system_name)
     if(allocated(self%crystal%species))deallocate(self%crystal%species)
     if(allocated(self%crystal%counts))deallocate(self%crystal%counts)
     if(allocated(self%crystal%positions))deallocate(self%crystal%positions)
     self%ready=.false.;self%encut=0.0_dp;self%backend=HALF_BACKEND_AUTO;self%solver='evd'
+    self%has_request_geometry=.false.;self%request_grid=0;self%request_nions=0;self%request_ntypes=0
+    self%request_lattice=0.0_dp
   end subroutine
+
+  subroutine context_set_request_geometry(self,nions,ntypes,grid,lattice,species,positions,status,message)
+    class(half_context_t),intent(inout)::self
+    integer(i32),intent(in)::nions,ntypes,grid(3),species(:)
+    real(dp),intent(in)::lattice(3,3),positions(:,:)
+    integer,intent(out)::status
+    character(len=*),intent(out)::message
+    status=HALF_SUCCESS;message=''
+    if(.not.self%ready)then;status=HALF_ERROR_INVALID_ARGUMENT;message='HALF context is not initialized';return;end if
+    if(nions<1.or.ntypes<1.or.any(grid<1).or.size(species)/=nions.or.size(positions,1)/=nions.or.size(positions,2)/=3)then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='invalid request geometry dimensions';return
+    end if
+    if(any(species<1).or.any(species>ntypes).or.any(lattice/=lattice).or.any(positions/=positions))then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='invalid request geometry values';return
+    end if
+    if(abs(determinant3(lattice))<1.0e-12_dp)then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='request lattice is singular';return
+    end if
+    self%request_nions=nions;self%request_ntypes=ntypes;self%request_grid=grid
+    self%request_lattice=lattice;self%request_species=species;self%request_positions=positions
+    self%has_request_geometry=.true.
+  end subroutine
+
+  pure real(dp) function determinant3(a)result(value)
+    real(dp),intent(in)::a(3,3)
+    value=a(1,1)*(a(2,2)*a(3,3)-a(2,3)*a(3,2))-a(1,2)*(a(2,1)*a(3,3)-a(2,3)*a(3,1))+ &
+      a(1,3)*(a(2,1)*a(3,2)-a(2,2)*a(3,1))
+  end function
 
   subroutine context_make_basis(self,kpoint,basis,status,message)
     class(half_context_t),intent(in)::self

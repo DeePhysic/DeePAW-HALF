@@ -7,6 +7,12 @@ module half_api
   integer(c_int),parameter::HALF_BACKEND_AUTO=0,HALF_BACKEND_CPU=1,HALF_BACKEND_CUDA=2
   integer(c_int),parameter::HALF_SOLVER_EVD=1,HALF_SOLVER_EVJ=2
   integer(c_int),parameter::HALF_CAP_CPU=1,HALF_CAP_CUDA=2,HALF_CAP_MPI=4,HALF_CAP_HDF5=8,HALF_CAP_SPGLIB=16
+  type,bind(C)::half_request_geometry_v1
+    integer(c_int32_t)::struct_size=0,flags=0,nions=0,ntypes=0,grid(3)=0,reserved_i32=0
+    real(c_double)::lattice(9)=0.0_c_double
+    type(c_ptr)::species=c_null_ptr,positions_fractional=c_null_ptr
+    integer(c_int64_t)::reserved(8)=0_c_int64_t
+  end type
   interface
     integer(c_int) function half_get_abi_version()bind(C)
       import::c_int
@@ -36,6 +42,21 @@ module half_api
     integer(c_int) function half_destroy(handle,error,error_capacity)bind(C)
       import::c_char,c_int,c_int64_t
       integer(c_int64_t),value::handle
+      character(c_char),intent(out)::error(*)
+      integer(c_int),value::error_capacity
+    end function
+    integer(c_int) function half_set_request_geometry(handle,geometry,error,error_capacity)bind(C)
+      import::c_char,c_int,c_int64_t,c_ptr
+      integer(c_int64_t),value::handle
+      type(c_ptr),value::geometry
+      character(c_char),intent(out)::error(*)
+      integer(c_int),value::error_capacity
+    end function
+    integer(c_int) function half_get_request_geometry(handle,nions,ntypes,grid,lattice,species_capacity,species, &
+        positions_capacity,positions,error,error_capacity)bind(C)
+      import::c_char,c_int,c_int64_t,c_ptr
+      integer(c_int64_t),value::handle,species_capacity,positions_capacity
+      type(c_ptr),value::nions,ntypes,grid,lattice,species,positions
       character(c_char),intent(out)::error(*)
       integer(c_int),value::error_capacity
     end function

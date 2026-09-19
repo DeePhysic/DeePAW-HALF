@@ -215,6 +215,10 @@ HAPPY 风格 NPZ，后者包含 k 点、权重、本征值、占据数和力。
 求解。创建 context 时即可选择 CPU/CUDA 与 EVD/EVJ。安装后的 CMake 工程链接
 `HALF::half`，也可使用 `half.pc`。
 
+VASP adapter 还会把晶格、分数坐标、物种编号和致密电荷网格尺寸直接传入 HALF
+内存。HALF 深拷贝并保存这份请求元数据；当前求解器暂不使用它，从而为下一步直接
+调用 DeepAW API 留出稳定接口。
+
 完整生命周期、数据布局和 VASP adapter 方案见
 [中文 API 指南](docs/API.zh-CN.md)与
 [VASP 6.6.0 接入实测](docs/VASP_INTEGRATION.zh-CN.md)。独立调用示例见

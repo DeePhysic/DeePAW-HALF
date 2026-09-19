@@ -35,7 +35,21 @@ HALF 不应导入或伪造 PAW 投影系数。后续 VASP 会统一调用 `PROAL
 
 ## 直接调用接口
 
-ABI v1 新增了兼容扩展：
+求解前，VASP 先通过内存传递已经解析好的宿主请求：
+
+```c
+int half_set_request_geometry(
+    half_handle handle, const half_request_geometry_v1 *geometry,
+    char *error, int error_capacity);
+```
+
+adapter 把 `LATT_CUR%A` 打包为逐晶格矢量的行主序，把 `T_INFO%POSION` 打包为
+逐原子的分数坐标，直接传递从 1 开始的 `T_INFO%ITYP`，并以致密电荷网格
+`GRIDC%NGPTAR` 作为 `grid[3]`。HALF 深拷贝所有字段；目前只保存、不影响文件输入
+求解，为下一步直接调用 DeepAW API 准备。`half_get_request_geometry()` 提供可审计
+的查询/复制路径。
+
+波函数传递使用 ABI v1 的兼容扩展：
 
 ```c
 int half_solve_kpoint_mapped(
@@ -65,6 +79,7 @@ G 向量顺序；每个全局能带得到一列系数后，调用 VASP 现有的
 if LHALF_INIT:
     拒绝尚未支持的计算模式
     从 DeepAW CHGCAR 和 POTCAR 创建 HALF context
+    从内存传递晶格、分数坐标、物种编号和致密网格
     对每个不可约 k 点：
         构造 VASP 串行 G 向量表
         调用 half_solve_kpoint_mapped

@@ -36,17 +36,28 @@ automatically.  CPU-only `libhalf` can be linked by an ordinary C compiler.
 2. Create a context with `half_create_from_files_backend()`.  Select LDA/PBE,
    CPU/CUDA/AUTO, EVD/EVJ, ENCUT, and MIMIC_US QDEP at runtime.  The shorter
    `half_create_from_files()` is ABI-compatible shorthand for AUTO + EVD.
-3. For each fractional reciprocal k point, call `half_get_basis_size()` and
+3. A host may attach its already parsed structure with
+   `half_set_request_geometry()`: lattice vectors, fractional positions,
+   one-based species indices, and the three-dimensional real-space grid.
+4. For each fractional reciprocal k point, call `half_get_basis_size()` and
    optionally `half_get_basis()` to obtain HALF's exact G-vector ordering.
-4. Choose one of three integration levels:
+5. Choose one of three integration levels:
    `half_assemble_hs()` returns dense H/S; `half_apply_hs()` applies them to a
    state block; `half_solve_kpoint()` returns eigenpairs.
-5. Release the opaque handle with `half_destroy()`.
+6. Release the opaque handle with `half_destroy()`.
 
 All matrices and state blocks are complex128, column-major BLAS arrays.  Energy
 units are eV, lengths are Angstrom, and k points are fractional reciprocal
 coordinates.  Passing a null eigenvector pointer requests eigenvalues only.
 Each routine returns a status code and fills a caller-owned error buffer.
+
+`half_set_request_geometry()` takes a `half_request_geometry_v1` descriptor and
+deep-copies every array before returning; the caller may immediately release
+its buffers. `lattice` is row-major as `[lattice_vector][Cartesian_component]`,
+and `positions_fractional` is atom-major. `half_get_request_geometry()` can
+query or copy the retained values. ABI v1 retains this host request metadata
+for the next in-memory DeepAW integration step but deliberately does not use it
+in the present file-backed Hamiltonian path.
 
 In a CUDA build, AUTO selects CUDA.  `half_solve_kpoint()` runs potential
 construction, MIMIC_US/QDEP, dense H/S assembly, and the generalized
@@ -59,7 +70,9 @@ oneMKL.  EVJ is CUDA-only, while EVD is available on both.
 ## VASP adapter pattern
 
 A minimal VASP patch creates one context after the fixed smooth density and
-matching POTCAR are available.  At each VASP k point it queries `npw` and the
+matching POTCAR are available, then transfers `LATT_CUR%A`, `T_INFO%POSION`,
+`T_INFO%ITYP`, and `GRIDC%NGPTAR` directly from memory into the context. At
+each VASP k point it queries `npw` and the
 G-vector map, translates VASP's coefficient ordering once, and then either:
 
 - uses a CPU context and calls `half_apply_hs()` inside an iterative VASP

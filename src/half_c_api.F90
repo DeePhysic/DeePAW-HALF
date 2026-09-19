@@ -1,6 +1,6 @@
 module half_c_api
   use iso_c_binding,only:c_int,c_int32_t,c_int64_t,c_double,c_double_complex,c_char,c_null_char,c_ptr,c_loc, &
-    c_f_pointer,c_associated
+    c_f_pointer,c_associated,c_sizeof
   use half_kinds,only:dp
   use half_types,only:plane_wave_basis_t
   use half_library,only:half_context_t,LIB_SUCCESS=>HALF_SUCCESS,LIB_INVALID=>HALF_ERROR_INVALID_ARGUMENT, &
@@ -14,6 +14,12 @@ module half_c_api
   logical,save::used(MAX_CONTEXTS)=.false.
   integer(c_int64_t),save::generation(MAX_CONTEXTS)=0_c_int64_t
   character(c_char),target,save::version(6)=[character(c_char)::'0','.', '5','.', '0',c_null_char]
+  type,bind(C)::half_request_geometry_v1_c
+    integer(c_int32_t)::struct_size,flags,nions,ntypes,grid(3),reserved_i32
+    real(c_double)::lattice(9)
+    type(c_ptr)::species,positions_fractional
+    integer(c_int64_t)::reserved(8)
+  end type
 contains
   integer(c_int) function half_get_abi_version()bind(C,name='half_get_abi_version')
     half_get_abi_version=1
@@ -110,6 +116,105 @@ contains
     call clear_error(error,error_capacity);slot=context_slot(handle)
     if(slot==0)then;half_destroy=HALF_INVALID_HANDLE;call export_error('invalid HALF context handle',error,error_capacity);return;end if
     call contexts(slot)%clear();used(slot)=.false.;half_destroy=HALF_SUCCESS
+  end function
+
+  integer(c_int) function half_set_request_geometry(handle,geometry_c,error,error_capacity) &
+      bind(C,name='half_set_request_geometry')
+    integer(c_int64_t),value::handle
+    type(c_ptr),value::geometry_c
+    integer(c_int),value::error_capacity
+    character(c_char),intent(out)::error(*)
+    type(half_request_geometry_v1_c),pointer::geometry
+    type(half_request_geometry_v1_c)::geometry_layout
+    integer(c_int32_t),pointer::species_c(:)
+    real(c_double),pointer::positions_c(:)
+    integer(c_int32_t),allocatable::species(:)
+    real(dp),allocatable::positions(:,:)
+    real(dp)::lattice(3,3)
+    character(len=512)::message
+    integer::slot,status,i,j
+    call clear_error(error,error_capacity);slot=context_slot(handle)
+    if(slot==0)then;half_set_request_geometry=bad_handle(error,error_capacity);return;end if
+    if(.not.c_associated(geometry_c))then
+      half_set_request_geometry=HALF_INVALID_ARGUMENT
+      call export_error('request geometry pointer is required',error,error_capacity);return
+    end if
+    call c_f_pointer(geometry_c,geometry)
+    if(geometry%struct_size<int(c_sizeof(geometry_layout),c_int32_t).or.geometry%flags/=0)then
+      half_set_request_geometry=HALF_INVALID_ARGUMENT
+      call export_error('unsupported request geometry structure size or flags',error,error_capacity);return
+    end if
+    if(geometry%nions<1.or.geometry%ntypes<1.or..not.c_associated(geometry%species).or. &
+        .not.c_associated(geometry%positions_fractional))then
+      half_set_request_geometry=HALF_INVALID_ARGUMENT
+      call export_error('request geometry arrays and positive dimensions are required',error,error_capacity);return
+    end if
+    call c_f_pointer(geometry%species,species_c,[int(geometry%nions)])
+    call c_f_pointer(geometry%positions_fractional,positions_c,[3*int(geometry%nions)])
+    allocate(species(geometry%nions),positions(geometry%nions,3))
+    species=species_c
+    do i=1,geometry%nions
+      do j=1,3;positions(i,j)=positions_c(3*(i-1)+j);end do
+    end do
+    do i=1,3
+      do j=1,3;lattice(i,j)=geometry%lattice(3*(i-1)+j);end do
+    end do
+    call contexts(slot)%set_request_geometry(geometry%nions,geometry%ntypes,geometry%grid,lattice,species,positions,status,message)
+    if(status/=LIB_SUCCESS)then
+      half_set_request_geometry=int(status,c_int);call export_error(trim(message),error,error_capacity);return
+    end if
+    half_set_request_geometry=HALF_SUCCESS
+  end function
+
+  integer(c_int) function half_get_request_geometry(handle,nions_c,ntypes_c,grid_c,lattice_c,species_capacity, &
+      species_c,positions_capacity,positions_c,error,error_capacity)bind(C,name='half_get_request_geometry')
+    integer(c_int64_t),value::handle,species_capacity,positions_capacity
+    type(c_ptr),value::nions_c,ntypes_c,grid_c,lattice_c,species_c,positions_c
+    integer(c_int),value::error_capacity
+    character(c_char),intent(out)::error(*)
+    integer(c_int32_t),pointer::nions,ntypes,grid(:),species(:)
+    real(c_double),pointer::lattice(:),positions(:)
+    integer::slot,i,j
+    call clear_error(error,error_capacity);slot=context_slot(handle)
+    if(slot==0)then;half_get_request_geometry=bad_handle(error,error_capacity);return;end if
+    if(.not.contexts(slot)%has_request_geometry)then
+      half_get_request_geometry=HALF_UNAVAILABLE
+      call export_error('request geometry has not been set',error,error_capacity);return
+    end if
+    if(.not.c_associated(nions_c).or..not.c_associated(ntypes_c))then
+      half_get_request_geometry=HALF_INVALID_ARGUMENT
+      call export_error('nions and ntypes output pointers are required',error,error_capacity);return
+    end if
+    call c_f_pointer(nions_c,nions);call c_f_pointer(ntypes_c,ntypes)
+    nions=contexts(slot)%request_nions;ntypes=contexts(slot)%request_ntypes
+    if(c_associated(grid_c))then
+      call c_f_pointer(grid_c,grid,[3]);grid=contexts(slot)%request_grid
+    end if
+    if(c_associated(lattice_c))then
+      call c_f_pointer(lattice_c,lattice,[9])
+      do i=1,3
+        do j=1,3;lattice(3*(i-1)+j)=contexts(slot)%request_lattice(i,j);end do
+      end do
+    end if
+    if(c_associated(species_c))then
+      if(species_capacity<contexts(slot)%request_nions)then
+        half_get_request_geometry=HALF_CAPACITY
+        call export_error('request species output capacity is too small',error,error_capacity);return
+      end if
+      call c_f_pointer(species_c,species,[int(species_capacity)])
+      species(1:contexts(slot)%request_nions)=contexts(slot)%request_species
+    end if
+    if(c_associated(positions_c))then
+      if(positions_capacity<3_c_int64_t*contexts(slot)%request_nions)then
+        half_get_request_geometry=HALF_CAPACITY
+        call export_error('request positions output capacity is too small',error,error_capacity);return
+      end if
+      call c_f_pointer(positions_c,positions,[int(positions_capacity)])
+      do i=1,contexts(slot)%request_nions
+        do j=1,3;positions(3*(i-1)+j)=contexts(slot)%request_positions(i,j);end do
+      end do
+    end if
+    half_get_request_geometry=HALF_SUCCESS
   end function
 
   integer(c_int) function half_get_system_info(handle,nions,ntypes,grid,lattice,volume,error,error_capacity) &

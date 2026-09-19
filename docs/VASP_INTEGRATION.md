@@ -44,7 +44,22 @@ density). HALF then diagonalizes the Hamiltonian built from the same density.
 
 ## Direct-call contract
 
-Use the additive ABI-v1 function:
+Before solving, VASP now sends its parsed host request through memory:
+
+```c
+int half_set_request_geometry(
+    half_handle handle, const half_request_geometry_v1 *geometry,
+    char *error, int error_capacity);
+```
+
+The adapter packs `LATT_CUR%A` as row-major lattice vectors,
+`T_INFO%POSION` as atom-major fractional coordinates, `T_INFO%ITYP` as
+one-based species indices, and uses the dense charge grid `GRIDC%NGPTAR` as
+`grid[3]`. HALF deep-copies all fields. They are retained for a future direct
+DeepAW API call and intentionally do not alter the current file-backed solve.
+`half_get_request_geometry()` provides an auditable query/copy path.
+
+Wavefunction transfer uses the additive ABI-v1 function:
 
 ```c
 int half_solve_kpoint_mapped(
@@ -78,6 +93,7 @@ Immediately after `ALLOCW`, use this branch:
 if LHALF_INIT:
     reject an unsupported calculation mode
     create HALF context from DeepAW CHGCAR + POTCAR
+    transfer lattice + fractional positions + species + dense grid from memory
     for each irreducible k point:
         build VASP serial G-vector list
         call half_solve_kpoint_mapped

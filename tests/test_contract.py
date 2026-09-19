@@ -55,6 +55,9 @@ def test_stable_library_api_and_cli_artifacts_are_exposed():
     assert "half_apply_hs" in header
     assert "half_solve_kpoint" in header
     assert "half_solve_kpoint_mapped" in header
+    assert "half_request_geometry_v1" in header
+    assert "half_set_request_geometry" in header
+    assert "half_get_request_geometry" in header
     assert "EXPORT_NAME half" in cmake
     assert "HALFConfig.cmake" in cmake
     assert "write_bands_artifacts" in cli
@@ -73,6 +76,11 @@ def test_private_vasp_one_click_build_is_wired():
     assert "PrepareMklFftw.cmake" in integration
     assert 'vasp) preset="base"' in tool
     assert adapter.is_file()
+    adapter_source = adapter.read_text()
+    vasp_main = (ROOT / "vendor" / "vasp-6.6.0" / "src" / "main.F").read_text()
+    assert "half_set_request_geometry" in adapter_source
+    assert "T_INFO%POSION" in adapter_source
+    assert "GRIDC%NGPTAR" in vasp_main
 
 
 def test_build_rejects_non_nvhpc_compilers():

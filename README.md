@@ -300,6 +300,11 @@ provide the fully device-resident direct solve in ABI v1.  Installed CMake
 clients link `HALF::half`; pkg-config clients use `half.pc`.  CPU/CUDA and
 EVD/EVJ are selected when the context is created.
 
+The VASP adapter also transfers its lattice, fractional positions, species
+indices, and dense charge-grid dimensions directly into HALF memory. HALF
+deep-copies and retains this request metadata; the current solver does not yet
+consume it, leaving a stable handoff point for the next direct DeepAW API step.
+
 See [the API guide](docs/API.md), the
 [tested VASP 6.6.0 integration](docs/VASP_INTEGRATION.md), the standalone
 [C example](examples/api/half_c_example.c), and the original

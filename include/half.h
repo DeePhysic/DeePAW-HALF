@@ -37,6 +37,24 @@ enum half_capability {
 
 typedef int64_t half_handle;
 
+/* VASP-to-HALF request metadata.  ABI v1 stores a deep copy in the context;
+ * the current numerical path intentionally continues to use the file input.
+ * lattice is row-major, positions_fractional is atom-major [nions][3], and
+ * species contains one-based type indices. Set struct_size to sizeof this
+ * structure, set flags to zero, and zero every reserved field. */
+typedef struct half_request_geometry_v1 {
+  uint32_t struct_size;
+  uint32_t flags;
+  int32_t nions;
+  int32_t ntypes;
+  int32_t grid[3];
+  int32_t reserved_i32;
+  double lattice[9];
+  const int32_t *species;
+  const double *positions_fractional;
+  uint64_t reserved[8];
+} half_request_geometry_v1;
+
 int half_get_abi_version(void);
 const char *half_get_version_string(void);
 int half_get_capabilities(void);
@@ -52,6 +70,19 @@ int half_create_from_files_backend(const char *charge_path,
                                    int backend, int solver, half_handle *handle,
                                    char *error, int error_capacity);
 int half_destroy(half_handle handle, char *error, int error_capacity);
+
+int half_set_request_geometry(half_handle handle,
+                              const half_request_geometry_v1 *geometry,
+                              char *error, int error_capacity);
+/* Query dimensions first with null species/positions, then provide capacities
+ * measured in int32_t and double elements, respectively. lattice and grid are
+ * always returned when their pointers are non-null. */
+int half_get_request_geometry(half_handle handle, int32_t *nions,
+                              int32_t *ntypes, int32_t grid[3],
+                              double lattice[9], int64_t species_capacity,
+                              int32_t *species, int64_t positions_capacity,
+                              double *positions_fractional,
+                              char *error, int error_capacity);
 
 int half_get_system_info(half_handle handle, int *nions, int *ntypes,
                          int grid[3], double lattice[9], double *volume_A3,

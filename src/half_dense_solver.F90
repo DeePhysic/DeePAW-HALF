@@ -26,12 +26,13 @@ module half_dense_solver
     end function
   end interface
 contains
-  subroutine solve_dense_gamma(veff,basis,paw,eigenvalues,overlap_min,overlap_max)
+  subroutine solve_dense_gamma(veff,basis,paw,eigenvalues,overlap_min,overlap_max,eigenvectors)
     real(dp),intent(in)::veff(:)
     type(plane_wave_basis_t),intent(in)::basis
     type(paw_species_t),intent(in)::paw(:)
     real(dp),allocatable,intent(out)::eigenvalues(:)
     real(dp),intent(out)::overlap_min,overlap_max
+    complex(dp),allocatable,intent(out),optional::eigenvectors(:,:)
     complex(dp),allocatable::h(:,:),s(:,:),scopy(:,:)
     integer::n,info
     n=basis%npw; allocate(scopy(n,n),eigenvalues(n))
@@ -40,8 +41,13 @@ contains
     info=lapacke_zheev(102,'N','U',n,scopy,n,eigenvalues)
     if(info/=0)error stop 'HALF: overlap eigensolve failed'
     overlap_min=eigenvalues(1); overlap_max=eigenvalues(n)
-    info=lapacke_zhegv(102,1,'N','U',n,h,n,s,n,eigenvalues)
+    if(present(eigenvectors))then
+      info=lapacke_zhegv(102,1,'V','U',n,h,n,s,n,eigenvalues)
+    else
+      info=lapacke_zhegv(102,1,'N','U',n,h,n,s,n,eigenvalues)
+    end if
     if(info/=0)error stop 'HALF: generalized eigensolve failed'
+    if(present(eigenvectors))then;allocate(eigenvectors(n,n));eigenvectors=h;end if
   end subroutine
 
   subroutine assemble_dense_gamma(veff,basis,paw,h,s)

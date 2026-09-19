@@ -8,7 +8,7 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | Crystal and reciprocal lattice | `crystal.py` | `half_types.F90` | done |
 | Plane-wave basis and FFT indices | `basis.py` | `half_basis.F90` | done; exact Si parity |
 | CUDA device bootstrap/kernel | n/a | `half_cuda.cuf` | done |
-| HDF5 charge/structure input | `chgcar.py`, `hdf5io.py` | `half_hdf5.F90` | planned |
+| HDF5 charge/structure and embedded POTCAR input | `chgcar.py`, `hdf5io.py`, `potcar.py` | `half_vaspwave.F90`, `half_hdf5_bridge.c` | done; native HDF5 C ABI avoids compiler-specific Fortran module files |
 | Multi-dataset POTCAR parser | `potcar.py` | `half_potcar.F90` | done; Si and HfO2 parsed |
 | LDA/PBE and NLCC | `xc.py`, `potential.py` | `half_xc.F90`, `half_cuda_potential.cuf` | done on CPU/GPU; Si and HfO2 CUDA parity |
 | Local ionic and Hartree potential | `potential.py` | `half_potential.F90`, `half_cuda_potential.cuf` | done on CPU/GPU; explicit CHGCAR Fortran-to-CUDA grid reorder |
@@ -22,7 +22,7 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | Occupations, Ewald and energy | `occupations.py`, `ewald.py`, `total_energy.py` | `half_energy.F90`, `half_cli.F90` | done on CPU/CUDA; zero/finite-T occupations and Si componentwise parity below 4e-12 eV |
 | Analytic forces | theory only | `half_forces.cuf` | planned |
 | Finite-difference force oracle | `total_energy.py` | test driver | planned |
-| `vaspwave.h5` output | `vaspwave.py` | `half_vaspwave.F90` | planned |
+| `vaspwave.h5` output | `vaspwave.py` | `half_vaspwave.F90`, `half_hdf5_bridge.c` | done for EVD bands/energy; VASP FFT coefficient order, float32 complex packing and charge round trip validated |
 | MPI k-point distribution | n/a | `half_mpi.F90` | blocked on single-GPU parity |
 
 ## Ordered delivery gates

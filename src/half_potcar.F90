@@ -1,6 +1,9 @@
 module half_potcar
   use half_kinds, only: dp, i32
   use half_types, only: potcar_t
+#ifdef HALF_HAVE_HDF5
+  use half_vaspwave,only:is_hdf5_file,extract_hdf5_potcar
+#endif
   implicit none
   private
   public :: read_potcar
@@ -11,9 +14,14 @@ contains
     type(potcar_t),allocatable,intent(out)::datasets(:)
     type(potcar_t),allocatable::work(:)
     type(potcar_t)::item
-    character(len=1024)::line
+    character(len=1024)::line,read_path
     integer::unit,ios,n
-    open(newunit=unit,file=path,status='old',action='read',iostat=ios)
+    logical::temporary
+    read_path=path;temporary=.false.
+#ifdef HALF_HAVE_HDF5
+    if(is_hdf5_file(path))then;call extract_hdf5_potcar(path,read_path);temporary=.true.;end if
+#endif
+    open(newunit=unit,file=trim(read_path),status='old',action='read',iostat=ios)
     if(ios/=0)error stop 'HALF: cannot open POTCAR'
     allocate(work(32)); n=0
     do
@@ -24,7 +32,8 @@ contains
       n=n+1; if(n>size(work))error stop 'HALF: too many POTCAR datasets'
       work(n)=item
     end do
-    close(unit); allocate(datasets(n)); if(n>0)datasets=work(:n)
+    if(temporary)then;close(unit,status='delete');else;close(unit);end if
+    allocate(datasets(n)); if(n>0)datasets=work(:n)
   end subroutine
 
   subroutine read_dataset(unit,header,p)

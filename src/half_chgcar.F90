@@ -2,6 +2,9 @@ module half_chgcar
   use half_kinds, only: dp, i32, i64
   use half_math, only: inverse3
   use half_types, only: charge_grid_t, crystal_t
+#ifdef HALF_HAVE_HDF5
+  use half_vaspwave,only:is_hdf5_file,read_vaspwave_h5
+#endif
   implicit none
   private
   public :: read_chgcar
@@ -18,6 +21,9 @@ contains
     integer :: nwords
     logical :: cartesian
 
+#ifdef HALF_HAVE_HDF5
+    if(is_hdf5_file(path))then;call read_vaspwave_h5(path,crystal,charge);return;end if
+#endif
     open(newunit=unit, file=path, status="old", action="read", iostat=ios)
     if (ios /= 0) error stop "HALF: cannot open CHGCAR"
 

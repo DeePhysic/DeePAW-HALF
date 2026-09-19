@@ -15,6 +15,8 @@ def test_expected_project_surface_exists():
         "src/half_basis.F90",
         "src/half_kpoints.F90",
         "src/half_energy.F90",
+        "src/half_vaspwave.F90",
+        "src/half_hdf5_bridge.c",
         "src/half_cuda.cuf",
         "src/half_cuda_potential.cuf",
         "src/half_cuda_uspp.cuf",
@@ -108,6 +110,21 @@ def test_si_total_energy_parity_record():
     record = json.loads((ROOT / "docs/validation/si_total_energy_parity.json").read_text())
     assert record["max_abs_component_error_eV"] < 1e-10
     assert record["total_energy_abs_error_eV"] < 1e-10
+
+
+def test_native_hdf5_input_and_vaspwave_output_are_enabled():
+    bridge = (ROOT / "src/half_hdf5_bridge.c").read_text().lower()
+    writer = (ROOT / "src/half_vaspwave.F90").read_text().lower()
+    chgcar = (ROOT / "src/half_chgcar.F90").read_text().lower()
+    potcar = (ROOT / "src/half_potcar.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "half_write_vaspwave_h5_c" in bridge
+    assert "half_probe_vaspwave_c" in bridge
+    assert "input/potcar/content" in bridge
+    assert "vasp_permutation" in writer
+    assert "read_vaspwave_h5" in chgcar
+    assert "extract_hdf5_potcar" in potcar
+    assert "case('--vaspwave-h5')" in cli
 
 
 def test_si_arbitrary_kpoint_parity_record():

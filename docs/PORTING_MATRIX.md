@@ -18,7 +18,7 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | Matrix-free H/S application | `hamiltonian.py` | `half_operator.cuf` | planned |
 | Block iterative eigensolver | n/a | `half_lobpcg.cuf` | planned |
 | Arbitrary single k point | `basis.py`, `reconstruct_bandstructure.py` | `half_basis.F90`, `half_cli.F90` | done on CPU/CUDA; `--kpoint KX KY KZ` |
-| Explicit bands, k meshes and symmetry reduction | `kpoints.py` | `half_kpoints.F90`, `half_cli.F90` | done; explicit reciprocal KPOINTS, full Gamma meshes and spglib irreducible meshes |
+| Band paths, k meshes and symmetry reduction | `kpoints.py`, ASE | `half_kpoints.F90`, `half_cli.F90` | done; explicit reciprocal KPOINTS, ASE-identical automatic SC/FCC/BCC paths, full Gamma meshes and spglib irreducible meshes |
 | Occupations, Ewald and energy | `occupations.py`, `ewald.py`, `total_energy.py` | `half_energy.F90`, `half_cli.F90` | done on CPU/CUDA; zero/finite-T occupations and Si componentwise parity below 4e-12 eV |
 | Analytic forces | theory only | `half_forces.cuf` | planned |
 | Finite-difference force oracle | `total_energy.py` | `half_cli.F90` | done on CPU/CUDA; Si parity within 2.3e-9 eV/Angstrom and 45x faster than HAPPY in the validated case |

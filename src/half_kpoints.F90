@@ -4,7 +4,7 @@ module half_kpoints
   use half_types,only:crystal_t
   implicit none
   private
-  public::kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh
+  public::kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh,generate_cubic_band_path
   type::kpoint_set_t
     integer(i32)::nk=0
     integer(i32)::divisions(3)=0
@@ -103,6 +103,69 @@ contains
 #else
     error stop 'HALF: irreducible k mesh requires spglib; set HALF_SPGLIB_ROOT and rebuild'
 #endif
+  end subroutine
+
+  subroutine generate_cubic_band_path(crystal,npoints,requested_path,set,path_used)
+    type(crystal_t),intent(in)::crystal
+    integer,intent(in)::npoints
+    character(len=*),intent(in)::requested_path
+    type(kpoint_set_t),intent(out)::set
+    character(len=*),intent(out)::path_used
+    real(dp)::gram(3,3),diag_mean,ratio,coordinates(6,3),label_points(len_trim(requested_path)+32,3)
+    real(dp)::lengths(len_trim(requested_path)+31),total,x0,remaining,t
+    real(dp),allocatable::buffer(:,:)
+    character(len=1)::labels(6),c
+    character(len=256)::path
+    logical::disconnect(len_trim(requested_path)+31),pending
+    integer::kind,nlabel,i,j,k,nsegment,n
+    if(npoints<2)error stop 'HALF: band-path npoints must be at least two'
+    gram=matmul(crystal%lattice,transpose(crystal%lattice));diag_mean=sum([gram(1,1),gram(2,2),gram(3,3)])/3
+    if(maxval(abs([gram(1,1),gram(2,2),gram(3,3)]-diag_mean))>1e-6_dp*diag_mean) &
+      error stop 'HALF: automatic band paths currently require a cubic primitive cell; use explicit KPOINTS'
+    ratio=(gram(1,2)+gram(1,3)+gram(2,3))/(3*diag_mean)
+    if(abs(ratio)<1e-6_dp)then
+      kind=1;labels(1:4)=['G','X','M','R'];coordinates(1,:)=[0._dp,0._dp,0._dp];coordinates(2,:)=[.5_dp,0._dp,0._dp]
+      coordinates(3,:)=[.5_dp,.5_dp,0._dp];coordinates(4,:)=[.5_dp,.5_dp,.5_dp];path='GXMGRX,MR'
+    else if(abs(ratio-.5_dp)<1e-6_dp)then
+      kind=2;labels=['G','K','L','U','W','X'];coordinates(1,:)=[0._dp,0._dp,0._dp];coordinates(2,:)=[.375_dp,.375_dp,.75_dp]
+      coordinates(3,:)=[.5_dp,.5_dp,.5_dp];coordinates(4,:)=[.625_dp,.25_dp,.625_dp]
+      coordinates(5,:)=[.5_dp,.25_dp,.75_dp];coordinates(6,:)=[.5_dp,0._dp,.5_dp];path='GXWKGLUWLK,UX'
+    else if(abs(ratio+1._dp/3._dp)<1e-6_dp)then
+      kind=3;labels(1:4)=['G','H','P','N'];coordinates(1,:)=[0._dp,0._dp,0._dp];coordinates(2,:)=[.5_dp,-.5_dp,.5_dp]
+      coordinates(3,:)=[.25_dp,.25_dp,.25_dp];coordinates(4,:)=[0._dp,.5_dp,0._dp];path='GHNGPH,PN'
+    else;error stop 'HALF: unsupported cubic primitive metric; use explicit KPOINTS';end if
+    if(len_trim(requested_path)>0)path=trim(requested_path);path_used=trim(path)
+    nlabel=0;pending=.false.;disconnect=.false.
+    do i=1,len_trim(path)
+      c=path(i:i)
+      if(c==',')then;pending=.true.;cycle;end if
+      nlabel=nlabel+1
+      if(nlabel>1)disconnect(nlabel-1)=pending
+      pending=.false.;k=0
+      do j=1,merge(4,6,kind/=2);if(labels(j)==c)then;k=j;exit;end if;end do
+      if(k==0)error stop 'HALF: unknown label in cubic band path'
+      label_points(nlabel,:)=coordinates(k,:)
+    end do
+    if(nlabel<2)error stop 'HALF: band path needs at least two labels'
+    nsegment=nlabel-1;total=0
+    do i=1,nsegment
+      if(disconnect(i))then;lengths(i)=0
+      else;lengths(i)=sqrt(sum(matmul(label_points(i+1,:)-label_points(i,:),crystal%reciprocal)**2));end if
+      total=total+lengths(i)
+    end do
+    allocate(buffer(npoints+2*nlabel,3));k=0;x0=0
+    do i=1,nsegment
+      remaining=total-x0
+      if(abs(remaining)<1e-12_dp)then;n=0
+      else;n=max(2,nint(lengths(i)*real(npoints-k,dp)/remaining));end if
+      do j=0,n-2
+        t=real(j,dp)/real(n-1,dp);k=k+1;buffer(k,:)=label_points(i,:)+t*(label_points(i+1,:)-label_points(i,:))
+      end do
+      x0=x0+lengths(i)
+    end do
+    k=k+1;buffer(k,:)=label_points(nlabel,:);set%nk=k;set%full_count=k
+    allocate(set%points(k,3),set%weights(k),set%multiplicities(k));set%points=buffer(:k,:)
+    set%weights=1.0_dp/real(k,dp);set%multiplicities=1
   end subroutine
 
   pure real(dp) function wrapped(index,n)result(value)

@@ -138,6 +138,17 @@ def test_si_finite_difference_force_parity_record():
     assert "evaluate_free_energy" in cli
 
 
+def test_si_automatic_band_path_parity_record():
+    import json
+
+    record = json.loads((ROOT / "docs/validation/si_band_path_parity.json").read_text())
+    assert record["path"] == "GXWKGLUWLK,UX"
+    assert record["kpoint_max_abs_error"] == 0.0
+    assert record["max_abs_eigenvalue_error_eV"] < 1e-10
+    source = (ROOT / "src/half_kpoints.F90").read_text().lower()
+    assert "generate_cubic_band_path" in source
+
+
 def test_si_arbitrary_kpoint_parity_record():
     import json
 

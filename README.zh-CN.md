@@ -156,6 +156,10 @@ half gamma CHGCAR.smooth POTCAR \
 half bands CHGCAR.smooth POTCAR KPOINTS \
   --encut 400 --bands 12 --backend cuda --uspp-dij --output bands.json
 
+# 或生成与 ASE 一致的立方晶系默认高对称路径
+half bands CHGCAR.smooth POTCAR \
+  --encut 400 --bands 12 --npoints 60 --backend cuda --output-prefix bands
+
 # 使用 spglib 不可约 k 网格计算固定密度 Harris 总能量
 half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \

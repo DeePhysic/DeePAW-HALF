@@ -226,6 +226,10 @@ CPU/CUDA backend selection:
 ./build/cuda12-cc89-release/half bands CHGCAR.smooth POTCAR KPOINTS \
   --encut 400 --bands 12 --backend cuda --uspp-dij --output bands.json
 
+# Or generate the ASE-compatible automatic cubic high-symmetry path.
+./build/cuda12-cc89-release/half bands CHGCAR.smooth POTCAR \
+  --encut 400 --bands 12 --npoints 60 --backend cuda --output-prefix bands
+
 # Evaluate the symmetry-reduced fixed-density Harris energy.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \

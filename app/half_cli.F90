@@ -4,7 +4,7 @@ program half_cli
   use half_chgcar, only: read_chgcar
   use half_potcar, only: read_potcar
   use half_basis, only: build_plane_wave_basis
-  use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh
+  use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh,generate_cubic_band_path
   use half_paw, only: paw_species_t, build_paw_operators
   use half_uspp, only: build_uspp_dij_cpu
   use half_energy, only: compute_occupations,ewald_energy
@@ -447,8 +447,8 @@ contains
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
     real(dp)::encut,eh,exc,smin,smax,potential_seconds,assembly_seconds,gpu_seconds
-    integer::narg,i,ios,ik,nbands,unit
-    character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,hdf5_path
+    integer::narg,i,ios,ik,nbands,unit,npoints
+    character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,hdf5_path,path_spec,path_used
     character(len=16)::xc,backend,solver,actual_backend
     logical::use_uspp
 #ifdef HALF_CLI_HAVE_HDF5
@@ -465,10 +465,11 @@ contains
 #if !defined(HALF_CLI_HAVE_MKL) && !defined(HALF_CLI_CUDA)
     call fail('bands requires either CUDA or oneMKL; enable a numerical backend and rebuild HALF')
 #else
-    if(narg<offset+3)then;call print_bands_help(0);call fail('bands requires CHARGE, POTENTIAL, and KPOINTS');end if
+    if(narg<offset+2)then;call print_bands_help(0);call fail('bands requires CHARGE and POTENTIAL');end if
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
-    call get_command_argument(offset+3,kpoints_path)
-    encut=400.0_dp;nbands=8;xc='pbe';backend='auto';solver='evd';use_uspp=.false.;output_path='bands.json';hdf5_path='';i=offset+4
+    kpoints_path='';path_spec='';path_used='';i=offset+3
+    if(i<=narg)then;call get_command_argument(i,arg);if(arg(1:1)/='-')then;kpoints_path=arg;i=i+1;end if;end if
+    encut=400.0_dp;nbands=8;npoints=60;xc='pbe';backend='auto';solver='evd';use_uspp=.true.;output_path='bands.json';hdf5_path=''
     do while(i<=narg)
       call get_command_argument(i,arg)
       select case(trim(arg))
@@ -476,6 +477,9 @@ contains
         if(ios/=0.or.encut<=0)call fail('invalid --encut value')
       case('--bands');call option_value(i,narg,'--bands',value);read(value,*,iostat=ios)nbands
         if(ios/=0.or.nbands<1)call fail('invalid --bands value')
+      case('--npoints');call option_value(i,narg,'--npoints',value);read(value,*,iostat=ios)npoints
+        if(ios/=0.or.npoints<2)call fail('invalid --npoints value')
+      case('--path');call option_value(i,narg,'--path',path_spec)
       case('--xc');call option_value(i,narg,'--xc',xc);xc=lower(trim(xc))
         if(trim(xc)/='lda'.and.trim(xc)/='pbe')call fail('--xc must be lda or pbe')
       case('--backend');call option_value(i,narg,'--backend',backend);backend=lower(trim(backend))
@@ -483,15 +487,18 @@ contains
       case('--solver');call option_value(i,narg,'--solver',solver);solver=lower(trim(solver))
         if(trim(solver)/='evd'.and.trim(solver)/='evj')call fail('--solver must be evd or evj')
       case('--output');call option_value(i,narg,'--output',output_path)
+      case('--output-prefix');call option_value(i,narg,'--output-prefix',value);output_path=trim(value)//'.json'
       case('--vaspwave-h5');call option_value(i,narg,'--vaspwave-h5',hdf5_path)
       case('--uspp-dij');use_uspp=.true.
+      case('--no-uspp-dij');use_uspp=.false.
       case('--help','-h');call print_bands_help(6);return
       case default;call fail('unknown bands option: '//trim(arg))
       end select
       i=i+1
     end do
     call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars)
-    call read_explicit_kpoints(trim(kpoints_path),set)
+    if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),set);path_used=kpoints_path
+    else;call generate_cubic_band_path(crystal,npoints,path_spec,set,path_used);end if
 #ifdef HALF_CLI_CUDA
     if(trim(backend)=='auto'.or.trim(backend)=='cuda')then;actual_backend='cuda'
     else;actual_backend='cpu';end if
@@ -551,18 +558,18 @@ contains
     if(trim(output_path)=='-')then;unit=6
     else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
       if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
-    call write_bands_json(unit,charge_path,potential_path,kpoints_path,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp)
-    if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,kpoints_path,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp);end if
+    call write_bands_json(unit,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp)
+    if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp);end if
 #endif
   end subroutine
 
   subroutine print_bands_help(unit)
     integer,intent(in)::unit
-    write(unit,'(A)')'Usage: half bands CHARGE POTENTIAL KPOINTS [OPTIONS]'
-    write(unit,'(A)')'       half-bands CHARGE POTENTIAL KPOINTS [OPTIONS]'
-    write(unit,'(A)')'Options: --encut EV --bands N --xc lda|pbe --backend auto|cpu|cuda'
-    write(unit,'(A)')'         --solver evd|evj --uspp-dij --output FILE --vaspwave-h5 FILE'
-    write(unit,'(A)')'KPOINTS is a VASP explicit reciprocal-coordinate file.'
+    write(unit,'(A)')'Usage: half bands CHARGE POTENTIAL [KPOINTS] [OPTIONS]'
+    write(unit,'(A)')'       half-bands CHARGE POTENTIAL [KPOINTS] [OPTIONS]'
+    write(unit,'(A)')'Options: --encut EV --bands N --npoints N --path LABELS --xc lda|pbe --backend auto|cpu|cuda'
+    write(unit,'(A)')'         --solver evd|evj --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
+    write(unit,'(A)')'KPOINTS is a VASP explicit reciprocal-coordinate file; omit it for an automatic cubic band path.'
   end subroutine
 
   subroutine write_bands_json(unit,charge,potential,kfile,xc,backend,solver,encut,set,eigenvalues,plane_waves,use_uspp)

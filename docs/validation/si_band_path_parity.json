@@ -1,0 +1,12 @@
+{
+  "system": "diamond Si",
+  "path": "GXWKGLUWLK,UX",
+  "requested_npoints": 10,
+  "actual_npoints": 12,
+  "encut_eV": 100.0,
+  "bands": 4,
+  "uspp_dij": true,
+  "kpoint_max_abs_error": 0.0,
+  "max_abs_eigenvalue_error_eV": 1.6724399642953358e-12,
+  "reference": "ASE automatic FCC path and DeePAW-HAPPY MIMIC_US eigenvalues"
+}

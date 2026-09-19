@@ -10,6 +10,8 @@ program half_cli
   use half_energy, only: compute_occupations,ewald_energy,read_vasp_eigenval
   use half_math,only:inverse3
   use half_cpu, only: cpu_density_mean
+  use half_parallel, only: parallel_initialize,parallel_finalize,parallel_abort,parallel_rank,parallel_size, &
+    parallel_root,parallel_owns,parallel_sum,parallel_min
 #ifdef HALF_CLI_HAVE_MKL
   use half_potential, only: build_veff_lda, build_veff_pbe
   use half_dense_solver, only: solve_dense_gamma
@@ -24,6 +26,7 @@ program half_cli
   character(len=1024) :: invocation, command
   integer :: argument_offset
 
+  call parallel_initialize()
   call get_command_argument(0, invocation)
   invocation = basename(trim(invocation))
   argument_offset = 1
@@ -36,26 +39,27 @@ program half_cli
     command = 'energy'; argument_offset = 0
   case default
     if (command_argument_count() == 0) then
-      call print_help(6); stop
+      if(parallel_root())call print_help(6)
+      call parallel_finalize();stop
     end if
     call get_command_argument(1, command)
   end select
 
   select case (trim(command))
   case ('help', '--help', '-h')
-    call print_help(6)
+    if(parallel_root())call print_help(6)
   case ('version', '--version', '-V')
-    write(*,'(A)') 'DeePAW-HALF 0.4.0'
+    if(parallel_root())write(*,'(A)') 'DeePAW-HALF 0.4.0'
   case ('gamma', 'validate-gamma')
-    call command_gamma(argument_offset)
+    if(parallel_root())call command_gamma(argument_offset)
   case ('inspect')
-    call command_inspect(argument_offset)
+    if(parallel_root())call command_inspect(argument_offset)
   case ('potcar')
-    call command_potcar(argument_offset)
+    if(parallel_root())call command_potcar(argument_offset)
   case ('paw')
-    call command_paw(argument_offset)
+    if(parallel_root())call command_paw(argument_offset)
   case ('kpoints')
-    call command_kpoints(argument_offset)
+    if(parallel_root())call command_kpoints(argument_offset)
   case ('bands')
     call command_bands(argument_offset)
   case ('energy')
@@ -63,6 +67,7 @@ program half_cli
   case default
     call fail('unknown command: '//trim(command)//'; run half --help')
   end select
+  call parallel_finalize()
 
 contains
   subroutine print_help(unit)
@@ -461,7 +466,10 @@ contains
     narg=command_argument_count()
     if(narg>=offset+1)then
       call get_command_argument(offset+1,arg)
-      if(trim(arg)=='--help'.or.trim(arg)=='-h')then;call print_bands_help(6);return;end if
+      if(trim(arg)=='--help'.or.trim(arg)=='-h')then
+        if(parallel_root())call print_bands_help(6)
+        return
+      end if
     end if
 #if !defined(HALF_CLI_HAVE_MKL) && !defined(HALF_CLI_CUDA)
     call fail('bands requires either CUDA or oneMKL; enable a numerical backend and rebuild HALF')
@@ -511,14 +519,17 @@ contains
 #endif
     if(trim(actual_backend)=='cpu'.and.trim(solver)/='evd')call fail('--solver evj is available only with CUDA')
     if(len_trim(hdf5_path)>0.and.trim(solver)/='evd')call fail('vaspwave.h5 export requires --solver evd')
+    if(parallel_size()>1.and.trim(actual_backend)/='cpu')call fail('MPI k-point distribution is supported by the CPU backend only')
+    if(parallel_size()>1.and.len_trim(hdf5_path)>0)call fail('vaspwave.h5 export currently requires one MPI rank')
 #ifndef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)call fail('this HALF build has no HDF5 support')
 #endif
-    allocate(eigenvalues(set%nk,nbands),plane_waves(set%nk))
+    allocate(eigenvalues(set%nk,nbands),plane_waves(set%nk));eigenvalues=0.0_dp;plane_waves=0_i64
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)allocate(wave_bases(set%nk),waves(set%nk))
 #endif
     do ik=1,set%nk
+      if(.not.parallel_owns(ik))cycle
       call build_plane_wave_basis(crystal,rho%shape,encut,set%points(ik,:),basis);plane_waves(ik)=basis%npw
       if(nbands>basis%npw)call fail('requested bands exceed plane waves at a k point')
 #ifdef HALF_CLI_CUDA
@@ -547,8 +558,9 @@ contains
 #ifdef HALF_CLI_HAVE_HDF5
       if(len_trim(hdf5_path)>0)then;wave_bases(ik)=basis;waves(ik)%coefficients=vectors(:,:nbands);end if
 #endif
-      write(0,'(A,I0,A,I0,A,ES14.6)')'HALF bands: k point ',ik,'/',set%nk,' E1_eV=',values(1)
+      write(0,'(A,I0,A,I0,A,I0,A,ES14.6)')'HALF bands: rank ',parallel_rank(),' k point ',ik,'/',set%nk,' E1_eV=',values(1)
     end do
+    call parallel_sum(eigenvalues);call parallel_sum(plane_waves)
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)then
       nelect=0;do i=1,size(potcars);nelect=nelect+potcars(i)%zval*real(crystal%counts(i),dp);end do
@@ -556,11 +568,13 @@ contains
       call write_vaspwave_h5(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,wave_occ,wave_mu,wave_bases,waves)
     end if
 #endif
-    if(trim(output_path)=='-')then;unit=6
-    else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
-      if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
-    call write_bands_json(unit,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp)
-    if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp);end if
+    if(parallel_root())then
+      if(trim(output_path)=='-')then;unit=6
+      else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
+        if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
+      call write_bands_json(unit,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp)
+      if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp);end if
+    end if
 #endif
   end subroutine
 
@@ -585,6 +599,7 @@ contains
     write(unit,'(A,A,A)')'  "charge": "',trim(charge),'",';write(unit,'(A,A,A)')'  "potential": "',trim(potential),'",'
     write(unit,'(A,A,A)')'  "kpoints_source": "',trim(kfile),'",';write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",'
     write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",';write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",'
+    write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
     write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),',';write(unit,'(A,ES24.16,A)')'  "encut_eV": ',encut,','
     write(unit,'(A)')'  "kpoints": ['
     do ik=1,set%nk
@@ -614,7 +629,7 @@ contains
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
     real(dp)::encut,kspacing,symprec,sigma,nelect,density_electrons,mu,band_energy,entropy_term,reference_nelect
-    real(dp)::eh,exc,exv,smin,smax,potential_seconds,assembly_seconds,gpu_seconds
+    real(dp)::eh,exc,exv,smin,k_smin,smax,potential_seconds,assembly_seconds,gpu_seconds
     real(dp)::ewald,ewald_real,ewald_recip,ewald_self,ewald_background,atomic_reference,local_g0
     real(dp)::paw_atomic,internal_energy,free_energy
     real(dp)::force_step,displaced_energies(2),inverse_lattice(3,3),delta_cart(3)
@@ -631,7 +646,8 @@ contains
     if(command_argument_count()>=offset+1)then
       call get_command_argument(offset+1,arg)
       if(trim(arg)=='--help'.or.trim(arg)=='-h')then
-        call print_energy_help(6);return
+        if(parallel_root())call print_energy_help(6)
+        return
       end if
     end if
 #if !defined(HALF_CLI_HAVE_MKL) && !defined(HALF_CLI_CUDA)
@@ -710,15 +726,25 @@ contains
 #endif
     if(trim(actual_backend)=='cpu'.and.trim(solver)/='evd')call fail('--solver evj is available only with CUDA')
     if(len_trim(hdf5_path)>0.and.trim(solver)/='evd')call fail('vaspwave.h5 export requires --solver evd')
+    if(parallel_size()>1.and.trim(actual_backend)/='cpu')call fail('MPI k-point distribution is supported by the CPU backend only')
+    if(parallel_size()>1.and.len_trim(hdf5_path)>0)call fail('vaspwave.h5 export currently requires one MPI rank')
 #ifndef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)call fail('this HALF build has no HDF5 support')
 #endif
-    allocate(eigenvalues(set%nk,nbands),plane_waves(set%nk));eh=0;exc=0;exv=0
+    allocate(eigenvalues(set%nk,nbands),plane_waves(set%nk));eigenvalues=0.0_dp;plane_waves=0_i64
+    eh=0;exc=0;exv=0;smin=huge(1.0_dp)
     if(use_reference)eigenvalues=reference_eigenvalues(:,:nbands)
+#ifdef HALF_CLI_HAVE_MKL
+    if(trim(actual_backend)=='cpu')then
+      if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv)
+      else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc,exv);end if
+    end if
+#endif
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)allocate(wave_bases(set%nk),waves(set%nk))
 #endif
     do ik=1,set%nk
+      if(.not.parallel_owns(ik))cycle
       call build_plane_wave_basis(crystal,rho%shape,encut,set%points(ik,:),basis);plane_waves(ik)=basis%npw
       if(nbands>basis%npw)call fail('requested bands exceed plane waves at a k point')
       if(use_reference.and.ik>1)cycle
@@ -726,18 +752,18 @@ contains
       if(trim(actual_backend)=='cuda')then
         if(ik==1)then
           if(len_trim(hdf5_path)>0)then
-            call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
+            call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,vectors)
           else
-            call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
+            call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv)
           end if
         else
           if(len_trim(hdf5_path)>0)then
-            call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
+            call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors)
           else
-            call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
+            call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
           end if
         end if
@@ -745,21 +771,22 @@ contains
 #endif
 #ifdef HALF_CLI_HAVE_MKL
         call build_paw_operators(potcars,crystal,basis,paw)
-        if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv)
-        else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc,exv);end if
         if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
-        if(len_trim(hdf5_path)>0)then;call solve_dense_gamma(veff,basis,paw,values,smin,smax,vectors)
-        else;call solve_dense_gamma(veff,basis,paw,values,smin,smax);end if
+        if(len_trim(hdf5_path)>0)then;call solve_dense_gamma(veff,basis,paw,values,k_smin,smax,vectors)
+        else;call solve_dense_gamma(veff,basis,paw,values,k_smin,smax);end if
 #endif
 #ifdef HALF_CLI_CUDA
       end if
 #endif
       if(.not.use_reference)eigenvalues(ik,:)=values(:nbands)
+      smin=min(smin,k_smin)
 #ifdef HALF_CLI_HAVE_HDF5
       if(len_trim(hdf5_path)>0)then;wave_bases(ik)=basis;waves(ik)%coefficients=vectors(:,:nbands);end if
 #endif
-      write(0,'(A,I0,A,I0,A,ES14.6)')'HALF energy: k point ',ik,'/',set%nk,' E1_eV=',values(1)
+      write(0,'(A,I0,A,I0,A,I0,A,ES14.6)')'HALF energy: rank ',parallel_rank(),' k point ',ik,'/',set%nk,' E1_eV=',values(1)
     end do
+    if(.not.use_reference)call parallel_sum(eigenvalues)
+    call parallel_sum(plane_waves);call parallel_min(smin)
     call compute_occupations(eigenvalues,set%weights,nelect,sigma,occupation,mu,band_energy,entropy_term)
     if(sigma>0.and.maxval(occupation(:,nbands))>1e-6_dp)call fail('highest computed band is occupied; increase --bands')
 #ifdef HALF_CLI_HAVE_HDF5
@@ -785,20 +812,22 @@ contains
           actual_backend,solver,use_uspp,atomic_reference,paw_atomic,have_paw_atomic,displaced_energies(ion))
       end do
       forces(iat,i)=-(displaced_energies(2)-displaced_energies(1))/(2.0_dp*force_step)
-      write(0,'(A,I0,A,I0,A,ES16.8)')'HALF force: atom ',iat,' axis ',i,' force_eV_per_A=',forces(iat,i)
+      if(parallel_root())write(0,'(A,I0,A,I0,A,ES16.8)')'HALF force: atom ',iat,' axis ',i,' force_eV_per_A=',forces(iat,i)
       end do;end do
     else
       allocate(forces(0,0))
     end if
-    if(trim(output_path)=='-')then;unit=6
-    else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
-      if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
-    call write_energy_json(unit,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
-      eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
-      have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step)
-    if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
-      eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
-      have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step);end if
+    if(parallel_root())then
+      if(trim(output_path)=='-')then;unit=6
+      else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
+        if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
+      call write_energy_json(unit,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
+        eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
+        have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step)
+      if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
+        eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
+        have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step);end if
+    end if
 #endif
   end subroutine
 
@@ -834,8 +863,15 @@ contains
     if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),mesh)
     else if(full_mesh)then;call gamma_centered_mesh(crystal,kspacing,mesh)
     else;call gamma_centered_irreducible_mesh(crystal,kspacing,mesh,symprec,.true.);end if
-    allocate(eigenvalues(mesh%nk,nbands));eh=0;exc=0;exv=0
+    allocate(eigenvalues(mesh%nk,nbands));eigenvalues=0.0_dp;eh=0;exc=0;exv=0
+#ifdef HALF_CLI_HAVE_MKL
+    if(trim(backend)=='cpu')then
+      if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv)
+      else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc,exv);end if
+    end if
+#endif
     do ik=1,mesh%nk
+      if(.not.parallel_owns(ik))cycle
       call build_plane_wave_basis(crystal,rho%shape,encut,mesh%points(ik,:),basis)
       if(nbands>basis%npw)call fail('requested bands exceed plane waves in displaced force evaluation')
 #ifdef HALF_CLI_CUDA
@@ -850,8 +886,6 @@ contains
 #endif
 #ifdef HALF_CLI_HAVE_MKL
         call build_paw_operators(potcars,crystal,basis,paw)
-        if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv)
-        else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc,exv);end if
         if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
         call solve_dense_gamma(veff,basis,paw,values,smin,smax)
 #endif
@@ -860,6 +894,7 @@ contains
 #endif
       eigenvalues(ik,:)=values(:nbands)
     end do
+    call parallel_sum(eigenvalues)
     nelect=0;do it=1,size(potcars);nelect=nelect+potcars(it)%zval*real(crystal%counts(it),dp);end do
     call compute_occupations(eigenvalues,mesh%weights,nelect,sigma,occupation,mu,band,entropy)
     if(sigma>0.and.maxval(occupation(:,nbands))>1e-6_dp)call fail('highest force-evaluation band is occupied; increase --bands')
@@ -889,6 +924,7 @@ contains
     write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.4.0",'
     write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",';write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",'
     write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",';write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),','
+    write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
     write(unit,'(A,I0,A)')'  "full_kpoint_count": ',set%full_count,',';write(unit,'(A,I0,A)')'  "irreducible_kpoint_count": ',set%nk,','
     write(unit,'(A,I0,A,I0,A)')'  "plane_wave_range": [',minval(plane_waves),', ',maxval(plane_waves),'],'
     write(unit,'(A,ES24.16,A)')'  "electron_count": ',nelect,',';write(unit,'(A,ES24.16,A)')'  "smooth_density_electron_count": ',density_electrons,','
@@ -932,6 +968,7 @@ contains
   subroutine fail(message)
     character(len=*),intent(in)::message
     write(0,'(A)') 'half: error: '//trim(message)
+    call parallel_abort(2)
     error stop 2
   end subroutine
 

@@ -1,0 +1,48 @@
+{
+  "date": "2026-09-19",
+  "host": "BH000 bare metal",
+  "cpu": "2x Intel Xeon Platinum 8488C, 48 cores/socket, SMT2",
+  "compiler": "NVHPC 25.9 nvfortran",
+  "mpi": "HPC-X Open MPI 4.1.9a1",
+  "method": "One MPI rank per physical core; OMP_NUM_THREADS=1, MKL_NUM_THREADS=1, OPENBLAS_NUM_THREADS=1; mpirun --bind-to core; independent fresh runs.",
+  "case": {
+    "system": "12-atom HfO2",
+    "kpoints": 36,
+    "encut_eV": 220.0,
+    "reported_bands": 8,
+    "backend": "CPU oneMKL dense generalized Hermitian eigensolver",
+    "uspp_dij": true
+  },
+  "wall_seconds": {
+    "1_rank": 116.59,
+    "2_ranks": 58.44,
+    "4_ranks": 29.87
+  },
+  "speedup": {
+    "2_ranks": 1.995,
+    "4_ranks": 3.903
+  },
+  "parallel_efficiency": {
+    "2_ranks": 0.998,
+    "4_ranks": 0.976
+  },
+  "max_abs_eigenvalue_error_eV": {
+    "2_ranks": 0.0,
+    "4_ranks": 0.0
+  },
+  "plane_wave_counts_identical": true,
+  "energy_smoke_test": {
+    "ranks": 4,
+    "wall_seconds": 28.56,
+    "kpoints": 36,
+    "electron_count": 88.0,
+    "internal_energy_eV": -117.45658991059008,
+    "minimum_overlap_eigenvalue": 0.5278289622233966
+  },
+  "finite_difference_force_smoke_test": {
+    "system": "Si",
+    "ranks": 2,
+    "completed": true,
+    "wall_seconds": 3.79
+  }
+}

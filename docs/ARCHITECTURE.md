@@ -28,7 +28,8 @@ CHGCAR/HDF5   POTCAR/vaspout.h5
 4. cuSOLVER is used only by the small-system dense reference path.
 5. The production path applies H and S matrix-free and uses a block iterative
    eigensolver.
-6. MPI distribution will be added in this order: k points, bands, FFT domains.
+6. Optional CPU MPI distributes complete k-point solves cyclically across ranks;
+   band and FFT-domain decomposition remain future scaling extensions.
 7. All reductions that affect regression results have a deterministic mode.
 
 ## Build variants
@@ -58,6 +59,7 @@ Fortran sources so version comparisons do not mix in algorithm changes.
 | `half_solver` | SciPy generalized `eigh` call sites |
 | `half_energy` | `happy/total_energy.py`, `happy/ewald.py` |
 | `half_vaspwave` | `happy/vaspwave.py` |
+| `half_parallel` | MPI lifecycle, cyclic k-point ownership and reductions |
 
 The public command names planned for compatibility are `half-bands`,
 `half-energy`, and `half-validate-gamma`. The current bootstrap command is

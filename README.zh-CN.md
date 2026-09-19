@@ -15,6 +15,7 @@ Si 与 HfO2 上通过逐本征值验证；CPU QDEP、任意 k 点、多 k 点能
 各分量与 HAPPY 的差小于 `4e-12 eV`；中心差分力在 Si 验证中与 HAPPY 相差小于
 `2.3e-9 eV/Angstrom`。原生 `vaspwave.h5` 输出以及 HDF5
 电荷/结构/内嵌 POTCAR 输入已经支持；力仍在移植中。
+CPU 版本还可选用 MPI 按独立 k 点分发 `bands`、`energy` 与有限差分力计算。
 
 ## 数值模型：从固定密度到本征值
 
@@ -128,6 +129,11 @@ HALF_GPU_CC=89 tools/half-cmake cuda13 all
 cmake --preset cpu-release
 cmake --build --preset cpu-release
 
+# CPU MPI（显式启用；普通串行构建没有 MPI 启动开销）
+cmake -S . -B build/cpu-mpi -DHALF_ENABLE_CUDA=OFF \
+  -DHALF_ENABLE_MPI=ON -DHALF_MKL_ROOT="$MKLROOT"
+cmake --build build/cpu-mpi -j
+
 cmake --preset cuda13-release
 cmake --build --preset cuda13-release
 ```
@@ -168,7 +174,23 @@ half energy CHGCAR.smooth POTCAR \
 # 也可在显式网格上读取匹配的 VASP EIGENVAL
 half energy CHGCAR.smooth POTCAR \
   --kpoints-file KPOINTS --reference-eigenval EIGENVAL --bands 60 --output energy.json
+
+# 4 个单线程 CPU rank 按 k 点并行
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
+  CHGCAR.smooth POTCAR KPOINTS --backend cpu --bands 60 --output bands.json
 ```
+
+MPI 作用于 CPU 的 `bands` 和 `energy` 路径。rank `r` 负责
+`r+1, r+1+nranks, ...` 这些 k 点，集合通信恢复原顺序的本征值与平面波计数，
+只有 rank 0 写 JSON。有限差分力对每个位移结构复用同一分发。通常应设置
+`OMP_NUM_THREADS=1`、`MKL_NUM_THREADS=1`，避免每个 rank 再生成一组线程。
+多 rank CUDA 与多 rank `vaspwave.h5` 会被明确拒绝。
+
+HfO2 的 36-k 点 CPU 实测中，1/2/4 ranks 分别为
+116.59/58.44/29.87 秒，即 1.995×/3.903× 加速；2/4 ranks 的 JSON 本征值与
+串行逐位相同。记录见
+[`docs/validation/hfo2_cpu_mpi.json`](docs/validation/hfo2_cpu_mpi.json)。
 
 `half-validate-gamma`、`half-bands` 与 `half-energy` 都是对应子命令的兼容别名。
 

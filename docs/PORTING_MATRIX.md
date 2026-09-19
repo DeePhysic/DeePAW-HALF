@@ -23,7 +23,7 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | Analytic forces | not present in HAPPY | optional future `half_forces.cuf` | performance extension; HAPPY-compatible finite-difference forces are done |
 | Finite-difference force oracle | `total_energy.py` | `half_cli.F90` | done on CPU/CUDA; Si parity within 2.3e-9 eV/Angstrom and 45x faster than HAPPY in the validated case |
 | `vaspwave.h5` output | `vaspwave.py` | `half_vaspwave.F90`, `half_hdf5_bridge.c` | done for EVD bands/energy; VASP FFT coefficient order, float32 complex packing and charge round trip validated |
-| MPI k-point distribution | n/a | optional future `half_mpi.F90` | scaling extension not present in HAPPY; single-GPU parity is complete |
+| MPI k-point distribution | n/a | `half_parallel.F90`, `half_cli.F90` | done for CPU bands, energy and finite-difference forces; cyclic distribution, rank-0 output and collective reconstruction; 3.903x on 4 ranks for the 36-k-point HfO2 case |
 
 ## Ordered delivery gates
 
@@ -33,4 +33,5 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 4. Arbitrary-k and high-symmetry band path parity.
 5. Uniform k-mesh energy parity and VASP wavefunction output.
 6. Optional matrix-free block solver optimization for larger systems.
-7. Optional multi-GPU and MPI scaling.
+7. Optional multi-GPU, band and FFT-domain scaling beyond the completed CPU
+   MPI k-point layer.

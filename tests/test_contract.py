@@ -15,6 +15,7 @@ def test_expected_project_surface_exists():
         "src/half_basis.F90",
         "src/half_kpoints.F90",
         "src/half_energy.F90",
+        "src/half_parallel.F90",
         "src/half_vaspwave.F90",
         "src/half_hdf5_bridge.c",
         "src/half_cuda.cuf",
@@ -102,6 +103,22 @@ def test_kmesh_bands_and_total_energy_are_native_fortran_features():
     assert "call compute_occupations" in cli
     assert "internal_energy=band_energy-eh-exv+exc+ewald" in cli
     assert "reserved for happy-compatible" not in cli
+
+
+def test_cpu_mpi_distributes_kpoints_and_has_validated_scaling():
+    import json
+
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    parallel = (ROOT / "src/half_parallel.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    record = json.loads((ROOT / "docs/validation/hfo2_cpu_mpi.json").read_text())
+    assert "HALF_ENABLE_MPI" in cmake
+    assert "mpi_allreduce" in parallel
+    assert "parallel_owns" in parallel
+    assert "if(.not.parallel_owns(ik))cycle" in cli
+    assert record["max_abs_eigenvalue_error_eV"]["2_ranks"] == 0.0
+    assert record["max_abs_eigenvalue_error_eV"]["4_ranks"] == 0.0
+    assert record["speedup"]["4_ranks"] > 3.8
 
 
 def test_si_total_energy_parity_record():

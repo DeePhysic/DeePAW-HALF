@@ -35,6 +35,7 @@ Version 0.4 provides a numerically closed Gamma fixed-density path on CUDA:
 - CUDA Gamma CLI solver selection: `--solver evd` (default divide-and-conquer)
   or `--solver evj` (Jacobi, through a device-pointer CUDA C++ bridge);
 - independent CPU Fortran and CUDA Fortran backends;
+- optional CPU MPI distribution over independent k points;
 - CUDA 12.4 and CUDA 13.0 build presets;
 - a correctness-checked backend benchmark;
 - a unified `half` CLI, HAPPY-compatible command aliases, and parity-oriented
@@ -168,6 +169,7 @@ and exact environment controls are in
 - Linux x86-64 with an NVIDIA GPU;
 - NVIDIA HPC SDK (`nvfortran`);
 - CMake >= 3.24 and Make;
+- an MPI Fortran implementation for the optional multi-process CPU build;
 - GPU compute capability selected with `HALF_GPU_CC` (default `86`, RTX 3080).
 
 ## Build
@@ -193,6 +195,11 @@ The equivalent direct CMake commands are:
 # Pure CPU Fortran: no .cuf source or CUDA runtime linkage.
 cmake --preset cpu-release
 cmake --build --preset cpu-release
+
+# CPU MPI build (opt-in, so serial builds have no MPI startup overhead).
+cmake -S . -B build/cpu-mpi -DHALF_ENABLE_CUDA=OFF \
+  -DHALF_ENABLE_MPI=ON -DHALF_MKL_ROOT="$MKLROOT"
+cmake --build build/cpu-mpi -j
 
 # CUDA 12.4 with NVHPC 24.5 or newer.
 cmake --preset cuda12-release
@@ -239,10 +246,27 @@ CPU/CUDA backend selection:
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
   --kpoints-file KPOINTS --reference-eigenval EIGENVAL --bands 60 --output energy.json
 
+# Distribute k points over four single-thread CPU ranks.
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
+  CHGCAR.smooth POTCAR KPOINTS --backend cpu --bands 60 --output bands.json
+
 # Inspect parsed POTCAR or PAW data.
 ./build/cpu-release/half potcar POTCAR
 ./build/cpu-release/half paw CHGCAR.smooth POTCAR --encut 400
 ```
+
+MPI is implemented for the CPU `bands` and `energy` paths. Rank `r` solves
+k points `r+1, r+1+nranks, ...`; collective reductions restore the ordered
+eigenvalue and plane-wave arrays, and only rank 0 writes JSON. Finite-difference
+forces use the same distribution for every displaced structure. Use one
+BLAS/OpenMP thread per rank unless deliberately testing hybrid MPI+OpenMP.
+Multi-rank CUDA and multi-rank `vaspwave.h5` output are rejected explicitly.
+
+On the 36-k-point HfO2 CPU case, 1/2/4 ranks took 116.59/58.44/29.87 seconds,
+or 1.995x and 3.903x speedups. The 2- and 4-rank eigenvalues were bit-for-bit
+identical to serial. See
+[`docs/validation/hfo2_cpu_mpi.json`](docs/validation/hfo2_cpu_mpi.json).
 
 `half-validate-gamma`, `half-bands`, and `half-energy` are compatibility aliases
 for their corresponding subcommands. Run `half COMMAND --help` for the complete

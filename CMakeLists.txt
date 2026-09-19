@@ -7,6 +7,7 @@ option(HALF_ENABLE_CUDA "Build the CUDA Fortran backend" ON)
 option(HALF_ENABLE_EVJ "Build the optional CUDA C++ cuSOLVER Jacobi bridge" OFF)
 option(HALF_ENABLE_GPU_DEBUG "Enable CUDA bounds checks and synchronous launches" OFF)
 option(HALF_ENABLE_OPENMP "Parallelize the CPU backend with OpenMP" ON)
+option(HALF_ENABLE_MPI "Distribute CPU k points across MPI ranks" OFF)
 set(HALF_GPU_CC "86" CACHE STRING "NVIDIA GPU compute capability, without the decimal point")
 set(HALF_CUDA_VERSION "12.4" CACHE STRING "CUDA toolkit selected by NVHPC")
 
@@ -38,6 +39,7 @@ include(HALFTargetOptions)
 
 set(HALF_CORE_SOURCES
   src/half_kinds.F90
+  src/half_parallel.F90
   src/half_constants.F90
   src/half_math.F90
   src/half_types.F90
@@ -75,14 +77,23 @@ set_target_properties(half_core PROPERTIES
   Fortran_STANDARD 2008
   Fortran_STANDARD_REQUIRED YES
 )
+if(HALF_HAVE_MPI)
+  target_compile_definitions(half_core PRIVATE HALF_HAVE_MPI=1)
+  # Conda HDF5 prefixes can also contain an mpi_f08.mod built by another
+  # Fortran compiler.  Put the selected MPI wrapper's module directory first.
+  target_include_directories(half_core BEFORE PRIVATE ${MPI_Fortran_INCLUDE_DIRS})
+  target_link_libraries(half_core PUBLIC MPI::MPI_Fortran)
+endif()
 if(HALF_HAVE_SPGLIB)
   target_compile_definitions(half_core PRIVATE HALF_HAVE_SPGLIB=1)
-  target_include_directories(half_core PRIVATE "${HALF_SPGLIB_INCLUDE_DIR}")
   target_link_libraries(half_core PUBLIC "${HALF_SPGLIB_LIBRARY}")
 endif()
 if(HALF_HAVE_HDF5)
   target_compile_definitions(half_core PRIVATE HALF_HAVE_HDF5=1)
-  target_include_directories(half_core PRIVATE "${HALF_HDF5_INCLUDE_DIR}")
+  # HALF calls HDF5 through its C ABI; keeping this include directory off
+  # Fortran command lines avoids picking up incompatible mpi*.mod files from
+  # mixed compiler prefixes.
+  target_include_directories(half_core PRIVATE $<$<COMPILE_LANGUAGE:C>:${HALF_HDF5_INCLUDE_DIR}>)
   target_link_libraries(half_core PUBLIC "${HALF_HDF5_LIBRARY}")
 endif()
 if(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC|PGI")

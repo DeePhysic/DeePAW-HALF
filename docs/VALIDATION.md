@@ -19,6 +19,22 @@ The existing Si case is the first gate. HfO2 is required before declaring
 multi-species support. DeepAW-predicted densities are tested only after the
 reconstructor matches HAPPY on converged VASP densities.
 
+## CPU MPI k-point scaling
+
+The optional MPI build was compiled with NVHPC 25.9 and HPC-X Open MPI 4.1.9a1
+on a bare-metal dual-socket Intel Xeon Platinum 8488C node. Each rank was bound
+to one physical core and all OpenMP/BLAS thread counts were one. For a 12-atom
+HfO2 case with 36 explicit irreducible k points, 220 eV cutoff and eight
+reported bands, the CPU wall times were 116.59, 58.44 and 29.87 seconds at one,
+two and four ranks. This is 1.995x and 3.903x acceleration with 99.8% and 97.6%
+parallel efficiency. Both MPI JSON files had a maximum eigenvalue difference of
+exactly zero relative to serial, and their plane-wave counts matched.
+
+The four-rank total-energy path completed in 28.56 seconds for the same 36-point
+mesh, and a two-rank Si finite-difference-force smoke test also completed. The
+machine-readable record is
+[`validation/hfo2_cpu_mpi.json`](validation/hfo2_cpu_mpi.json).
+
 Performance reports must state GPU, NVHPC/CUDA versions, precision, FFT grid,
 plane-wave count, bands, k points, and whether deterministic reductions were
 enabled. Iteration counts and wall time are reported separately.

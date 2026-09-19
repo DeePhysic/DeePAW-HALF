@@ -179,6 +179,9 @@ end-to-end wall times, including HALF initialization at all k points, were
 193.44 s and 266.96 s. The detailed Chinese report, complete convergence
 traces, checksums, and limitations are in
 [`HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md`](validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md).
+With all `LMAX*` tags omitted, VASP reported automatic-mode `LMAXPAW=-100`
+and default `LMAXMIX=2`; HALF and SAD converged in 5 and 16 iterations. The
+same report includes this ablation and the cross-run timing caveat.
 
 ## Remaining validation
 

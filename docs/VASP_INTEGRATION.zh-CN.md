@@ -157,6 +157,9 @@ HALF 项目自己的桥接代码，不包含或再分发 VASP 源码。
 HALF 用 4 个电子迭代收敛，SAD 需要 16 个；包含 HALF 36 个 k 点初始化的端到端
 wall time 分别为 193.44 s 和 266.96 s。详细参数、逐步收敛轨迹、校验和及限制见
 [`HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md`](validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md)。
+不设置任何 `LMAX*` 标签时，VASP 报告自动模式 `LMAXPAW=-100`、默认
+`LMAXMIX=2`；HALF/SAD 分别用 5/16 步收敛。该消融及跨轮 timing 限制也已收入
+同一报告。
 
 ## 后续必须通过的验证
 

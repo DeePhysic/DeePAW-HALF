@@ -72,8 +72,46 @@
     "wall_reduction_percent": 27.5397063230,
     "absolute_toten_difference_eV": 0.000003813
   },
+  "default_lmax_ablation": {
+    "description": "Neither LMAXPAW nor LMAXMIX was present in INCAR.",
+    "vasp_reported_defaults": {
+      "LMAXPAW": -100,
+      "LMAXPAW_note": "VASP automatic-mode sentinel",
+      "LMAXMIX": 2
+    },
+    "shared_parameters_unchanged": true,
+    "irreducible_kpoints": 36,
+    "actual_encut_eV": 500.0,
+    "half": {
+      "electronic_iterations": 5,
+      "wall_seconds": 145.76,
+      "toten_eV": -121.040359303,
+      "final_delta_eV": -0.000093122,
+      "final_rms": 0.0000681,
+      "run_directory": "/data/limusen/half-vasp-kspacing035-algoall-half-default-lmax"
+    },
+    "sad": {
+      "electronic_iterations": 16,
+      "wall_seconds": 262.70,
+      "toten_eV": -121.040376497,
+      "final_delta_eV": -0.000047930,
+      "final_rms": 0.0000328,
+      "run_directory": "/data/limusen/half-vasp-kspacing035-algoall-sad-default-lmax"
+    },
+    "comparison": {
+      "iteration_reduction_percent": 68.75,
+      "wall_speedup": 1.8022777168,
+      "wall_reduction_percent": 44.5146555006,
+      "absolute_toten_difference_eV": 0.000017194,
+      "half_iteration_change_vs_lmaxpaw_minus1": 1,
+      "sad_iteration_change_vs_lmaxpaw_minus1": 0,
+      "half_toten_shift_vs_lmaxpaw_minus1_eV": 0.061523368,
+      "sad_toten_shift_vs_lmaxpaw_minus1_eV": 0.061502361
+    },
+    "timing_caution": "Single-run wall times across different LMAX settings are affected by node load and cache or frequency state; use iteration counts for the cross-setting ablation."
+  },
   "limitations": [
-    "Single timing sample per path.",
+    "Single timing sample per path; wall times must not be compared across the separate LMAX runs as a controlled performance statistic.",
     "The comparison changes the complete initialization workflow: DeepAW density plus HALF orbitals versus SAD density plus default orbitals.",
     "The automatic PREC=High cutoff is 500 eV; this is not the explicit 520 eV HAPPY absolute-energy reference.",
     "The current VASP adapter is limited to collinear ISPIN=1, full-complex storage, and KPAR=1."

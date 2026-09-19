@@ -13,8 +13,8 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | LDA/PBE and NLCC | `xc.py`, `potential.py` | `half_xc.F90`, `half_cuda_potential.cuf` | done on CPU/GPU; Si and HfO2 CUDA parity |
 | Local ionic and Hartree potential | `potential.py` | `half_potential.F90`, `half_cuda_potential.cuf` | done on CPU/GPU; explicit CHGCAR Fortran-to-CUDA grid reorder |
 | PAW projectors and overlap | `paw.py` | `half_paw.F90`, `half_cuda_assembly.cuf` | done on CPU/GPU; Si and HfO2 parity |
-| Potential-dependent MIMIC_US D | `uspp_dij.py` | `half_cuda_uspp.cuf` | done on CUDA: periodic cubic B-spline sampling, QDEP multipoles and atom-dependent D; CPU path planned |
-| Dense H/S parity solver | `reconstruct_bandstructure.py` | `half_dense_solver.F90`, `half_cuda_assembly.cuf`, `half_cuda_solver.cuf` | done at Gamma; MKL CPU DION and device-resident CUDA/cuSOLVER DION or MIMIC_US |
+| Potential-dependent MIMIC_US D | `uspp_dij.py` | `half_uspp.F90`, `half_cuda_uspp.cuf` | done on CPU/CUDA: periodic cubic B-spline sampling, QDEP multipoles and atom-dependent D |
+| Dense H/S parity solver | `reconstruct_bandstructure.py` | `half_dense_solver.F90`, `half_cuda_assembly.cuf`, `half_cuda_solver.cuf` | done at Gamma; MKL CPU and device-resident CUDA/cuSOLVER, DION or MIMIC_US |
 | Matrix-free H/S application | `hamiltonian.py` | `half_operator.cuf` | planned |
 | Block iterative eigensolver | n/a | `half_lobpcg.cuf` | planned |
 | k meshes and symmetry reduction | `kpoints.py` | `half_kpoints.F90` | planned |

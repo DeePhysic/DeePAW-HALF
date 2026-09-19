@@ -16,6 +16,7 @@ def test_expected_project_surface_exists():
         "src/half_cuda.cuf",
         "src/half_cuda_potential.cuf",
         "src/half_cuda_uspp.cuf",
+        "src/half_uspp.F90",
         "src/half_cuda_assembly.cuf",
         "src/half_cpu.F90",
         "app/half_inspect.F90",
@@ -69,6 +70,15 @@ def test_cuda_mimic_us_pipeline_is_device_resident_and_cli_enabled():
     assert "build_uspp_dij_cuda_species" in assembly
     assert "case('--uspp-dij')" in cli
     assert "--uspp-dij is not implemented" not in cli
+
+
+def test_cpu_mimic_us_pipeline_is_available():
+    source = (ROOT / "src/half_uspp.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "build_uspp_dij_cpu" in source
+    assert "cubic_sample" in source
+    assert "call build_uspp_dij_cpu" in cli
+    assert "--uspp-dij requires a cuda build" not in cli
 
 
 def test_hfo2_cuda_mimic_us_parity_record():

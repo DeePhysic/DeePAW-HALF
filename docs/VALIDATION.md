@@ -109,8 +109,11 @@ assembly including QDEP, and `1.061438 s` for cuSOLVER. Against the matched
 The machine-readable record is
 [`validation/hfo2_cuda_uspp_parity.json`](validation/hfo2_cuda_uspp_parity.json).
 
-Earlier CPU and RTX 4090 timings in the historical JSON used HALF's DION-only
-operator and therefore are not cited as MIMIC_US speedups.
+The corrected one-core CPU Fortran MIMIC_US run took `43.790434 s`, reproducing
+the 60 HAPPY bands with `7.78e-12 eV` maximum and `3.04e-12 eV` RMS error. It
+is `1.47x` faster than HAPPY; CUDA is `25.82x` faster than CPU Fortran. The
+earlier RTX 4090 timing used HALF's DION-only operator and therefore is not
+cited as a MIMIC_US speedup.
 
 ## HALF versus Python HAPPY
 

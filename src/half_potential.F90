@@ -32,17 +32,18 @@ contains
     real(dp),allocatable,intent(out)::veff(:)
     real(dp),intent(out)::e_hartree,e_xc
     complex(dp),allocatable,target::rho_in(:),rho_g(:),local_g(:),local_c(:),core_g(:),core_c(:)
-    real(dp),allocatable::local_r(:),core_r(:),vxc(:),m2local(:,:),m2core(:,:)
+    real(dp),allocatable::charge_c(:),local_r(:),core_r(:),vxc(:),m2local(:,:),m2core(:,:)
     real(dp)::q(3),g2,gn,radial,core_radial,phase,rpos(3)
     integer::i1,i2,i3,n1,n2,n3,idx,it,iat,ion0,n,nt
     n=size(charge%values); nt=size(potcars)
-    allocate(rho_in(n),rho_g(n),local_g(n),local_c(n),core_g(n),core_c(n),local_r(n),core_r(n),vxc(n),veff(n))
+    allocate(rho_in(n),rho_g(n),local_g(n),local_c(n),core_g(n),core_c(n),charge_c(n),local_r(n),core_r(n),vxc(n),veff(n))
     allocate(m2local(1000,nt),m2core(1000,nt)); m2core=0
     do it=1,nt
       call spline_second(potcars(it)%psp_local,potcars(it)%psp_gmax,m2local(:,it))
       if(potcars(it)%has_core)call spline_second(potcars(it)%pspcor,potcars(it)%psp_gmax,m2core(:,it))
     end do
-    rho_in=cmplx(charge%values,0.0_dp,dp); call fft3_forward(charge%shape,rho_in,rho_g); rho_g=rho_g/real(n,dp)
+    call reorder_chgcar_f_to_c(charge%values,charge%shape,charge_c)
+    rho_in=cmplx(charge_c,0.0_dp,dp); call fft3_forward(charge%shape,rho_in,rho_g); rho_g=rho_g/real(n,dp)
     local_g=(0.0_dp,0.0_dp); core_g=(0.0_dp,0.0_dp); e_hartree=0
     idx=0
     do i1=0,charge%shape(1)-1
@@ -77,11 +78,27 @@ contains
     local_c=local_g; call fft3_backward(charge%shape,local_c,rho_in); local_r=real(rho_in,dp)
     core_c=core_g; call fft3_backward(charge%shape,core_c,rho_in); core_r=real(rho_in,dp)
     if(use_pbe)then
-      call pbe_xc(charge%values+core_r,charge%shape,crystal,vxc,e_xc)
+      call pbe_xc(charge_c+core_r,charge%shape,crystal,vxc,e_xc)
     else
-      call perdew_zunger_xc(charge%values+core_r,crystal%volume,vxc,e_xc)
+      call perdew_zunger_xc(charge_c+core_r,crystal%volume,vxc,e_xc)
     end if
     veff=local_r+vxc
+  end subroutine
+
+  subroutine reorder_chgcar_f_to_c(input,shape,output)
+    real(dp),intent(in)::input(:)
+    integer(i32),intent(in)::shape(3)
+    real(dp),intent(out)::output(:)
+    integer::i1,i2,i3,source,destination
+    do i1=0,shape(1)-1
+      do i2=0,shape(2)-1
+        do i3=0,shape(3)-1
+          source=i1+shape(1)*(i2+shape(2)*i3)+1
+          destination=i1*shape(2)*shape(3)+i2*shape(3)+i3+1
+          output(destination)=input(source)
+        end do
+      end do
+    end do
   end subroutine
 
   pure integer function fft_integer(index0,n)

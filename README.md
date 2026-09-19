@@ -27,7 +27,7 @@ Version 0.4 provides a numerically closed Gamma fixed-density path on CUDA:
 - multi-dataset text POTCAR parsing;
 - complete-grid Hartree, ionic, NLCC, LDA and PBE potentials on CPU and GPU;
 - PAW reciprocal projectors and DION/QPAW overlap matrices on CPU and GPU;
-- atom-dependent MIMIC_US QDEP matrices on GPU, including periodic cubic
+- atom-dependent MIMIC_US QDEP matrices on CPU and GPU, including periodic cubic
   B-spline sampling, two-Bessel compensation functions and Gaunt transforms;
 - device-resident cuFFT potential construction, H/S assembly, Hermitian
   cleanup and cuSOLVER eigensolution without full-matrix host transfers;
@@ -42,7 +42,7 @@ Version 0.4 provides a numerically closed Gamma fixed-density path on CUDA:
 
 The CUDA MIMIC_US path reproduces HAPPY for both Si (725 plane waves) and HfO2
 (3407 plane waves): the tested eigenvalues agree to about `1e-11 eV` or better.
-Arbitrary k points, CPU QDEP, energy/forces and `vaspwave.h5` output are tracked
+Arbitrary k points, energy/forces and `vaspwave.h5` output are tracked
 in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md); HALF is not yet a
 complete replacement for every HAPPY workflow.
 
@@ -104,14 +104,13 @@ MIMIC_US contribution. `VH(G=0)` is a potential gauge and is set to zero.
 
 ### What HALF implements today
 
-On CUDA, HALF now evaluates the full Gamma-point MIMIC_US expression above.
+HALF now evaluates the full Gamma-point MIMIC_US expression above on CPU and CUDA.
 `--uspp-dij` enables the potential-dependent term. The effective potential is
 prefiltered for periodic cubic B-spline interpolation on the GPU, sampled on
 concentric angular grids around every atom, projected onto real spherical
 harmonics, radially integrated against VASP's two-Bessel compensation
-functions, and contracted with the AE-minus-PS multipole moments. The CPU path
-currently remains DION-only; matrix-free application, arbitrary-k bands,
-energy and forces remain planned. The authoritative status is
+functions, and contracted with the AE-minus-PS multipole moments. Matrix-free
+application, arbitrary-k bands, energy and forces remain planned. The authoritative status is
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
 For the implemented DION problem, `S` is positive definite and the generalized
@@ -147,13 +146,15 @@ BLAS/OpenMP thread controls were set to one.
 | implementation | resource | wall time |
 | --- | --- | ---: |
 | HALF CUDA (`--uspp-dij`) | RTX PRO 6000 | 1.696 s median |
+| HALF CPU Fortran (`--uspp-dij`) | one logical CPU | 43.790 s |
 | HAPPY Python (`--uspp-dij`) | one logical CPU | 64.23 s |
 
-The numerically equivalent CUDA result is `37.87x` faster than the one-core
-HAPPY run. Its five fresh-process samples have a `1.696 s` median, split into
+The numerically equivalent CPU Fortran result is `1.47x` faster than HAPPY;
+CUDA is `37.87x` faster than HAPPY and `25.82x` faster than CPU Fortran. Its
+five fresh-process samples have a `1.696 s` median, split into
 `0.258 s` potential construction, `0.349 s` H/S assembly including QDEP, and
-`1.061 s` cuSOLVER time. The earlier CPU/4090 DION-only measurements remain
-historical data and are not presented as MIMIC_US speedups. Raw measurements
+`1.061 s` cuSOLVER time. The earlier 4090 DION-only measurement remains
+historical data and is not presented as a MIMIC_US speedup. Raw measurements
 and exact environment controls are in
 [`docs/validation/hfo2_single_core_benchmark.json`](docs/validation/hfo2_single_core_benchmark.json).
 

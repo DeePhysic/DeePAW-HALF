@@ -27,6 +27,11 @@
   "gpu_solver_seconds_median": 1.0614381,
   "happy_single_core_seconds": 64.23,
   "speedup_vs_happy_single_core": 37.8742760370169,
+  "cpu_fortran_single_core_seconds": 43.790434,
+  "cpu_fortran_max_abs_eigenvalue_error_eV": 7.773781618425346e-12,
+  "cpu_fortran_rms_eigenvalue_error_eV": 3.034602036437236e-12,
+  "cpu_fortran_speedup_vs_happy": 1.4667586989432442,
+  "cuda_speedup_vs_cpu_fortran": 25.821749729048264,
   "device": "RTX PRO 6000 Blackwell",
   "notes": [
     "All QDEP runtime sampling, angular projection, radial integration, atom-dependent D construction, H/S assembly, and eigensolution execute on the GPU.",

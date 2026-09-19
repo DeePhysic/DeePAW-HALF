@@ -10,7 +10,7 @@
 ```
 
 HAPPY 是移植过程中的数值 oracle。当前 CUDA Gamma/MIMIC_US 固定密度路径已在
-Si 与 HfO2 上通过逐本征值验证；任意 k 点、CPU QDEP、总能量与力仍在移植中。
+Si 与 HfO2 上通过逐本征值验证；CPU QDEP 也已闭合，任意 k 点、总能量与力仍在移植中。
 
 ## 数值模型：从固定密度到本征值
 
@@ -64,11 +64,11 @@ eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用�
 
 ### HALF 当前实际实现的范围
 
-CUDA 路径现已实现上式完整的 Gamma 点 MIMIC_US 项；`--uspp-dij` 用于启用势依赖
+CPU 与 CUDA 路径现已实现上式完整的 Gamma 点 MIMIC_US 项；`--uspp-dij` 用于启用势依赖
 校正。GPU 先对周期有效势进行三次 B 样条预滤波，再围绕每个原子在球面网格取样，
 投影到实球谐函数，并用 VASP 的双球贝塞尔补偿函数完成径向积分，最后与 AE−PS
-多极矩收缩得到每个原子的 $D_{ij}^I$。CPU 路径暂时仍为 DION-only；矩阵自由
-算符、任意 k 点、能量和力仍是计划项。权威状态见
+多极矩收缩得到每个原子的 $D_{ij}^I$。矩阵自由算符、任意 k 点、能量和力仍是
+计划项。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 
 对已实现的 DION 问题，`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，化为
@@ -156,11 +156,13 @@ Gamma 点，对应 3407×3407 的 complex128 广义本征问题。CPU 测试将�
 | 实现 | 资源 | wall time |
 | --- | --- | ---: |
 | HALF CUDA（`--uspp-dij`） | RTX PRO 6000 | 1.696 s 中位数 |
+| HALF CPU Fortran（`--uspp-dij`） | 单逻辑核 | 43.790 s |
 | HAPPY Python（`--uspp-dij`） | 单逻辑核 | 64.23 s |
 
-这组数值等价的 CUDA 结果比单核 HAPPY 快 **37.87×**。五次新进程运行的
+数值等价的 CPU Fortran 比 HAPPY 快 **1.47×**；CUDA 比 HAPPY 快 **37.87×**，
+比 CPU Fortran 快 **25.82×**。五次 CUDA 新进程运行的
 中位数为 `1.696 s`，其中有效势 `0.258 s`、包含 QDEP 的 H/S 组装 `0.349 s`、
-cuSOLVER `1.061 s`。更早的 CPU/4090 数据是 DION-only 历史记录，不再作为
+cuSOLVER `1.061 s`。更早的 4090 数据是 DION-only 历史记录，不再作为
 MIMIC_US 加速比引用。完整原始时间、环境和约束见
 [`docs/validation/hfo2_single_core_benchmark.json`](docs/validation/hfo2_single_core_benchmark.json)。
 
@@ -168,7 +170,7 @@ MIMIC_US 加速比引用。完整原始时间、环境和约束见
 
 - Si Gamma/MIMIC_US：与 HAPPY 的前 8 条本征值最大偏差约 `3e-12 eV`。
 - HfO2 Gamma/MIMIC_US：60 条本征值最大偏差约 `7.9e-12 eV`。
-- 任意 k 点、CPU QDEP、总能量/力与 `vaspwave.h5` 输出仍在移植中。
+- 任意 k 点、总能量/力与 `vaspwave.h5` 输出仍在移植中。
 
 详细验证记录见 [`docs/VALIDATION.md`](docs/VALIDATION.md)，功能状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。

@@ -5,6 +5,7 @@ program half_cli
   use half_potcar, only: read_potcar
   use half_basis, only: build_plane_wave_basis
   use half_paw, only: paw_species_t, build_paw_operators
+  use half_uspp, only: build_uspp_dij_cpu
   use half_cpu, only: cpu_density_mean
 #ifdef HALF_CLI_HAVE_MKL
   use half_potential, only: build_veff_lda, build_veff_pbe
@@ -85,7 +86,7 @@ contains
     write(unit,'(A)') '  --xc lda|pbe               exchange-correlation model (default: pbe)'
     write(unit,'(A)') '  --backend auto|cpu|cuda    compute backend (default: auto)'
     write(unit,'(A)') '  --solver evd|evj           CUDA eigensolver: divide-and-conquer or Jacobi (default: evd)'
-    write(unit,'(A)') '  --uspp-dij                 add potential-dependent MIMIC_US QDEP correction (CUDA)'
+    write(unit,'(A)') '  --uspp-dij                 add potential-dependent MIMIC_US QDEP correction'
     write(unit,'(A)') '  --reference-eigenval FILE  compare against a VASP EIGENVAL file'
     write(unit,'(A)') '  --output FILE              JSON result (default: gamma_validation.json)'
   end subroutine
@@ -163,7 +164,6 @@ contains
         potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
     else
       actual_backend='cpu'
-      if(use_uspp)call fail('--uspp-dij currently requires --backend cuda')
       actual_solver='evd'
       if(trim(solver)/='evd')call fail('--solver evj is available only with --backend cuda')
 #ifndef HALF_CLI_HAVE_MKL
@@ -172,18 +172,19 @@ contains
       call build_paw_operators(potcars,crystal,basis,paw)
       if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc)
       else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc);end if
+      if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
       call solve_dense_gamma(veff,basis,paw,eigenvalues,smin,smax)
 #endif
     end if
 #else
     if(trim(backend)=='cuda')call fail('this HALF build has no CUDA backend')
     actual_backend='cpu'
-    if(use_uspp)call fail('--uspp-dij requires a CUDA build')
     actual_solver='evd'
     if(trim(solver)/='evd')call fail('--solver evj is available only with --backend cuda')
     call build_paw_operators(potcars,crystal,basis,paw)
     if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc)
     else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc);end if
+    if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
     call solve_dense_gamma(veff,basis,paw,eigenvalues,smin,smax)
 #endif
     call system_clock(tick1)

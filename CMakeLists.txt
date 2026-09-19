@@ -46,6 +46,7 @@ set(HALF_CORE_SOURCES
   src/half_basis.F90
   src/half_paw.F90
   src/half_fft.F90
+  src/half_uspp.F90
   src/half_xc.F90
   src/half_potential.F90
   src/half_dense_solver.F90
@@ -163,6 +164,13 @@ target_link_libraries(half-potcar-inspect PRIVATE half_core)
 add_executable(half-paw-inspect app/half_paw_inspect.F90)
 set_target_properties(half-paw-inspect PROPERTIES Fortran_STANDARD 2008 Fortran_STANDARD_REQUIRED YES)
 target_link_libraries(half-paw-inspect PRIVATE half_core)
+
+if(HALF_HAVE_MKL)
+  add_executable(half-uspp-inspect app/half_uspp_inspect.F90)
+  half_set_fortran_options(half-uspp-inspect)
+  target_link_libraries(half-uspp-inspect PRIVATE half_core)
+  half_link_mkl(half-uspp-inspect)
+endif()
 
 if(HALF_HAVE_MKL)
   add_executable(half-veff-inspect app/half_veff_inspect.F90)

@@ -13,6 +13,8 @@ def test_expected_project_surface_exists():
         "CMakePresets.json",
         "src/half_chgcar.F90",
         "src/half_basis.F90",
+        "src/half_kpoints.F90",
+        "src/half_energy.F90",
         "src/half_cuda.cuf",
         "src/half_cuda_potential.cuf",
         "src/half_cuda_uspp.cuf",
@@ -85,6 +87,27 @@ def test_arbitrary_kpoint_cli_is_enabled():
     cli = (ROOT / "app/half_cli.F90").read_text().lower()
     assert "case('--kpoint')" in cli
     assert "build_plane_wave_basis(crystal,rho%shape,encut,kpoint,basis)" in cli
+
+
+def test_kmesh_bands_and_total_energy_are_native_fortran_features():
+    kpoints = (ROOT / "src/half_kpoints.F90").read_text().lower()
+    energy = (ROOT / "src/half_energy.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "spg_get_ir_reciprocal_mesh" in kpoints
+    assert "read_explicit_kpoints" in kpoints
+    assert "compute_occupations" in energy
+    assert "ewald_energy" in energy
+    assert "call compute_occupations" in cli
+    assert "internal_energy=band_energy-eh-exv+exc+ewald" in cli
+    assert "reserved for happy-compatible" not in cli
+
+
+def test_si_total_energy_parity_record():
+    import json
+
+    record = json.loads((ROOT / "docs/validation/si_total_energy_parity.json").read_text())
+    assert record["max_abs_component_error_eV"] < 1e-10
+    assert record["total_energy_abs_error_eV"] < 1e-10
 
 
 def test_si_arbitrary_kpoint_parity_record():

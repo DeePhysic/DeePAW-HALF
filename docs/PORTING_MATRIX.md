@@ -14,12 +14,12 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | Local ionic and Hartree potential | `potential.py` | `half_potential.F90`, `half_cuda_potential.cuf` | done on CPU/GPU; explicit CHGCAR Fortran-to-CUDA grid reorder |
 | PAW projectors and overlap | `paw.py` | `half_paw.F90`, `half_cuda_assembly.cuf` | done on CPU/GPU; Si and HfO2 parity |
 | Potential-dependent MIMIC_US D | `uspp_dij.py` | `half_uspp.F90`, `half_cuda_uspp.cuf` | done on CPU/CUDA: periodic cubic B-spline sampling, QDEP multipoles and atom-dependent D |
-| Dense H/S parity solver | `reconstruct_bandstructure.py` | `half_dense_solver.F90`, `half_cuda_assembly.cuf`, `half_cuda_solver.cuf` | done at arbitrary single k point; MKL CPU and device-resident CUDA/cuSOLVER, DION or MIMIC_US |
+| Dense H/S parity solver | `reconstruct_bandstructure.py` | `half_dense_solver.F90`, `half_cuda_assembly.cuf`, `half_cuda_solver.cuf` | done at arbitrary k points; MKL CPU and device-resident CUDA/cuSOLVER, DION or MIMIC_US |
 | Matrix-free H/S application | `hamiltonian.py` | `half_operator.cuf` | planned |
 | Block iterative eigensolver | n/a | `half_lobpcg.cuf` | planned |
 | Arbitrary single k point | `basis.py`, `reconstruct_bandstructure.py` | `half_basis.F90`, `half_cli.F90` | done on CPU/CUDA; `--kpoint KX KY KZ` |
-| Band paths, k meshes and symmetry reduction | `kpoints.py` | `half_kpoints.F90` | planned |
-| Occupations, Ewald and energy | `occupations.py`, `ewald.py`, `total_energy.py` | `half_energy.*` | planned |
+| Explicit bands, k meshes and symmetry reduction | `kpoints.py` | `half_kpoints.F90`, `half_cli.F90` | done; explicit reciprocal KPOINTS, full Gamma meshes and spglib irreducible meshes |
+| Occupations, Ewald and energy | `occupations.py`, `ewald.py`, `total_energy.py` | `half_energy.F90`, `half_cli.F90` | done on CPU/CUDA; zero/finite-T occupations and Si componentwise parity below 4e-12 eV |
 | Analytic forces | theory only | `half_forces.cuf` | planned |
 | Finite-difference force oracle | `total_energy.py` | test driver | planned |
 | `vaspwave.h5` output | `vaspwave.py` | `half_vaspwave.F90` | planned |

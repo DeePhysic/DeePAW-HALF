@@ -44,9 +44,11 @@ set(HALF_CORE_SOURCES
   src/half_chgcar.F90
   src/half_potcar.F90
   src/half_basis.F90
+  src/half_kpoints.F90
   src/half_paw.F90
   src/half_fft.F90
   src/half_uspp.F90
+  src/half_energy.F90
   src/half_xc.F90
   src/half_potential.F90
   src/half_dense_solver.F90
@@ -70,6 +72,11 @@ set_target_properties(half_core PROPERTIES
   Fortran_STANDARD 2008
   Fortran_STANDARD_REQUIRED YES
 )
+if(HALF_HAVE_SPGLIB)
+  target_compile_definitions(half_core PRIVATE HALF_HAVE_SPGLIB=1)
+  target_include_directories(half_core PRIVATE "${HALF_SPGLIB_INCLUDE_DIR}")
+  target_link_libraries(half_core PUBLIC "${HALF_SPGLIB_LIBRARY}")
+endif()
 if(CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC|PGI")
   target_compile_options(half_core PRIVATE -O3 -Mbackslash -Mextend)
   if(HALF_ENABLE_OPENMP)
@@ -165,6 +172,10 @@ add_executable(half-paw-inspect app/half_paw_inspect.F90)
 set_target_properties(half-paw-inspect PROPERTIES Fortran_STANDARD 2008 Fortran_STANDARD_REQUIRED YES)
 target_link_libraries(half-paw-inspect PRIVATE half_core)
 
+add_executable(half-energy-check app/half_energy_check.F90)
+set_target_properties(half-energy-check PROPERTIES Fortran_STANDARD 2008 Fortran_STANDARD_REQUIRED YES)
+target_link_libraries(half-energy-check PRIVATE half_core)
+
 if(HALF_HAVE_MKL)
   add_executable(half-uspp-inspect app/half_uspp_inspect.F90)
   half_set_fortran_options(half-uspp-inspect)
@@ -207,6 +218,9 @@ if(BUILD_TESTING)
   add_test(NAME half_cli_help COMMAND half --help)
   add_test(NAME half_cli_version COMMAND half --version)
   add_test(NAME half_cli_gamma_help COMMAND half gamma --help)
+  add_test(NAME half_cli_bands_help COMMAND half bands --help)
+  add_test(NAME half_cli_energy_help COMMAND half energy --help)
+  add_test(NAME half_energy_numerics COMMAND half-energy-check)
 endif()
 
 install(TARGETS half_core half half-inspect)

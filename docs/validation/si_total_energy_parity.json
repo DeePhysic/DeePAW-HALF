@@ -1,0 +1,14 @@
+{
+  "system": "diamond Si",
+  "xc": "PBE",
+  "encut_eV": 200.0,
+  "kspacing_inv_A": 10.0,
+  "kpoints": 1,
+  "bands": 8,
+  "uspp_dij": true,
+  "half_cuda_internal_energy_eV": -29.286647220573528,
+  "happy_internal_energy_eV": -29.286647220570103,
+  "total_energy_abs_error_eV": 3.425e-12,
+  "max_abs_component_error_eV": 3.425e-12,
+  "backend": "CUDA Fortran full potential, Hamiltonian, overlap, MIMIC_US and cuSOLVER path"
+}

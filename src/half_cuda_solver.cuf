@@ -43,7 +43,7 @@ contains
   end subroutine
 
   subroutine solve_dense_gamma_cuda_full(charge,potcars,crystal,basis,use_pbe,eigenvalues,overlap_min,overlap_max, &
-      potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
+      potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,e_hartree,e_xc,e_xc_potential)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
@@ -54,14 +54,20 @@ contains
     real(dp),intent(out)::overlap_min,overlap_max
     real(dp),intent(out),optional::potential_seconds,assembly_seconds,gpu_seconds
     character(len=*),intent(in),optional::solver
+    real(dp),intent(out),optional::e_hartree,e_xc,e_xc_potential
     real(dp),device,allocatable::dveff(:)
     complex(dp),device,allocatable::dh(:,:),ds(:,:)
-    real(dp)::eh,exc
+    real(dp)::eh,exc,exv
     integer(8)::tick0,tick1,rate
     call system_clock(tick0,rate)
-    ! Energies are not reported by the Gamma eigenvalue command.  Skipping
-    ! their reductions avoids transferring full grids back to the host.
-    call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.false.)
+    if(present(e_hartree).or.present(e_xc).or.present(e_xc_potential))then
+      call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.true.,exv)
+      if(present(e_hartree))e_hartree=eh;if(present(e_xc))e_xc=exc
+      if(present(e_xc_potential))e_xc_potential=exv
+    else
+      ! Eigenvalue-only commands skip full-grid energy reductions.
+      call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.false.)
+    end if
     call system_clock(tick1);if(present(potential_seconds))potential_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
     call assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,dh,ds,use_uspp)
     call system_clock(tick1);if(present(assembly_seconds))assembly_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1

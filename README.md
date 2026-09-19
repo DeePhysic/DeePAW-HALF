@@ -42,9 +42,11 @@ Version 0.4 provides a numerically closed Gamma fixed-density path on CUDA:
 
 The CUDA MIMIC_US path reproduces HAPPY for both Si (725 plane waves) and HfO2
 (3407 plane waves): the tested eigenvalues agree to about `1e-11 eV` or better.
-Band paths/k meshes, energy/forces and `vaspwave.h5` output are tracked
-in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md); HALF is not yet a
-complete replacement for every HAPPY workflow.
+Explicit multi-k bands, Gamma-centered full/irreducible spglib meshes,
+occupations, Ewald and the fixed-density Harris total energy are also native
+Fortran features. The Si total energy and every reported component agree with
+HAPPY to better than `4e-12 eV`. Forces, wavefunction HDF5 and the matrix-free
+solver remain tracked in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
 ## Numerical model, derived step by step
 
@@ -104,13 +106,14 @@ MIMIC_US contribution. `VH(G=0)` is a potential gauge and is set to zero.
 
 ### What HALF implements today
 
-HALF now evaluates the full Gamma-point MIMIC_US expression above on CPU and CUDA.
+HALF now evaluates the full arbitrary-k MIMIC_US expression above on CPU and CUDA.
 `--uspp-dij` enables the potential-dependent term. The effective potential is
 prefiltered for periodic cubic B-spline interpolation on the GPU, sampled on
 concentric angular grids around every atom, projected onto real spherical
 harmonics, radially integrated against VASP's two-Bessel compensation
-functions, and contracted with the AE-minus-PS multipole moments. Matrix-free
-application, multi-point band paths, energy and forces remain planned. The authoritative status is
+functions, and contracted with the AE-minus-PS multipole moments. Explicit
+multi-point bands and symmetry-reduced fixed-density energies are implemented;
+matrix-free application, forces and wavefunction export remain planned. The authoritative status is
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
 For the implemented DION problem, `S` is positive definite and the generalized
@@ -217,17 +220,22 @@ CPU/CUDA backend selection:
   --encut 400 --bands 8 --backend cuda --uspp-dij \
   --kpoint 0.125 0.25 0.375 --output kpoint_validation.json
 
+# Reconstruct several k points from a VASP explicit reciprocal KPOINTS file.
+./build/cuda12-cc89-release/half bands CHGCAR.smooth POTCAR KPOINTS \
+  --encut 400 --bands 12 --backend cuda --uspp-dij --output bands.json
+
+# Evaluate the symmetry-reduced fixed-density Harris energy.
+./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
+  --encut 400 --kspacing 0.5 --bands 12 --backend cuda --output energy.json
+
 # Inspect parsed POTCAR or PAW data.
 ./build/cpu-release/half potcar POTCAR
 ./build/cpu-release/half paw CHGCAR.smooth POTCAR --encut 400
 ```
 
-`half-validate-gamma` is a compatibility alias for `half gamma`. The build also
-creates `half-bands` and `half-energy` aliases so scripts can adopt the HAPPY-
-style command names now; in version 0.4 those two commands exit with a clear
-unsupported-feature error because arbitrary-k bands and total energy are not
-yet numerically complete. Run `half --help` or `half gamma --help` for the
-complete option list.
+`half-validate-gamma`, `half-bands`, and `half-energy` are compatibility aliases
+for their corresponding subcommands. Run `half COMMAND --help` for the complete
+option list.
 
 The older focused executables remain available during the transition. For
 example:

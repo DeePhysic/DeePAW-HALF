@@ -8,29 +8,32 @@ module half_potential
   private
   public::build_veff_lda,build_veff_pbe
 contains
-  subroutine build_veff_lda(charge,potcars,crystal,veff,e_hartree,e_xc)
+  subroutine build_veff_lda(charge,potcars,crystal,veff,e_hartree,e_xc,e_xc_potential)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
     real(dp),allocatable,intent(out)::veff(:)
     real(dp),intent(out)::e_hartree,e_xc
-    call build_veff(charge,potcars,crystal,.false.,veff,e_hartree,e_xc)
+    real(dp),intent(out),optional::e_xc_potential
+    call build_veff(charge,potcars,crystal,.false.,veff,e_hartree,e_xc,e_xc_potential)
   end subroutine
-  subroutine build_veff_pbe(charge,potcars,crystal,veff,e_hartree,e_xc)
+  subroutine build_veff_pbe(charge,potcars,crystal,veff,e_hartree,e_xc,e_xc_potential)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
     real(dp),allocatable,intent(out)::veff(:)
     real(dp),intent(out)::e_hartree,e_xc
-    call build_veff(charge,potcars,crystal,.true.,veff,e_hartree,e_xc)
+    real(dp),intent(out),optional::e_xc_potential
+    call build_veff(charge,potcars,crystal,.true.,veff,e_hartree,e_xc,e_xc_potential)
   end subroutine
-  subroutine build_veff(charge,potcars,crystal,use_pbe,veff,e_hartree,e_xc)
+  subroutine build_veff(charge,potcars,crystal,use_pbe,veff,e_hartree,e_xc,e_xc_potential)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
     logical,intent(in)::use_pbe
     real(dp),allocatable,intent(out)::veff(:)
     real(dp),intent(out)::e_hartree,e_xc
+    real(dp),intent(out),optional::e_xc_potential
     complex(dp),allocatable,target::rho_in(:),rho_g(:),local_g(:),local_c(:),core_g(:),core_c(:)
     real(dp),allocatable::charge_c(:),local_r(:),core_r(:),vxc(:),m2local(:,:),m2core(:,:)
     real(dp)::q(3),g2,gn,radial,core_radial,phase,rpos(3)
@@ -82,6 +85,7 @@ contains
     else
       call perdew_zunger_xc(charge_c+core_r,crystal%volume,vxc,e_xc)
     end if
+    if(present(e_xc_potential))e_xc_potential=sum(charge_c*vxc)/real(n,dp)
     veff=local_r+vxc
   end subroutine
 

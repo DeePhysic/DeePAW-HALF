@@ -10,8 +10,9 @@
 ```
 
 HAPPY 是移植过程中的数值 oracle。当前 CUDA Gamma/MIMIC_US 固定密度路径已在
-Si 与 HfO2 上通过逐本征值验证；CPU QDEP 与任意单 k 点也已闭合，band path、
-总能量与力仍在移植中。
+Si 与 HfO2 上通过逐本征值验证；CPU QDEP、任意 k 点、多 k 点能带、spglib
+不可约 k 网格、占据数、Ewald 和 Harris 固定密度总能量也已闭合。Si 总能量及
+各分量与 HAPPY 的差小于 `4e-12 eV`；力和波函数 HDF5 仍在移植中。
 
 ## 数值模型：从固定密度到本征值
 
@@ -68,8 +69,9 @@ eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用�
 CPU 与 CUDA 路径现已实现上式完整的 Gamma 点 MIMIC_US 项；`--uspp-dij` 用于启用势依赖
 校正。GPU 先对周期有效势进行三次 B 样条预滤波，再围绕每个原子在球面网格取样，
 投影到实球谐函数，并用 VASP 的双球贝塞尔补偿函数完成径向积分，最后与 AE−PS
-多极矩收缩得到每个原子的 $D_{ij}^I$。矩阵自由算符、任意 k 点、能量和力仍是
-计划项；单个非 Gamma k 点可用 `--kpoint KX KY KZ`。权威状态见
+多极矩收缩得到每个原子的 $D_{ij}^I$。显式多 k 点能带和对称性约化总能量已经
+实现；矩阵自由算符、力和波函数导出仍是计划项。单个非 Gamma k 点可用
+`--kpoint KX KY KZ`。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 
 对已实现的 DION 问题，`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，化为
@@ -147,11 +149,17 @@ half gamma CHGCAR.smooth POTCAR \
 # 显式使用 CPU 后端
 half gamma CHGCAR.smooth POTCAR \
   --encut 400 --bands 8 --xc pbe --backend cpu
+
+# 从显式倒空间 KPOINTS 重建多 k 点能带
+half bands CHGCAR.smooth POTCAR KPOINTS \
+  --encut 400 --bands 12 --backend cuda --uspp-dij --output bands.json
+
+# 使用 spglib 不可约 k 网格计算固定密度 Harris 总能量
+half energy CHGCAR.smooth POTCAR \
+  --encut 400 --kspacing 0.5 --bands 12 --backend cuda --output energy.json
 ```
 
-`half-validate-gamma` 是 `half gamma` 的兼容别名。`half-bands` 与
-`half-energy` 已保留兼容命令名，但在任意 k 点与总能量数值闭合前会明确报告
-该功能尚未完成。
+`half-validate-gamma`、`half-bands` 与 `half-energy` 都是对应子命令的兼容别名。
 
 ## HfO2 大矩阵速度
 

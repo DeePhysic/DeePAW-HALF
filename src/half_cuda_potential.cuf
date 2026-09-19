@@ -258,7 +258,16 @@ contains
     end if
   end subroutine
 
-  subroutine build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,e_hartree,e_xc,compute_energies)
+  attributes(global) subroutine xc_potential_terms_kernel(charge,local_r,veff,terms,n)
+    real(dp),device,intent(in)::charge(*),local_r(*),veff(*)
+    real(dp),device,intent(out)::terms(*)
+    integer,value::n
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)terms(i)=charge(i)*(veff(i)-local_r(i))/real(n,dp)
+  end subroutine
+
+  subroutine build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,e_hartree,e_xc,compute_energies,e_xc_potential)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
@@ -266,6 +275,7 @@ contains
     logical,intent(in),optional::compute_energies
     real(dp),device,allocatable,intent(out)::dveff(:)
     real(dp),intent(out)::e_hartree,e_xc
+    real(dp),intent(out),optional::e_xc_potential
     real(dp),device,allocatable::drawcharge(:),dcharge(:),drec(:,:),dlocal_r(:),dcore_r(:),deh(:),density(:),sigma(:),grad(:,:), &
       fs(:),fn(:),flux(:),edens(:),dradial(:),dm2(:),dcore_values(:),dcore_m2(:),dpositions(:,:)
     complex(dp),device,allocatable::work(:),rho_g(:),local_g(:),core_g(:),freq(:),deriv(:)
@@ -329,6 +339,11 @@ contains
       allocate(host_terms(n))
       host_terms=deh;e_hartree=sum(host_terms)
       host_terms=edens;e_xc=sum(host_terms)*(crystal%volume/real(n,dp))/autoa**3*hatoev
+      if(present(e_xc_potential))then
+        call xc_potential_terms_kernel<<<blocks,256>>>(dcharge,dlocal_r,dveff,deh,n)
+        ierr=cudaDeviceSynchronize();if(ierr/=cudaSuccess)error stop 'HALF: CUDA XC potential reduction failed'
+        host_terms=deh;e_xc_potential=sum(host_terms)
+      end if
       deallocate(host_terms)
     end block
     status=cufftDestroy(plan)

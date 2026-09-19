@@ -1,5 +1,21 @@
 include_guard(GLOBAL)
 
+set(HALF_SPGLIB_ROOT "" CACHE PATH "spglib installation prefix")
+if(NOT HALF_SPGLIB_ROOT AND DEFINED ENV{CONDA_PREFIX})
+  set(HALF_SPGLIB_ROOT "$ENV{CONDA_PREFIX}" CACHE PATH "spglib installation prefix" FORCE)
+endif()
+find_path(HALF_SPGLIB_INCLUDE_DIR spglib.h
+  HINTS "${HALF_SPGLIB_ROOT}/include")
+find_library(HALF_SPGLIB_LIBRARY NAMES symspg
+  HINTS "${HALF_SPGLIB_ROOT}/lib")
+if(HALF_SPGLIB_INCLUDE_DIR AND HALF_SPGLIB_LIBRARY)
+  set(HALF_HAVE_SPGLIB TRUE)
+  message(STATUS "HALF spglib: ${HALF_SPGLIB_LIBRARY}")
+else()
+  set(HALF_HAVE_SPGLIB FALSE)
+  message(STATUS "HALF spglib disabled: set HALF_SPGLIB_ROOT for symmetry reduction")
+endif()
+
 set(HALF_MKL_ROOT "" CACHE PATH "Intel oneMKL installation prefix")
 if(NOT HALF_MKL_ROOT AND DEFINED ENV{MKLROOT})
   set(HALF_MKL_ROOT "$ENV{MKLROOT}" CACHE PATH "Intel oneMKL installation prefix" FORCE)

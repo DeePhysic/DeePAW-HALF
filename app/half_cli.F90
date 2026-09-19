@@ -2,12 +2,12 @@ program half_cli
   use half_kinds, only: dp, i64
   use half_types, only: crystal_t, charge_grid_t, plane_wave_basis_t, potcar_t
   use half_chgcar, only: read_chgcar
-  use half_potcar, only: read_potcar
+  use half_potcar, only: read_potcar,validate_potcar_structure
   use half_basis, only: build_plane_wave_basis
   use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh,generate_cubic_band_path
   use half_paw, only: paw_species_t, build_paw_operators
   use half_uspp, only: build_uspp_dij_cpu
-  use half_energy, only: compute_occupations,ewald_energy
+  use half_energy, only: compute_occupations,ewald_energy,read_vasp_eigenval
   use half_math,only:inverse3
   use half_cpu, only: cpu_density_mean
 #ifdef HALF_CLI_HAVE_MKL
@@ -219,6 +219,7 @@ contains
     call system_clock(tick0,rate)
     call read_chgcar(trim(charge_path),crystal,rho)
     call read_potcar(trim(potential_path),potcars)
+    call validate_potcar_structure(potcars,crystal)
     call build_plane_wave_basis(crystal,rho%shape,encut,kpoint,basis)
     potential_seconds=0.0_dp;assembly_seconds=0.0_dp;gpu_seconds=0.0_dp
 #ifdef HALF_CLI_CUDA
@@ -425,7 +426,7 @@ contains
       call option_value(i,narg,'--encut',value); read(value,*,iostat=ios)encut
       if(ios/=0.or.encut<=0.0_dp)call fail('invalid --encut value'); i=i+1
     end do
-    call read_chgcar(trim(chg),crystal,rho); call read_potcar(trim(pot),p)
+    call read_chgcar(trim(chg),crystal,rho); call read_potcar(trim(pot),p);call validate_potcar_structure(p,crystal)
     call build_plane_wave_basis(crystal,rho%shape,encut,[0.0_dp,0.0_dp,0.0_dp],basis)
     call build_paw_operators(p,crystal,basis,paw)
     write(*,'(A,I0)')'plane_waves: ',basis%npw
@@ -496,7 +497,7 @@ contains
       end select
       i=i+1
     end do
-    call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars)
+    call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars);call validate_potcar_structure(potcars,crystal)
     if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),set);path_used=kpoints_path
     else;call generate_cubic_band_path(crystal,npoints,path_spec,set,path_used);end if
 #ifdef HALF_CLI_CUDA
@@ -608,11 +609,11 @@ contains
     type(plane_wave_basis_t)::basis
     type(potcar_t),allocatable::potcars(:)
     type(paw_species_t),allocatable::paw(:)
-    type(kpoint_set_t)::set
-    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),occupation(:,:),charges(:)
+    type(kpoint_set_t)::set,reference_set
+    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),occupation(:,:),charges(:),reference_eigenvalues(:,:)
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
-    real(dp)::encut,kspacing,symprec,sigma,nelect,density_electrons,mu,band_energy,entropy_term
+    real(dp)::encut,kspacing,symprec,sigma,nelect,density_electrons,mu,band_energy,entropy_term,reference_nelect
     real(dp)::eh,exc,exv,smin,smax,potential_seconds,assembly_seconds,gpu_seconds
     real(dp)::ewald,ewald_real,ewald_recip,ewald_self,ewald_background,atomic_reference,local_g0
     real(dp)::paw_atomic,internal_energy,free_energy
@@ -620,9 +621,9 @@ contains
     real(dp),allocatable::forces(:,:)
     type(crystal_t)::displaced
     integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit
-    character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,hdf5_path
+    character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,hdf5_path,reference_path
     character(len=16)::xc,backend,solver,actual_backend
-    logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces
+    logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)
     type(wave_block_t),allocatable::waves(:)
@@ -639,7 +640,7 @@ contains
     narg=command_argument_count();if(narg<offset+2)then;call print_energy_help(0);call fail('energy requires CHARGE and POTENTIAL');end if
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
     encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.0_dp;nbands=0
-    xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';hdf5_path=''
+    xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';hdf5_path='';reference_path=''
     use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.
     paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;i=offset+3
     do while(i<=narg)
@@ -656,6 +657,7 @@ contains
       case('--bands');call option_value(i,narg,'--bands',value);read(value,*,iostat=ios)nbands
         if(ios/=0.or.nbands<1)call fail('invalid --bands value')
       case('--kpoints-file');call option_value(i,narg,'--kpoints-file',kpoints_path)
+      case('--reference-eigenval');call option_value(i,narg,'--reference-eigenval',reference_path)
       case('--no-kpoint-symmetry');full_mesh=.true.
       case('--xc');call option_value(i,narg,'--xc',xc);xc=lower(trim(xc))
         if(trim(xc)/='lda'.and.trim(xc)/='pbe')call fail('--xc must be lda or pbe')
@@ -678,7 +680,7 @@ contains
       end select
       i=i+1
     end do
-    call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars)
+    call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars);call validate_potcar_structure(potcars,crystal)
     nelect=0.0_dp
     do it=1,size(potcars);nelect=nelect+potcars(it)%zval*real(crystal%counts(it),dp);end do
     density_electrons=rho%electron_count()
@@ -688,6 +690,16 @@ contains
     if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),set)
     else if(full_mesh)then;call gamma_centered_mesh(crystal,kspacing,set)
     else;call gamma_centered_irreducible_mesh(crystal,kspacing,set,symprec,.true.);end if
+    use_reference=len_trim(reference_path)>0
+    if(use_reference)then
+      call read_vasp_eigenval(trim(reference_path),reference_set,reference_eigenvalues,reference_nelect)
+      if(reference_set%nk/=set%nk.or.size(reference_eigenvalues,2)<nbands)call fail('EIGENVAL dimensions do not match requested k points/bands')
+      if(maxval(abs(reference_set%points-set%points))>2e-8_dp.or.maxval(abs(reference_set%weights-set%weights))>2e-8_dp) &
+        call fail('EIGENVAL coordinates or weights do not match k points')
+      if(abs(reference_nelect-nelect)>5e-4_dp)call fail('EIGENVAL electron count does not match POTCAR')
+      if(len_trim(hdf5_path)>0)call fail('vaspwave.h5 export requires reconstructed eigenvectors, not EIGENVAL')
+      if(do_forces)call fail('forces require reconstructed eigenstates, not EIGENVAL')
+    end if
 #ifdef HALF_CLI_CUDA
     if(trim(backend)=='auto'.or.trim(backend)=='cuda')then;actual_backend='cuda';else;actual_backend='cpu';end if
 #else
@@ -702,12 +714,14 @@ contains
     if(len_trim(hdf5_path)>0)call fail('this HALF build has no HDF5 support')
 #endif
     allocate(eigenvalues(set%nk,nbands),plane_waves(set%nk));eh=0;exc=0;exv=0
+    if(use_reference)eigenvalues=reference_eigenvalues(:,:nbands)
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)allocate(wave_bases(set%nk),waves(set%nk))
 #endif
     do ik=1,set%nk
       call build_plane_wave_basis(crystal,rho%shape,encut,set%points(ik,:),basis);plane_waves(ik)=basis%npw
       if(nbands>basis%npw)call fail('requested bands exceed plane waves at a k point')
+      if(use_reference.and.ik>1)cycle
 #ifdef HALF_CLI_CUDA
       if(trim(actual_backend)=='cuda')then
         if(ik==1)then
@@ -740,7 +754,7 @@ contains
 #ifdef HALF_CLI_CUDA
       end if
 #endif
-      eigenvalues(ik,:)=values(:nbands)
+      if(.not.use_reference)eigenvalues(ik,:)=values(:nbands)
 #ifdef HALF_CLI_HAVE_HDF5
       if(len_trim(hdf5_path)>0)then;wave_bases(ik)=basis;waves(ik)%coefficients=vectors(:,:nbands);end if
 #endif
@@ -794,6 +808,7 @@ contains
     write(unit,'(A)')'       half-energy CHARGE POTENTIAL [OPTIONS]'
     write(unit,'(A)')'Options: --encut EV --kspacing VALUE --kpoints-file FILE --no-kpoint-symmetry'
     write(unit,'(A)')'         --symprec VALUE --bands N --sigma EV --xc lda|pbe'
+    write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj --no-uspp-dij --output FILE'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
     write(unit,'(A)')'         --forces --force-step ANGSTROM'

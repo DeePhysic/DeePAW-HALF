@@ -149,6 +149,27 @@ def test_si_automatic_band_path_parity_record():
     assert "generate_cubic_band_path" in source
 
 
+def test_hfo2_reference_eigenval_energy_parity_record():
+    import json
+
+    record = json.loads(
+        (ROOT / "docs/validation/hfo2_reference_eigenval_energy.json").read_text()
+    )
+    assert record["kpoints"] == 36
+    assert record["internal_energy_abs_error_eV"] < 1e-9
+    assert record["max_abs_component_error_eV"] < 1e-9
+    energy = (ROOT / "src/half_energy.F90").read_text().lower()
+    assert "read_vasp_eigenval" in energy
+
+
+def test_potcar_structure_order_is_validated():
+    source = (ROOT / "src/half_potcar.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "validate_potcar_structure" in source
+    assert "dataset order does not match" in source
+    assert "call validate_potcar_structure" in cli
+
+
 def test_si_arbitrary_kpoint_parity_record():
     import json
 

@@ -164,6 +164,10 @@ half bands CHGCAR.smooth POTCAR \
 half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
   --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output energy.json
+
+# 也可在显式网格上读取匹配的 VASP EIGENVAL
+half energy CHGCAR.smooth POTCAR \
+  --kpoints-file KPOINTS --reference-eigenval EIGENVAL --bands 60 --output energy.json
 ```
 
 `half-validate-gamma`、`half-bands` 与 `half-energy` 都是对应子命令的兼容别名。

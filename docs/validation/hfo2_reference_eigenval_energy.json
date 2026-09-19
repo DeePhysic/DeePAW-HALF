@@ -1,0 +1,12 @@
+{
+  "system": "HfO2",
+  "xc": "PBE",
+  "encut_eV": 520.0,
+  "kpoints": 36,
+  "bands": 60,
+  "eigenvalues_source": "VASP EIGENVAL",
+  "half_internal_energy_eV": -157.0264825726722,
+  "happy_internal_energy_eV": -157.0264825726481,
+  "internal_energy_abs_error_eV": 2.4101609596982598e-11,
+  "max_abs_component_error_eV": 5.911715561524034e-11
+}

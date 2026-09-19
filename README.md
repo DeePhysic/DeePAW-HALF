@@ -235,6 +235,10 @@ CPU/CUDA backend selection:
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
   --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output energy.json
 
+# Alternatively consume a matching VASP EIGENVAL on an explicit mesh.
+./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
+  --kpoints-file KPOINTS --reference-eigenval EIGENVAL --bands 60 --output energy.json
+
 # Inspect parsed POTCAR or PAW data.
 ./build/cpu-release/half potcar POTCAR
 ./build/cpu-release/half paw CHGCAR.smooth POTCAR --encut 400

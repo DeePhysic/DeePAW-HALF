@@ -1,14 +1,26 @@
 module half_potcar
   use half_kinds, only: dp, i32
-  use half_types, only: potcar_t
+  use half_types, only: potcar_t,crystal_t
 #ifdef HALF_HAVE_HDF5
   use half_vaspwave,only:is_hdf5_file,extract_hdf5_potcar
 #endif
   implicit none
   private
-  public :: read_potcar
+  public :: read_potcar,validate_potcar_structure
   integer, parameter :: npspts=1000, npsnl=100, npsrnl=100
 contains
+  subroutine validate_potcar_structure(datasets,crystal)
+    type(potcar_t),intent(in)::datasets(:)
+    type(crystal_t),intent(in)::crystal
+    integer::i
+    if(size(datasets)/=crystal%ntypes)error stop 'HALF: POTCAR dataset count does not match structure species count'
+    do i=1,crystal%ntypes
+      if(index(lower(trim(crystal%species(i))),'type')==1)cycle
+      if(trim(lower(datasets(i)%element))/=trim(lower(crystal%species(i)))) &
+        error stop 'HALF: POTCAR dataset order does not match structure species order'
+    end do
+  end subroutine
+
   subroutine read_potcar(path,datasets)
     character(len=*),intent(in)::path
     type(potcar_t),allocatable,intent(out)::datasets(:)

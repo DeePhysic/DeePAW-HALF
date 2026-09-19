@@ -2,10 +2,42 @@ module half_energy
   use half_kinds,only:dp
   use half_constants,only:pi,felect
   use half_types,only:crystal_t
+  use half_kpoints,only:kpoint_set_t
   implicit none
   private
-  public::compute_occupations,ewald_energy
+  public::compute_occupations,ewald_energy,read_vasp_eigenval
 contains
+  subroutine read_vasp_eigenval(path,set,eigenvalues,nelect)
+    character(len=*),intent(in)::path
+    type(kpoint_set_t),intent(out)::set
+    real(dp),allocatable,intent(out)::eigenvalues(:,:)
+    real(dp),intent(out)::nelect
+    character(len=2048)::line
+    integer::unit,ios,i,ik,ib,nelectron,nk,nb,index
+    open(newunit=unit,file=path,status='old',action='read',iostat=ios)
+    if(ios/=0)error stop 'HALF: cannot open EIGENVAL'
+    do i=1,5;read(unit,'(A)',iostat=ios)line;if(ios/=0)error stop 'HALF: incomplete EIGENVAL header';end do
+    read(unit,*,iostat=ios)nelectron,nk,nb
+    if(ios/=0.or.nk<1.or.nb<1)error stop 'HALF: invalid EIGENVAL dimensions'
+    set%nk=nk;set%full_count=nk;allocate(set%points(nk,3),set%weights(nk),set%multiplicities(nk),eigenvalues(nk,nb))
+    do ik=1,nk
+      do
+        read(unit,'(A)',iostat=ios)line;if(ios/=0)error stop 'HALF: missing EIGENVAL k point'
+        if(len_trim(line)>0)exit
+      end do
+      read(line,*,iostat=ios)set%points(ik,:),set%weights(ik)
+      if(ios/=0)error stop 'HALF: invalid EIGENVAL k point'
+      do ib=1,nb
+        read(unit,'(A)',iostat=ios)line;if(ios/=0)error stop 'HALF: missing EIGENVAL band'
+        read(line,*,iostat=ios)index,eigenvalues(ik,ib)
+        if(ios/=0.or.index/=ib)error stop 'HALF: invalid EIGENVAL band row'
+      end do
+    end do
+    close(unit)
+    if(sum(set%weights)<=0)error stop 'HALF: invalid EIGENVAL weights'
+    set%weights=set%weights/sum(set%weights);set%multiplicities=1;nelect=real(nelectron,dp)
+  end subroutine
+
   subroutine compute_occupations(eigenvalues,weights,nelect,sigma,occupation,chemical_potential,band_energy,entropy_term)
     real(dp),intent(in)::eigenvalues(:,:),weights(:),nelect,sigma
     real(dp),allocatable,intent(out)::occupation(:,:)

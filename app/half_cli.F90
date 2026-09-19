@@ -6,13 +6,14 @@ program half_cli
   use half_basis, only: build_plane_wave_basis
   use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh,generate_cubic_band_path
   use half_paw, only: paw_species_t, build_paw_operators
-  use half_uspp, only: build_uspp_dij_cpu
   use half_energy, only: compute_occupations,ewald_energy,read_vasp_eigenval
+  use half_artifacts, only: write_bands_artifacts,write_energy_npz
   use half_math,only:inverse3
   use half_cpu, only: cpu_density_mean
   use half_parallel, only: parallel_initialize,parallel_finalize,parallel_abort,parallel_rank,parallel_size, &
     parallel_root,parallel_owns,parallel_sum,parallel_min
 #ifdef HALF_CLI_HAVE_MKL
+  use half_uspp, only: build_uspp_dij_cpu
   use half_potential, only: build_veff_lda, build_veff_pbe
   use half_dense_solver, only: solve_dense_gamma
 #endif
@@ -49,7 +50,7 @@ program half_cli
   case ('help', '--help', '-h')
     if(parallel_root())call print_help(6)
   case ('version', '--version', '-V')
-    if(parallel_root())write(*,'(A)') 'DeePAW-HALF 0.4.0'
+    if(parallel_root())write(*,'(A)') 'DeePAW-HALF 0.5.0'
   case ('gamma', 'validate-gamma')
     if(parallel_root())call command_gamma(argument_offset)
   case ('inspect')
@@ -290,7 +291,7 @@ contains
     n=min(size(eigenvalues),size(reference)); allocate(errors(n))
     if(n>0)errors=eigenvalues(:n)-reference(:n)
     write(unit,'(A)') '{'
-    write(unit,'(A)') '  "implementation": "DeePAW-HALF 0.4.0",'
+    write(unit,'(A)') '  "implementation": "DeePAW-HALF 0.5.0",'
     write(unit,'(A,A,A)') '  "charge": "',trim(charge),'",'
     write(unit,'(A,A,A)') '  "potential": "',trim(potential),'",'
     write(unit,'(A,A,A)') '  "xc": "',trim(xc),'",'
@@ -449,12 +450,13 @@ contains
     type(potcar_t),allocatable::potcars(:)
     type(paw_species_t),allocatable::paw(:)
     type(kpoint_set_t)::set
-    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:)
+    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),overlap_mins(:),path_x(:),shifted(:,:)
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
     real(dp)::encut,eh,exc,smin,smax,potential_seconds,assembly_seconds,gpu_seconds
-    integer::narg,i,ios,ik,nbands,unit,npoints
-    character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,hdf5_path,path_spec,path_used
+    real(dp)::nelect,vbm,cbm,gap,gamma_gap
+    integer::narg,i,ios,ik,nbands,unit,npoints,nocc,gamma_index,artifact_status
+    character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,path_spec,path_used
     character(len=16)::xc,backend,solver,actual_backend
     logical::use_uspp
 #ifdef HALF_CLI_HAVE_HDF5
@@ -478,7 +480,8 @@ contains
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
     kpoints_path='';path_spec='';path_used='';i=offset+3
     if(i<=narg)then;call get_command_argument(i,arg);if(arg(1:1)/='-')then;kpoints_path=arg;i=i+1;end if;end if
-    encut=400.0_dp;nbands=8;npoints=60;xc='pbe';backend='auto';solver='evd';use_uspp=.true.;output_path='bands.json';hdf5_path=''
+    encut=400.0_dp;nbands=8;npoints=60;xc='pbe';backend='auto';solver='evd';use_uspp=.true.
+    output_path='bands.json';output_prefix='bands';hdf5_path=''
     do while(i<=narg)
       call get_command_argument(i,arg)
       select case(trim(arg))
@@ -495,8 +498,8 @@ contains
         if(trim(backend)/='auto'.and.trim(backend)/='cpu'.and.trim(backend)/='cuda')call fail('--backend must be auto, cpu, or cuda')
       case('--solver');call option_value(i,narg,'--solver',solver);solver=lower(trim(solver))
         if(trim(solver)/='evd'.and.trim(solver)/='evj')call fail('--solver must be evd or evj')
-      case('--output');call option_value(i,narg,'--output',output_path)
-      case('--output-prefix');call option_value(i,narg,'--output-prefix',value);output_path=trim(value)//'.json'
+      case('--output');call option_value(i,narg,'--output',output_path);output_prefix=strip_json_suffix(output_path)
+      case('--output-prefix');call option_value(i,narg,'--output-prefix',output_prefix);output_path=trim(output_prefix)//'.json'
       case('--vaspwave-h5');call option_value(i,narg,'--vaspwave-h5',hdf5_path)
       case('--uspp-dij');use_uspp=.true.
       case('--no-uspp-dij');use_uspp=.false.
@@ -524,7 +527,8 @@ contains
 #ifndef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)call fail('this HALF build has no HDF5 support')
 #endif
-    allocate(eigenvalues(set%nk,nbands),plane_waves(set%nk));eigenvalues=0.0_dp;plane_waves=0_i64
+    allocate(eigenvalues(set%nk,nbands),plane_waves(set%nk),overlap_mins(set%nk))
+    eigenvalues=0.0_dp;plane_waves=0_i64;overlap_mins=0.0_dp
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)allocate(wave_bases(set%nk),waves(set%nk))
 #endif
@@ -555,12 +559,13 @@ contains
       end if
 #endif
       eigenvalues(ik,:)=values(:nbands)
+      overlap_mins(ik)=smin
 #ifdef HALF_CLI_HAVE_HDF5
       if(len_trim(hdf5_path)>0)then;wave_bases(ik)=basis;waves(ik)%coefficients=vectors(:,:nbands);end if
 #endif
       write(0,'(A,I0,A,I0,A,I0,A,ES14.6)')'HALF bands: rank ',parallel_rank(),' k point ',ik,'/',set%nk,' E1_eV=',values(1)
     end do
-    call parallel_sum(eigenvalues);call parallel_sum(plane_waves)
+    call parallel_sum(eigenvalues);call parallel_sum(plane_waves);call parallel_sum(overlap_mins)
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)then
       nelect=0;do i=1,size(potcars);nelect=nelect+potcars(i)%zval*real(crystal%counts(i),dp);end do
@@ -569,11 +574,30 @@ contains
     end if
 #endif
     if(parallel_root())then
+      nelect=0.0_dp
+      do i=1,size(potcars);nelect=nelect+potcars(i)%zval*real(crystal%counts(i),dp);end do
+      nocc=ceiling(nelect/2.0_dp)
+      if(nocc>nbands)call fail('too few bands to determine the valence-band maximum')
+      vbm=maxval(eigenvalues(:,nocc));cbm=vbm;gap=0.0_dp;gamma_gap=0.0_dp
+      if(nocc<nbands)then
+        cbm=minval(eigenvalues(:,nocc+1));gap=max(0.0_dp,cbm-vbm)
+        gamma_index=minloc(sum(set%points**2,dim=2),dim=1)
+        gamma_gap=max(0.0_dp,eigenvalues(gamma_index,nocc+1)-eigenvalues(gamma_index,nocc))
+      end if
+      allocate(path_x(set%nk),shifted(set%nk,nbands));call make_path_coordinate(crystal,set,path_x)
+      shifted=eigenvalues-vbm
       if(trim(output_path)=='-')then;unit=6
       else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
         if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
-      call write_bands_json(unit,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp)
-      if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues,plane_waves,use_uspp);end if
+      call write_bands_json(unit,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues, &
+        plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc)
+      if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,path_used,xc,actual_backend,solver, &
+        encut,set,eigenvalues,plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc);end if
+      if(trim(output_path)/='-')then
+        call write_bands_csv(trim(output_prefix)//'.csv',set,path_x,shifted)
+        call write_bands_artifacts(trim(output_prefix),set%points,path_x,eigenvalues,shifted,plane_waves,overlap_mins,vbm,artifact_status)
+        if(artifact_status/=0)call fail('cannot write bands NPZ/PNG artifacts')
+      end if
     end if
 #endif
   end subroutine
@@ -587,26 +611,35 @@ contains
     write(unit,'(A)')'KPOINTS is a VASP explicit reciprocal-coordinate file; omit it for an automatic cubic band path.'
   end subroutine
 
-  subroutine write_bands_json(unit,charge,potential,kfile,xc,backend,solver,encut,set,eigenvalues,plane_waves,use_uspp)
+  subroutine write_bands_json(unit,charge,potential,kfile,xc,backend,solver,encut,set,eigenvalues,plane_waves, &
+      overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc)
     integer,intent(in)::unit
     character(len=*),intent(in)::charge,potential,kfile,xc,backend,solver
-    real(dp),intent(in)::encut,eigenvalues(:,:)
+    real(dp),intent(in)::encut,eigenvalues(:,:),overlap_mins(:),path_x(:),vbm,cbm,gap,gamma_gap
     type(kpoint_set_t),intent(in)::set
     integer(i64),intent(in)::plane_waves(:)
     logical,intent(in)::use_uspp
+    integer,intent(in)::nocc
     integer::ik,ib
-    write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.4.0",'
+    write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.5.0",'
     write(unit,'(A,A,A)')'  "charge": "',trim(charge),'",';write(unit,'(A,A,A)')'  "potential": "',trim(potential),'",'
     write(unit,'(A,A,A)')'  "kpoints_source": "',trim(kfile),'",';write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",'
     write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",';write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",'
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
+    write(unit,'(A,I0,A)')'  "occupied_bands": ',nocc,','
+    write(unit,'(A,ES24.16,A)')'  "vbm_eV": ',vbm,','
+    write(unit,'(A,ES24.16,A)')'  "cbm_eV": ',cbm,','
+    write(unit,'(A,ES24.16,A)')'  "sampled_band_gap_eV": ',gap,','
+    write(unit,'(A,ES24.16,A)')'  "gamma_direct_gap_eV": ',gamma_gap,','
     write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),',';write(unit,'(A,ES24.16,A)')'  "encut_eV": ',encut,','
     write(unit,'(A)')'  "kpoints": ['
     do ik=1,set%nk
       write(unit,'(A,3(ES24.16,A),ES24.16,A)',advance='no')'    [',set%points(ik,1),', ',set%points(ik,2),', ',set%points(ik,3),', ',set%weights(ik),']'
       if(ik<set%nk)then;write(unit,'(A)')',';else;write(unit,'(A)')'';end if
     end do
-    write(unit,'(A)')'  ],';write(unit,'(A)',advance='no')'  "plane_waves": ['
+    write(unit,'(A)')'  ],';call write_real_array(unit,'path_distance_Ainv',path_x,.true.)
+    call write_real_array(unit,'overlap_eigenvalue_min',overlap_mins,.true.)
+    write(unit,'(A)',advance='no')'  "plane_waves": ['
     do ik=1,size(plane_waves);if(ik>1)write(unit,'(A)',advance='no')', ';write(unit,'(I0)',advance='no')plane_waves(ik);end do
     write(unit,'(A)')'],';write(unit,'(A)')'  "eigenvalues_eV": ['
     do ik=1,size(eigenvalues,1)
@@ -615,6 +648,33 @@ contains
       if(ik<size(eigenvalues,1))then;write(unit,'(A)')'],';else;write(unit,'(A)')']';end if
     end do
     write(unit,'(A)')'  ]';write(unit,'(A)')'}'
+  end subroutine
+
+  subroutine make_path_coordinate(crystal,set,x)
+    type(crystal_t),intent(in)::crystal
+    type(kpoint_set_t),intent(in)::set
+    real(dp),intent(out)::x(:)
+    integer::ik
+    x(1)=0.0_dp
+    do ik=2,set%nk
+      x(ik)=x(ik-1)+sqrt(sum(matmul(set%points(ik,:)-set%points(ik-1,:),crystal%reciprocal)**2))
+    end do
+  end subroutine
+
+  subroutine write_bands_csv(path,set,x,shifted)
+    character(len=*),intent(in)::path
+    type(kpoint_set_t),intent(in)::set
+    real(dp),intent(in)::x(:),shifted(:,:)
+    integer::unit,ios,ik,ib
+    open(newunit=unit,file=path,status='replace',action='write',iostat=ios)
+    if(ios/=0)call fail('cannot write bands CSV: '//trim(path))
+    write(unit,'(A)',advance='no')'k_index,distance_Ainv,kx,ky,kz'
+    do ib=1,size(shifted,2);write(unit,'(A,I0)',advance='no')',band_',ib;end do;write(unit,'(A)')''
+    do ik=1,set%nk
+      write(unit,'(I0,4(",",ES24.16))',advance='no')ik,x(ik),set%points(ik,:)
+      do ib=1,size(shifted,2);write(unit,'(",",ES24.16)',advance='no')shifted(ik,ib);end do;write(unit,'(A)')''
+    end do
+    close(unit)
   end subroutine
 
   subroutine command_energy(offset)
@@ -635,8 +695,8 @@ contains
     real(dp)::force_step,displaced_energies(2),inverse_lattice(3,3),delta_cart(3)
     real(dp),allocatable::forces(:,:)
     type(crystal_t)::displaced
-    integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit
-    character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,hdf5_path,reference_path
+    integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status
+    character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,reference_path
     character(len=16)::xc,backend,solver,actual_backend
     logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference
 #ifdef HALF_CLI_HAVE_HDF5
@@ -656,7 +716,7 @@ contains
     narg=command_argument_count();if(narg<offset+2)then;call print_energy_help(0);call fail('energy requires CHARGE and POTENTIAL');end if
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
     encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.0_dp;nbands=0
-    xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';hdf5_path='';reference_path=''
+    xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';output_prefix='energy';hdf5_path='';reference_path=''
     use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.
     paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;i=offset+3
     do while(i<=narg)
@@ -689,7 +749,8 @@ contains
         if(ios/=0)call fail('invalid --paw-atomic-double-counting value');have_paw_atomic=.true.
       case('--atomic-reference-energy');call option_value(i,narg,'--atomic-reference-energy',value);read(value,*,iostat=ios)atomic_reference
         if(ios/=0)call fail('invalid --atomic-reference-energy value');have_atomic_override=.true.
-      case('--output');call option_value(i,narg,'--output',output_path)
+      case('--output');call option_value(i,narg,'--output',output_path);output_prefix=strip_json_suffix(output_path)
+      case('--output-prefix');call option_value(i,narg,'--output-prefix',output_prefix);output_path=trim(output_prefix)//'.json'
       case('--vaspwave-h5');call option_value(i,narg,'--vaspwave-h5',hdf5_path)
       case('--help','-h');call print_energy_help(6);return
       case default;call fail('unknown energy option: '//trim(arg))
@@ -827,6 +888,10 @@ contains
       if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
         have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step);end if
+      if(trim(output_path)/='-')then
+        call write_energy_npz(trim(output_prefix),set%points,set%weights,eigenvalues,occupation,forces,artifact_status)
+        if(artifact_status/=0)call fail('cannot write energy NPZ artifact')
+      end if
     end if
 #endif
   end subroutine
@@ -838,7 +903,7 @@ contains
     write(unit,'(A)')'Options: --encut EV --kspacing VALUE --kpoints-file FILE --no-kpoint-symmetry'
     write(unit,'(A)')'         --symprec VALUE --bands N --sigma EV --xc lda|pbe'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
-    write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj --no-uspp-dij --output FILE'
+    write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj --no-uspp-dij --output FILE --output-prefix PREFIX'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
     write(unit,'(A)')'         --forces --force-step ANGSTROM'
     write(unit,'(A)')'         --atomic-reference-energy EV --paw-atomic-double-counting EV'
@@ -921,7 +986,7 @@ contains
     real(dp),intent(in)::forces(:,:),force_step
     logical,intent(in)::have_paw_atomic,use_uspp,have_forces
     integer::iat
-    write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.4.0",'
+    write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.5.0",'
     write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",';write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",'
     write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",';write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),','
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
@@ -962,7 +1027,7 @@ contains
 
   subroutine unavailable(name,reason)
     character(len=*),intent(in)::name,reason
-    call fail(trim(name)//' is not available in HALF 0.4.0: '//trim(reason))
+    call fail(trim(name)//' is not available in HALF 0.5.0: '//trim(reason))
   end subroutine
 
   subroutine fail(message)
@@ -988,5 +1053,15 @@ contains
     integer::i
     i=scan(path,'/',back=.true.)
     if(i>0)then; name=path(i+1:); else; name=path; end if
+  end function
+
+  pure function strip_json_suffix(path)result(prefix)
+    character(len=*),intent(in)::path
+    character(len=len(path))::prefix
+    integer::n
+    prefix=trim(path);n=len_trim(prefix)
+    if(n>=5)then
+      if(lower(prefix(n-4:n))=='.json')prefix(n-4:n)=' '
+    end if
   end function
 end program half_cli

@@ -14,7 +14,7 @@ Si 与 HfO2 上通过逐本征值验证；CPU QDEP、任意 k 点、多 k 点能
 不可约 k 网格、占据数、Ewald 和 Harris 固定密度总能量也已闭合。Si 总能量及
 各分量与 HAPPY 的差小于 `4e-12 eV`；中心差分力在 Si 验证中与 HAPPY 相差小于
 `2.3e-9 eV/Angstrom`。原生 `vaspwave.h5` 输出以及 HDF5
-电荷/结构/内嵌 POTCAR 输入已经支持；力仍在移植中。
+电荷/结构/内嵌 POTCAR 输入已经支持；有限差分力也已实现。
 CPU 版本还可选用 MPI 按独立 k 点分发 `bands`、`energy` 与有限差分力计算。
 
 ## 数值模型：从固定密度到本征值
@@ -73,7 +73,7 @@ CPU 与 CUDA 路径现已实现上式完整的 Gamma 点 MIMIC_US 项；`--uspp-
 校正。GPU 先对周期有效势进行三次 B 样条预滤波，再围绕每个原子在球面网格取样，
 投影到实球谐函数，并用 VASP 的双球贝塞尔补偿函数完成径向积分，最后与 AE−PS
 多极矩收缩得到每个原子的 $D_{ij}^I$。显式多 k 点能带和对称性约化总能量已经
-实现；矩阵自由算符、力和波函数导出仍是计划项。单个非 Gamma k 点可用
+实现；H/S 组装、矩阵应用、力和波函数导出也已实现。单个非 Gamma k 点可用
 `--kpoint KX KY KZ`。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 
@@ -176,7 +176,7 @@ half bands CHGCAR.smooth POTCAR \
 # 使用 spglib 不可约 k 网格计算固定密度 Harris 总能量
 half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
-  --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output energy.json
+  --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output-prefix energy
 
 # 也可在显式网格上读取匹配的 VASP EIGENVAL
 half energy CHGCAR.smooth POTCAR \
@@ -201,6 +201,24 @@ HfO2 的 36-k 点 CPU 实测中，1/2/4 ranks 分别为
 
 `half-validate-gamma`、`half-bands` 与 `half-energy` 都是对应子命令的兼容别名。
 
+`bands --output-prefix NAME` 同时生成 `NAME.json`、`NAME.csv`、`NAME.npz` 与
+无外部绘图库依赖的 `NAME.png`，其中包含 VBM、CBM、采样带隙、Gamma 直接带隙、
+路径距离、基组规模和重叠矩阵诊断。`energy --output-prefix NAME` 生成 JSON 与
+HAPPY 风格 NPZ，后者包含 k 点、权重、本征值、占据数和力。
+
+## 库 API 与 VASP 接入
+
+同一实现可安装为 `libhalf.so`。稳定 C ABI 使用不透明句柄和类似 libxc 的运行时
+整数选择器；`half_api.f90` 为 Fortran 调用方提供不依赖编译器 `.mod` 的
+`bind(C)` 接口。API 覆盖基组查询、稠密 H/S 组装、成组 H/S 应用和 k 点直接
+求解；ABI v1 的 CPU context 支持三层计算，CUDA context 支持全设备驻留的直接
+求解。创建 context 时即可选择 CPU/CUDA 与 EVD/EVJ。安装后的 CMake 工程链接
+`HALF::half`，也可使用 `half.pc`。
+
+完整生命周期、数据布局和 VASP adapter 方案见
+[中文 API 指南](docs/API.zh-CN.md)，独立调用示例见
+[C 示例](examples/api/half_c_example.c)。
+
 ## HfO2 大矩阵速度
 
 条件：HfO2 平滑 CHGCAR、匹配的 PBE `Hf_pv+O` POTCAR、PBE、520 eV、60 bands、
@@ -224,7 +242,7 @@ MIMIC_US 加速比引用。完整原始时间、环境和约束见
 
 - Si Gamma/MIMIC_US：与 HAPPY 的前 8 条本征值最大偏差约 `3e-12 eV`。
 - HfO2 Gamma/MIMIC_US：60 条本征值最大偏差约 `7.9e-12 eV`。
-- band path/k 网格、总能量/力与 `vaspwave.h5` 输出仍在移植中。
+- band path/k 网格、总能量/力与 `vaspwave.h5` 已有逐项验证记录。
 
 详细验证记录见 [`docs/VALIDATION.md`](docs/VALIDATION.md)，功能状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。

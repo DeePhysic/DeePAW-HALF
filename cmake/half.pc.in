@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: DeePAW-HALF
+Description: Harris fixed-density PAW/USPP reconstruction library
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lhalf
+Cflags: -I${includedir}

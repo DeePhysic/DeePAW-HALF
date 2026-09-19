@@ -16,6 +16,13 @@ def test_expected_project_surface_exists():
         "src/half_kpoints.F90",
         "src/half_energy.F90",
         "src/half_parallel.F90",
+        "src/half_library.F90",
+        "src/half_c_api.F90",
+        "src/half_artifacts.c",
+        "include/half.h",
+        "include/half_api.f90",
+        "docs/API.md",
+        "docs/API.zh-CN.md",
         "src/half_vaspwave.F90",
         "src/half_hdf5_bridge.c",
         "src/half_cuda.cuf",
@@ -34,6 +41,25 @@ def test_expected_project_surface_exists():
         "tests/compare_happy_basis.py",
     ]
     assert all((ROOT / item).is_file() for item in expected)
+
+
+def test_stable_library_api_and_cli_artifacts_are_exposed():
+    header = (ROOT / "include/half.h").read_text()
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    library = (ROOT / "src/half_library.F90").read_text().lower()
+    cuda_solver = (ROOT / "src/half_cuda_solver.cuf").read_text().lower()
+    assert "HALF_ABI_VERSION 1" in header
+    assert "half_create_from_files_backend" in header
+    assert "half_assemble_hs" in header
+    assert "half_apply_hs" in header
+    assert "half_solve_kpoint" in header
+    assert "EXPORT_NAME half" in cmake
+    assert "HALFConfig.cmake" in cmake
+    assert "write_bands_artifacts" in cli
+    assert "write_energy_npz" in cli
+    assert "solve_dense_gamma_cuda_full" in library
+    assert "assemble_dense_gamma_cuda_full" in cuda_solver
 
 
 def test_build_rejects_non_nvhpc_compilers():

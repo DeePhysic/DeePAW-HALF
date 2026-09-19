@@ -1,0 +1,36 @@
+{
+  "date": "2026-09-19",
+  "api_version": 1,
+  "library_version": "0.5.0",
+  "system": "HfO2",
+  "input": "/home/limusen/harris/harris/CHGCAR + POTCAR",
+  "encut_eV": 200.0,
+  "bands": 8,
+  "plane_waves": 865,
+  "cpu": {
+    "compiler": "Intel oneAPI 2023 mpiifort",
+    "backend": "oneMKL",
+    "ctest": "8/8 passed"
+  },
+  "cuda": {
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+    "driver": "595.84",
+    "compiler": "NVHPC 26.5",
+    "toolkit": "CUDA 13.2",
+    "backend": "cuFFT + CUDA assembly + cuSOLVER EVD",
+    "ctest": "8/8 passed"
+  },
+  "cpu_cuda_max_abs_eigenvalue_difference_eV": 1.5e-11,
+  "installed_consumer_tests": [
+    "find_package(HALF) and link HALF::half",
+    "pkg-config half",
+    "external C call through installed libhalf.so"
+  ],
+  "cli_artifact_tests": {
+    "serial_bands": ["json", "csv", "npz", "png"],
+    "mpi_bands_max_abs_difference": 0.0,
+    "energy": ["json", "npz"],
+    "npz_loaded_with_numpy": true,
+    "png_dimensions": [1200, 800]
+  }
+}

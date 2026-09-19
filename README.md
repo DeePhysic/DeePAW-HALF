@@ -17,7 +17,8 @@ the port is developed.
 
 ## Current milestone
 
-Version 0.4 provides a numerically closed Gamma fixed-density path on CUDA:
+Version 0.5 provides a numerically closed fixed-density path plus a reusable
+library interface:
 
 - VASP CHGCAR structure and smooth-grid reader that stops after exactly
   `NGX*NGY*NGZ` values;
@@ -39,7 +40,9 @@ Version 0.4 provides a numerically closed Gamma fixed-density path on CUDA:
 - CUDA 12.4 and CUDA 13.0 build presets;
 - a correctness-checked backend benchmark;
 - a unified `half` CLI, HAPPY-compatible command aliases, and parity-oriented
-  tests.
+  tests;
+- installable `libhalf.so` with a versioned C ABI, portable Fortran bindings,
+  CMake/pkg-config metadata, and runtime CPU/CUDA backend selection.
 
 The CUDA MIMIC_US path reproduces HAPPY for both Si (725 plane waves) and HfO2
 (3407 plane waves): the tested eigenvalues agree to about `1e-11 eV` or better.
@@ -48,8 +51,8 @@ occupations, Ewald and the fixed-density Harris total energy are also native
 Fortran features. The Si total energy and every reported component agree with
 HAPPY to better than `4e-12 eV`. Central finite-difference forces reproduce
 HAPPY within `2.3e-9 eV/Angstrom` in the validated Si case. Native `vaspwave.h5` output and HDF5
-charge/structure/embedded-POTCAR input are supported. Forces and the matrix-free
-solver remain tracked in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
+charge/structure/embedded-POTCAR input are supported. Dense H/S assembly,
+matrix application, and k-point solution are exposed through `libhalf`.
 
 ## Numerical model, derived step by step
 
@@ -116,7 +119,7 @@ concentric angular grids around every atom, projected onto real spherical
 harmonics, radially integrated against VASP's two-Bessel compensation
 functions, and contracted with the AE-minus-PS multipole moments. Explicit
 multi-point bands and symmetry-reduced fixed-density energies are implemented;
-matrix-free application, forces and wavefunction export remain planned. The authoritative status is
+matrix application, finite-difference forces, and wavefunction export are implemented. The authoritative status is
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
 For the implemented DION problem, `S` is positive definite and the generalized
@@ -248,7 +251,7 @@ CPU/CUDA backend selection:
 # Evaluate the symmetry-reduced fixed-density Harris energy.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
-  --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output energy.json
+  --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output-prefix energy
 
 # Alternatively consume a matching VASP EIGENVAL on an explicit mesh.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
@@ -279,6 +282,26 @@ identical to serial. See
 `half-validate-gamma`, `half-bands`, and `half-energy` are compatibility aliases
 for their corresponding subcommands. Run `half COMMAND --help` for the complete
 option list.
+
+`bands --output-prefix NAME` writes `NAME.json`, `NAME.csv`, `NAME.npz`, and a
+dependency-free `NAME.png` plot.  The report includes VBM, CBM, sampled gap,
+Gamma direct gap, path distance, basis size, and overlap diagnostics.
+`energy --output-prefix NAME` writes JSON plus a HAPPY-compatible NPZ containing
+k points, weights, eigenvalues, occupations, and forces.
+
+## Library API and VASP integration
+
+The same implementation is available as installable `libhalf.so`.  Its stable
+C ABI uses opaque handles and runtime integer selectors in the libxc style;
+`half_api.f90` provides compiler-neutral `bind(C)` interfaces for Fortran hosts.
+It exposes basis queries, dense H/S assembly, block H/S application, and direct
+k-point solution.  CPU contexts support all three compute levels; CUDA contexts
+provide the fully device-resident direct solve in ABI v1.  Installed CMake
+clients link `HALF::half`; pkg-config clients use `half.pc`.  CPU/CUDA and
+EVD/EVJ are selected when the context is created.
+
+See [the API and VASP adapter guide](docs/API.md) and the standalone
+[C example](examples/api/half_c_example.c).
 
 The older focused executables remain available during the transition. For
 example:

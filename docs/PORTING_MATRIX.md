@@ -24,6 +24,8 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | Finite-difference force oracle | `total_energy.py` | `half_cli.F90` | done on CPU/CUDA; Si parity within 2.3e-9 eV/Angstrom and 45x faster than HAPPY in the validated case |
 | `vaspwave.h5` output | `vaspwave.py` | `half_vaspwave.F90`, `half_hdf5_bridge.c` | done for EVD bands/energy; VASP FFT coefficient order, float32 complex packing and charge round trip validated |
 | MPI k-point distribution | n/a | `half_parallel.F90`, `half_cli.F90` | done for CPU bands, energy and finite-difference forces; cyclic distribution, rank-0 output and collective reconstruction; 3.903x on 4 ranks for the 36-k-point HfO2 case |
+| HAPPY-style CLI artifacts | `happy-bands`, `happy-energy` | `half_cli.F90`, `half_artifacts.F90` | done; bands JSON/CSV/NPZ/PNG and energy JSON/NPZ, including gap and overlap diagnostics |
+| Reusable application API | n/a | `half_library.F90`, `half_c_api.F90`, `include/half.h` | done; ABI v1 opaque contexts, C/Fortran bindings, CPU H/S/apply/solve and fully device-resident CUDA solve, CMake/pkg-config exports; CUDA device-pointer apply is an additive future extension |
 
 ## Ordered delivery gates
 

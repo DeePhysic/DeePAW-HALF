@@ -300,8 +300,10 @@ provide the fully device-resident direct solve in ABI v1.  Installed CMake
 clients link `HALF::half`; pkg-config clients use `half.pc`.  CPU/CUDA and
 EVD/EVJ are selected when the context is created.
 
-See [the API and VASP adapter guide](docs/API.md) and the standalone
-[C example](examples/api/half_c_example.c).
+See [the API guide](docs/API.md), the
+[tested VASP 6.6.0 integration](docs/VASP_INTEGRATION.md), the standalone
+[C example](examples/api/half_c_example.c), and the original
+[VASP-side adapter module](examples/vasp/half_vasp_init.F).
 
 The older focused executables remain available during the transition. For
 example:

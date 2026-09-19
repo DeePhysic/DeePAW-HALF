@@ -78,6 +78,17 @@ int half_solve_kpoint(half_handle handle, const double kpoint[3], int nbands,
                       int64_t ld, double *overlap_min, double *overlap_max,
                       char *error, int error_capacity);
 
+/* Solve and return eigenvectors in a host application's G-vector order.
+ * host_gvec is packed as host_gvec[3*i + axis].  The host and HALF bases
+ * must contain exactly the same G vectors; ordering may differ. */
+int half_solve_kpoint_mapped(half_handle handle, const double kpoint[3],
+                            int nbands, int64_t host_npw,
+                            const int32_t *host_gvec,
+                            double *eigenvalues_eV,
+                            double _Complex *eigenvectors, int64_t ld,
+                            double *overlap_min, double *overlap_max,
+                            char *error, int error_capacity);
+
 #ifdef __cplusplus
 }
 #endif

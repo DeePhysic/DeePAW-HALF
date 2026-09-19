@@ -1,0 +1,46 @@
+{
+  "date": "2026-09-19",
+  "host": "hpc.icqms.group:2222",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+  "driver": "595.84",
+  "vasp": "6.6.0 full-complex std build",
+  "half_backend": "CUDA",
+  "cuda_compile_toolkit": "13.2 (NVHPC 26.5 bundled)",
+  "system": "HfO2, 12 atoms, Gamma point",
+  "encut_eV": 520,
+  "density_grid": [54, 54, 54],
+  "plane_waves": 3407,
+  "bands": 56,
+  "scf_steps": 1,
+  "half_single_rank": {
+    "mpi_ranks": 1,
+    "ncore": 1,
+    "wall_seconds_external": 4.90,
+    "vasp_elapsed_seconds": 4.050,
+    "first_davidson_rms": 0.000281,
+    "electron_count": 88.0000237,
+    "sad_smooth_density_fallback": false
+  },
+  "half_mpi2": {
+    "mpi_ranks": 2,
+    "ncore": 2,
+    "wall_seconds_external": 4.66,
+    "vasp_elapsed_seconds": 3.817,
+    "first_davidson_rms": 0.000281,
+    "electron_count": 88.0000237,
+    "sad_smooth_density_fallback": false,
+    "energy_matches_single_rank": true
+  },
+  "native_sad_baseline": {
+    "mpi_ranks": 1,
+    "wall_seconds_external": 2.63,
+    "vasp_elapsed_seconds": 1.810,
+    "first_davidson_rms": 158.0
+  },
+  "notes": [
+    "DeepAW supplies the smooth 54^3 density but no VASP PAW onsite occupancy block.",
+    "The integration preserves the DeepAW smooth density and retains VASP's initialized atomic PAW onsite matrix.",
+    "The HALF solve is a one-time startup cost; this one-step test is not an SCF time-to-solution benchmark.",
+    "All remote files are under /data/limusen/half-vasp-api-check."
+  ]
+}

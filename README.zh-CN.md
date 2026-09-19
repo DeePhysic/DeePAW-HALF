@@ -216,8 +216,10 @@ HAPPY 风格 NPZ，后者包含 k 点、权重、本征值、占据数和力。
 `HALF::half`，也可使用 `half.pc`。
 
 完整生命周期、数据布局和 VASP adapter 方案见
-[中文 API 指南](docs/API.zh-CN.md)，独立调用示例见
-[C 示例](examples/api/half_c_example.c)。
+[中文 API 指南](docs/API.zh-CN.md)与
+[VASP 6.6.0 接入实测](docs/VASP_INTEGRATION.zh-CN.md)。独立调用示例见
+[C 示例](examples/api/half_c_example.c)，VASP 侧桥接模块见
+[`examples/vasp/half_vasp_init.F`](examples/vasp/half_vasp_init.F)。
 
 ## HfO2 大矩阵速度
 

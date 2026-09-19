@@ -54,6 +54,7 @@ def test_stable_library_api_and_cli_artifacts_are_exposed():
     assert "half_assemble_hs" in header
     assert "half_apply_hs" in header
     assert "half_solve_kpoint" in header
+    assert "half_solve_kpoint_mapped" in header
     assert "EXPORT_NAME half" in cmake
     assert "HALFConfig.cmake" in cmake
     assert "write_bands_artifacts" in cli

@@ -89,5 +89,15 @@ module half_api
       type(c_ptr),value::eigenvectors
       character(c_char),intent(out)::error(*)
     end function
+    integer(c_int) function half_solve_kpoint_mapped(handle,kpoint,nbands,host_npw,host_gvec,eigenvalues,eigenvectors,ld,smin,smax,error,error_capacity)bind(C)
+      import::c_char,c_double,c_int,c_int32_t,c_int64_t,c_ptr
+      integer(c_int64_t),value::handle,host_npw,ld
+      integer(c_int),value::nbands,error_capacity
+      real(c_double),intent(in)::kpoint(3)
+      integer(c_int32_t),intent(in)::host_gvec(*)
+      real(c_double),intent(out)::eigenvalues(*),smin,smax
+      type(c_ptr),value::eigenvectors
+      character(c_char),intent(out)::error(*)
+    end function
   end interface
 end module half_api

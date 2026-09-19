@@ -57,6 +57,9 @@ k 点，先查询 `npw` 与 G 向量映射，只做一次系数顺序转换，�
 
 - 使用 CPU context，在 VASP 的迭代本征求解器中调用 `half_apply_hs()`；或
 - 调用 `half_solve_kpoint()`，直接使用 HALF 的 CPU 或全 GPU 稠密 EVD。
+- 自带平面波排序的宿主程序可调用 `half_solve_kpoint_mapped()` 并传入
+  `(Gx,Gy,Gz)`；HALF 会验证基组完全一致，再按宿主顺序返回系数。VASP 接入见
+  [VASP_INTEGRATION.zh-CN.md](VASP_INTEGRATION.zh-CN.md)。
 
 同一 context 可跨所有 k 点复用。密度、结构、POTCAR、ENCUT、XC 或后端变化时应
 销毁并重建。每个 MPI 进程使用独立 context，k 点分发仍由调用软件负责；同一个

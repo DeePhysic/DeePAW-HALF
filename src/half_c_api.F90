@@ -245,6 +245,84 @@ contains
     half_solve_kpoint=HALF_SUCCESS
   end function
 
+  integer(c_int) function half_solve_kpoint_mapped(handle,kpoint,nbands,host_npw,host_gvec,eigenvalues, &
+      eigenvectors_c,ld,overlap_min,overlap_max,error,error_capacity)bind(C,name='half_solve_kpoint_mapped')
+    integer(c_int64_t),value::handle,host_npw,ld
+    integer(c_int),value::nbands,error_capacity
+    real(c_double),intent(in)::kpoint(3)
+    integer(c_int32_t),intent(in)::host_gvec(*)
+    real(c_double),intent(out)::eigenvalues(*),overlap_min,overlap_max
+    type(c_ptr),value::eigenvectors_c
+    character(c_char),intent(out)::error(*)
+    complex(c_double_complex),pointer::vectors_out(:,:)
+    real(dp),allocatable::values(:)
+    complex(dp),allocatable::vectors(:,:)
+    type(plane_wave_basis_t)::basis
+    integer,allocatable::table(:)
+    character(len=512)::message
+    integer::slot,status,n,table_size,i,j,p,host_i
+    call clear_error(error,error_capacity);slot=context_slot(handle)
+    if(slot==0)then;half_solve_kpoint_mapped=bad_handle(error,error_capacity);return;end if
+    if(nbands<1.or.host_npw<1.or.ld<host_npw.or..not.c_associated(eigenvectors_c))then
+      half_solve_kpoint_mapped=HALF_INVALID_ARGUMENT
+      call export_error('invalid mapped-solve band count, basis size, leading dimension, or output pointer',error,error_capacity)
+      return
+    end if
+    call contexts(slot)%solve_kpoint(real(kpoint,dp),nbands,values,vectors,overlap_min,overlap_max,status,message,basis)
+    if(status/=LIB_SUCCESS)then
+      half_solve_kpoint_mapped=status;call export_error(trim(message),error,error_capacity);return
+    end if
+    n=basis%npw
+    if(host_npw/=n)then
+      half_solve_kpoint_mapped=HALF_INVALID_ARGUMENT
+      call export_error('host and HALF plane-wave bases have different sizes',error,error_capacity);return
+    end if
+    table_size=1
+    do while(table_size<2*n);table_size=table_size*2;end do
+    allocate(table(table_size));table=0
+    do host_i=1,n
+      p=g_hash(host_gvec(3*host_i-2),host_gvec(3*host_i-1),host_gvec(3*host_i),table_size)
+      do while(table(p)/=0)
+        i=table(p)
+        if(host_gvec(3*i-2)==host_gvec(3*host_i-2).and.host_gvec(3*i-1)==host_gvec(3*host_i-1).and. &
+            host_gvec(3*i)==host_gvec(3*host_i))then
+          half_solve_kpoint_mapped=HALF_INVALID_ARGUMENT
+          call export_error('host G-vector list contains a duplicate',error,error_capacity);return
+        end if
+        p=mod(p,table_size)+1
+      end do
+      table(p)=host_i
+    end do
+    call c_f_pointer(eigenvectors_c,vectors_out,[int(ld),nbands]);vectors_out=cmplx(0.0_c_double,0.0_c_double,c_double_complex)
+    do i=1,n
+      p=g_hash(int(basis%gvectors(i,1),c_int32_t),int(basis%gvectors(i,2),c_int32_t), &
+        int(basis%gvectors(i,3),c_int32_t),table_size)
+      host_i=0
+      do while(table(p)/=0)
+        j=table(p)
+        if(host_gvec(3*j-2)==basis%gvectors(i,1).and.host_gvec(3*j-1)==basis%gvectors(i,2).and. &
+            host_gvec(3*j)==basis%gvectors(i,3))then;host_i=j;exit;end if
+        p=mod(p,table_size)+1
+      end do
+      if(host_i==0)then
+        half_solve_kpoint_mapped=HALF_INVALID_ARGUMENT
+        call export_error('host and HALF plane-wave bases contain different G vectors',error,error_capacity);return
+      end if
+      vectors_out(host_i,1:nbands)=vectors(i,1:nbands)
+    end do
+    eigenvalues(:nbands)=values
+    half_solve_kpoint_mapped=HALF_SUCCESS
+  end function
+
+  integer function g_hash(gx,gy,gz,table_size)result(position)
+    integer(c_int32_t),intent(in)::gx,gy,gz
+    integer,intent(in)::table_size
+    integer(c_int64_t)::value
+    value=int(gx,c_int64_t)*73856093_c_int64_t+int(gy,c_int64_t)*19349663_c_int64_t+ &
+      int(gz,c_int64_t)*83492791_c_int64_t
+    position=int(modulo(value,int(table_size,c_int64_t)))+1
+  end function
+
   integer function context_slot(handle)result(slot)
     integer(c_int64_t),intent(in)::handle
     integer(c_int64_t)::g

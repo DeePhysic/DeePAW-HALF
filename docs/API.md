@@ -65,6 +65,10 @@ G-vector map, translates VASP's coefficient ordering once, and then either:
 - uses a CPU context and calls `half_apply_hs()` inside an iterative VASP
   eigensolver; or
 - calls `half_solve_kpoint()` to use HALF's CPU or fully GPU-resident dense EVD.
+- Host codes with their own plane-wave ordering can call
+  `half_solve_kpoint_mapped()` with `(Gx,Gy,Gz)` triples. HALF validates exact
+  basis equality and returns coefficients in the requested order. See
+  [VASP_INTEGRATION.md](VASP_INTEGRATION.md).
 
 The context is reusable across all k points.  Destroy it when the density,
 structure, POTCAR, ENCUT, XC, or backend changes.  MPI processes should own

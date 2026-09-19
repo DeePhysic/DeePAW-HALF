@@ -5,6 +5,7 @@ module half_cuda_assembly
   use half_constants,only:pi
   use half_types, only: plane_wave_basis_t,crystal_t,potcar_t
   use half_paw, only: paw_species_t
+  use half_cuda_uspp, only: build_uspp_dij_cuda_species
   implicit none
   private
   public :: assemble_dense_gamma_cuda,assemble_dense_gamma_cuda_device,assemble_dense_gamma_cuda_full
@@ -147,7 +148,7 @@ contains
         pj_index=(j-1)*natoms*nlm+(b-1)*natoms+iat;pj=conjg(projectors(pj_index))
         do a=1,nlm
           pi_index=(i-1)*natoms*nlm+(a-1)*natoms+iat;pi=projectors(pi_index)
-          zh=zh+pi*dij((b-1)*nlm+a)*pj;zs=zs+pi*qij((b-1)*nlm+a)*pj
+          zh=zh+pi*dij((b-1)*natoms*nlm+(a-1)*natoms+iat)*pj;zs=zs+pi*qij((b-1)*nlm+a)*pj
         end do
       end do
       matrix_index=(j-1)*n+i;h(matrix_index)=h(matrix_index)+zh;s(matrix_index)=s(matrix_index)+zs
@@ -221,20 +222,22 @@ contains
     ierr=cudaDeviceSynchronize(); if(ierr/=cudaSuccess)error stop 'HALF: CUDA matrix assembly failed'
   end subroutine
 
-  subroutine assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,h,s)
+  subroutine assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,h,s,use_uspp)
     real(dp),device,intent(in)::dveff(:)
     type(plane_wave_basis_t),intent(in)::basis
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
+    logical,intent(in),optional::use_uspp
     complex(dp),device,allocatable,intent(out)::h(:,:),s(:,:)
     complex(dp),device,allocatable::dvin(:),dvg(:),dprojectors(:,:,:)
     integer,device,allocatable::dgvectors(:,:)
-    real(dp),device,allocatable::dkinetic(:),dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:),ddij(:,:),dqij(:,:)
+    real(dp),device,allocatable::dkinetic(:),dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:),ddij(:,:,:),dqij(:,:)
     real(dp),allocatable::positions(:,:),m2(:),dij(:,:),qij(:,:)
     type(dim3)::threads,blocks
     integer::n,ngrid,plan,status,it,iat,ich,jch,m,mj,l,ilm,jlm,nlm,nrad,ion0,ierr
+    logical::with_uspp
     complex(dp)::ilfac
-    n=int(basis%npw);ngrid=size(dveff)
+    n=int(basis%npw);ngrid=size(dveff);with_uspp=.false.;if(present(use_uspp))with_uspp=use_uspp
     allocate(dvin(ngrid),dvg(ngrid),dgvectors(n,3),dkinetic(n),h(n,n),s(n,n))
     call real_to_complex_kernel<<<(ngrid+255)/256,256>>>(dveff,dvin,ngrid)
     dgvectors=basis%gvectors;dkinetic=basis%kinetic
@@ -262,9 +265,15 @@ contains
           end do
         end do
       end do
-      allocate(ddij(nlm,nlm),dqij(nlm,nlm),dprojectors(crystal%counts(it),nlm,n), &
+      allocate(dqij(nlm,nlm),dprojectors(crystal%counts(it),nlm,n), &
         positions(crystal%counts(it),3),dpositions(crystal%counts(it),3))
-      ddij=dij;dqij=qij
+      if(with_uspp)then
+        call build_uspp_dij_cuda_species(dveff,basis%shape,potcars(it),crystal,it,ddij)
+      else
+        allocate(ddij(crystal%counts(it),nlm,nlm))
+        do iat=1,crystal%counts(it);ddij(iat,:,:)=dij;end do
+      end if
+      dqij=qij
       do iat=1,crystal%counts(it);positions(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do
       dpositions=positions;ilm=0
       do ich=1,potcars(it)%channels

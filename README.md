@@ -17,7 +17,7 @@ the port is developed.
 
 ## Current milestone
 
-Version 0.4 provides a numerically closed Si Gamma fixed-density path:
+Version 0.4 provides a numerically closed Gamma fixed-density path on CUDA:
 
 - VASP CHGCAR structure and smooth-grid reader that stops after exactly
   `NGX*NGY*NGZ` values;
@@ -27,19 +27,24 @@ Version 0.4 provides a numerically closed Si Gamma fixed-density path:
 - multi-dataset text POTCAR parsing;
 - complete-grid Hartree, ionic, NLCC, LDA and PBE potentials on CPU and GPU;
 - PAW reciprocal projectors and DION/QPAW overlap matrices on CPU and GPU;
+- atom-dependent MIMIC_US QDEP matrices on GPU, including periodic cubic
+  B-spline sampling, two-Bessel compensation functions and Gaunt transforms;
 - device-resident cuFFT potential construction, H/S assembly, Hermitian
   cleanup and cuSOLVER eigensolution without full-matrix host transfers;
 - dense generalized H/S solvers using MKL on CPU and cuSOLVER on GPU;
+- CUDA Gamma CLI solver selection: `--solver evd` (default divide-and-conquer)
+  or `--solver evj` (Jacobi, through a device-pointer CUDA C++ bridge);
 - independent CPU Fortran and CUDA Fortran backends;
 - CUDA 12.4 and CUDA 13.0 build presets;
 - a correctness-checked backend benchmark;
 - a unified `half` CLI, HAPPY-compatible command aliases, and parity-oriented
   tests.
 
-The Si Gamma/DION path matches HAPPY to about `1.6e-11 eV`. Arbitrary k
-points, potential-dependent MIMIC_US D, energy/forces and `vaspwave.h5` output
-are tracked in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md); HALF is not
-yet a complete replacement for every HAPPY workflow.
+The CUDA MIMIC_US path reproduces HAPPY for both Si (725 plane waves) and HfO2
+(3407 plane waves): the tested eigenvalues agree to about `1e-11 eV` or better.
+Arbitrary k points, CPU QDEP, energy/forces and `vaspwave.h5` output are tracked
+in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md); HALF is not yet a
+complete replacement for every HAPPY workflow.
 
 ## Numerical model, derived step by step
 
@@ -49,18 +54,25 @@ HAPPY's target model, and HALF's long-term porting target, is a
 wavefunction is expanded in plane waves `|k+G>` and the following generalized
 Hermitian problem is solved:
 
-```text
-H(k) c_n = epsilon_n S(k) c_n
-```
+$$
+H(\mathbf{k})\,\mathbf{c}_n
+=\varepsilon_n S(\mathbf{k})\,\mathbf{c}_n .
+$$
 
 For the full HAPPY `MIMIC_US` operator, the dense matrices have the form
 
-```text
-H_GG' = |k+G|^2/2 * delta_GG' + Veff(G-G')
-        + sum_(I,i,j) beta_i^I(G) D_ij^I beta_j^I*(G')
+$$
+H_{\mathbf G\mathbf G'}(\mathbf k)=
+\frac{\hbar^2|\mathbf k+\mathbf G|^2}{2m_e}\delta_{\mathbf G\mathbf G'}
++V_{\mathrm{eff}}(\mathbf G-\mathbf G')
++\sum_{Iij}\beta_i^I(\mathbf G)D_{ij}^I\beta_j^{I*}(\mathbf G'),
+$$
 
-S_GG' = delta_GG' + sum_(I,i,j) beta_i^I(G) Q_ij^I beta_j^I*(G')
-```
+$$
+S_{\mathbf G\mathbf G'}(\mathbf k)=
+\delta_{\mathbf G\mathbf G'}
++\sum_{Iij}\beta_i^I(\mathbf G)Q_{ij}^I\beta_j^{I*}(\mathbf G').
+$$
 
 The first term is kinetic energy. `Veff(G-G')` is the Fourier coefficient of
 the fixed-density local effective potential. The last terms are the PAW/USPP
@@ -69,11 +81,19 @@ the overlap, and `D` is the onsite Hamiltonian matrix.
 
 The potential is derived from the fixed smooth density as
 
-```text
-Veff(r) = Vion_local(r) + VH[rho~](r) + Vxc[rho~ + rho_core](r)
-VH(G)   = 4*pi*e^2*rho~_G/(Omega*|G|^2),  G != 0
-D_ij^I = DION_ij^I + integral Veff(r) QDEP_ij^I(r) dr
-```
+$$
+V_{\mathrm{eff}}(\mathbf r)=V_{\mathrm{ion}}^{\mathrm{local}}(\mathbf r)
++V_H[\widetilde\rho](\mathbf r)
++V_{\mathrm{xc}}[\widetilde\rho+\rho_{\mathrm{core}}](\mathbf r),
+$$
+
+$$
+V_H(\mathbf G)=\frac{4\pi e^2\widetilde\rho_{\mathbf G}}
+{\Omega|\mathbf G|^2}\quad(\mathbf G\ne0),
+\qquad
+D_{ij}^I=D_{ij}^{I,\mathrm{ION}}
++\int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r-\mathbf R_I)\,d^3r.
+$$
 
 Here `rho~_G` is HAPPY's electron-number-normalized density coefficient,
 `Omega` is the cell volume, and `e^2` is the electrostatic conversion factor
@@ -84,18 +104,15 @@ MIMIC_US contribution. `VH(G=0)` is a potential gauge and is set to zero.
 
 ### What HALF implements today
 
-HALF 0.4 implements the **DION subset** of the equation above:
-
-```text
-D_ij^I = DION_ij^I
-DeltaD_ij^I = integral Veff(r) QDEP_ij^I(r) dr   # not implemented
-```
-
-Consequently, the completed numerical claim is Si Gamma/DION parity with
-HAPPY, not full MIMIC_US parity. The CLI rejects `--uspp-dij`; the
-potential-dependent `QDEP`/`DeltaD` construction, matrix-free operator,
-arbitrary-k bands, energy and forces remain planned. The authoritative status
-is [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
+On CUDA, HALF now evaluates the full Gamma-point MIMIC_US expression above.
+`--uspp-dij` enables the potential-dependent term. The effective potential is
+prefiltered for periodic cubic B-spline interpolation on the GPU, sampled on
+concentric angular grids around every atom, projected onto real spherical
+harmonics, radially integrated against VASP's two-Bessel compensation
+functions, and contracted with the AE-minus-PS multipole moments. The CPU path
+currently remains DION-only; matrix-free application, arbitrary-k bands,
+energy and forces remain planned. The authoritative status is
+[`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
 For the implemented DION problem, `S` is positive definite and the generalized
 problem can be reduced through `S = L L^H` to `L^-1 H L^-H y = epsilon y`, then
@@ -109,6 +126,7 @@ CHGCAR + POTCAR
   -> select the cutoff plane-wave basis
   -> FFT construction of Veff (Hartree + local ionic + XC/NLCC)
   -> reciprocal PAW projectors and DION/QPAW matrices
+  -> optional GPU QDEP construction and atom-dependent D = DION + DeltaD
   -> dense H and S assembly
   -> generalized Hermitian EVD (MKL on CPU, cuSOLVER on GPU)
   -> eigenvalues and a JSON validation report
@@ -118,7 +136,7 @@ The CUDA path keeps FFT potential construction, projector work, dense matrix
 assembly, and eigensolution resident on the device. It avoids transfers of the
 full complex H/S matrices; the cubic dense eigensolve consequently dominates
 as the plane-wave count grows. This device-resident path does not change the
-current DION-only scientific scope.
+Gamma-point scientific scope.
 
 ## Large-matrix performance
 
@@ -128,17 +146,15 @@ BLAS/OpenMP thread controls were set to one.
 
 | implementation | resource | wall time |
 | --- | --- | ---: |
-| HALF CUDA | RTX PRO 6000 | 1.60 s |
-| HALF CUDA | RTX 4090 | 1.795 s |
-| HALF CPU Fortran | one logical CPU | 43.94 s |
+| HALF CUDA (`--uspp-dij`) | RTX PRO 6000 | 1.696 s median |
 | HAPPY Python (`--uspp-dij`) | one logical CPU | 64.23 s |
 
-Thus HALF CPU is 1.46x faster than HAPPY Python on one core. The RTX 4090 and
-RTX PRO 6000 are respectively 24.47x and 27.41x faster than the one-core HALF
-CPU path. The input, cutoff and basis size are matched, but this is not a
-numerically equivalent HfO2 comparison: HALF uses DION while the timed HAPPY
-command used `--uspp-dij`. HfO2 numerical parity remains an independent
-validation gate. Raw measurements and exact environment controls are in
+The numerically equivalent CUDA result is `37.87x` faster than the one-core
+HAPPY run. Its five fresh-process samples have a `1.696 s` median, split into
+`0.258 s` potential construction, `0.349 s` H/S assembly including QDEP, and
+`1.061 s` cuSOLVER time. The earlier CPU/4090 DION-only measurements remain
+historical data and are not presented as MIMIC_US speedups. Raw measurements
+and exact environment controls are in
 [`docs/validation/hfo2_single_core_benchmark.json`](docs/validation/hfo2_single_core_benchmark.json).
 
 ## Requirements
@@ -192,7 +208,7 @@ CPU/CUDA backend selection:
 
 # Reconstruct and validate the Gamma eigenspectrum; a JSON report is written.
 ./build/cuda12-cc89-release/half gamma CHGCAR.smooth POTCAR \
-  --encut 400 --bands 8 --xc pbe --backend cuda \
+  --encut 400 --bands 8 --xc pbe --backend cuda --uspp-dij \
   --reference-eigenval EIGENVAL --output gamma_validation.json
 
 # Inspect parsed POTCAR or PAW data.

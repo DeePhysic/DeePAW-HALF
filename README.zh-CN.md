@@ -9,9 +9,8 @@
 结构 -> DeepAW -> 平滑 CHGCAR -> HALF -> H(k), S(k), 能带/本征值
 ```
 
-HAPPY 是移植过程中的数值 oracle。当前完整验证通过的是 Si 的 Gamma/DION
-固定密度路径；HfO2 的大矩阵性能已经记录，但其与 HAPPY 的逐本征值一致性仍是
-独立验证门槛。
+HAPPY 是移植过程中的数值 oracle。当前 CUDA Gamma/MIMIC_US 固定密度路径已在
+Si 与 HfO2 上通过逐本征值验证；任意 k 点、CPU QDEP、总能量与力仍在移植中。
 
 ## 数值模型：从固定密度到本征值
 
@@ -19,18 +18,24 @@ HAPPY 的目标模型、也是 HALF 的长期移植目标，是**固定密度**�
 `CHGCAR` 中的平滑价电子密度 `rho~(r)`，不做自洽场（SCF）迭代。在给定 ENCUT
 下，波函数用平面波 `|k+G>` 展开，并求解：
 
-```text
-H(k) c_n = epsilon_n S(k) c_n
-```
+$$
+H(\mathbf{k})\,\mathbf{c}_n
+=\varepsilon_n S(\mathbf{k})\,\mathbf{c}_n .
+$$
 
 对于完整的 HAPPY `MIMIC_US` 算符，稠密矩阵为：
 
-```text
-H_GG' = |k+G|^2/2 * delta_GG' + Veff(G-G')
-        + sum_(I,i,j) beta_i^I(G) D_ij^I beta_j^I*(G')
+$$
+H_{\mathbf G\mathbf G'}(\mathbf k)=
+\frac{\hbar^2|\mathbf k+\mathbf G|^2}{2m_e}\delta_{\mathbf G\mathbf G'}
++V_{\mathrm{eff}}(\mathbf G-\mathbf G')
++\sum_{Iij}\beta_i^I(\mathbf G)D_{ij}^I\beta_j^{I*}(\mathbf G'),
+$$
 
-S_GG' = delta_GG' + sum_(I,i,j) beta_i^I(G) Q_ij^I beta_j^I*(G')
-```
+$$
+S_{\mathbf G\mathbf G'}(\mathbf k)=\delta_{\mathbf G\mathbf G'}
++\sum_{Iij}\beta_i^I(\mathbf G)Q_{ij}^I\beta_j^{I*}(\mathbf G').
+$$
 
 第一项是动能；`Veff(G-G')` 是固定密度有效局域势的傅里叶系数。最后两项是
 PAW/USPP 增强：`beta` 是倒空间 PAW 投影子，`Q` 修正重叠矩阵，`D` 是 onsite
@@ -38,11 +43,19 @@ PAW/USPP 增强：`beta` 是倒空间 PAW 投影子，`Q` 修正重叠矩阵，`
 
 有效势由固定平滑密度推出：
 
-```text
-Veff(r) = Vion_local(r) + VH[rho~](r) + Vxc[rho~ + rho_core](r)
-VH(G)   = 4*pi*e^2*rho~_G/(Omega*|G|^2),  G != 0
-D_ij^I = DION_ij^I + integral Veff(r) QDEP_ij^I(r) dr
-```
+$$
+V_{\mathrm{eff}}(\mathbf r)=V_{\mathrm{ion}}^{\mathrm{local}}(\mathbf r)
++V_H[\widetilde\rho](\mathbf r)
++V_{\mathrm{xc}}[\widetilde\rho+\rho_{\mathrm{core}}](\mathbf r),
+$$
+
+$$
+V_H(\mathbf G)=\frac{4\pi e^2\widetilde\rho_{\mathbf G}}
+{\Omega|\mathbf G|^2}\quad(\mathbf G\ne0),
+\qquad
+D_{ij}^I=D_{ij}^{I,\mathrm{ION}}
++\int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r-\mathbf R_I)\,d^3r.
+$$
 
 这里 `rho~_G` 是 HAPPY 的电子数归一化密度系数，`Omega` 是胞体积，`e^2` 是
 eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用于 NLCC 的
@@ -51,16 +64,11 @@ eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用�
 
 ### HALF 当前实际实现的范围
 
-HALF 0.4 当前实现的只是上述方程的 **DION 子集**：
-
-```text
-D_ij^I = DION_ij^I
-DeltaD_ij^I = integral Veff(r) QDEP_ij^I(r) dr   # 尚未实现
-```
-
-因此，已完成的数值结论是 Si Gamma/DION 与 HAPPY 一致，而不是完整 MIMIC_US
-一致。CLI 会拒绝 `--uspp-dij`；势依赖的 `QDEP`/`DeltaD` 构造、矩阵自由算符、
-任意 k 点能带、能量和力仍是计划项。唯一权威的功能状态见
+CUDA 路径现已实现上式完整的 Gamma 点 MIMIC_US 项；`--uspp-dij` 用于启用势依赖
+校正。GPU 先对周期有效势进行三次 B 样条预滤波，再围绕每个原子在球面网格取样，
+投影到实球谐函数，并用 VASP 的双球贝塞尔补偿函数完成径向积分，最后与 AE−PS
+多极矩收缩得到每个原子的 $D_{ij}^I$。CPU 路径暂时仍为 DION-only；矩阵自由
+算符、任意 k 点、能量和力仍是计划项。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 
 对已实现的 DION 问题，`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，化为
@@ -75,6 +83,7 @@ CHGCAR + POTCAR
   -> 按 ENCUT 选择 Gamma 平面波基
   -> 以 FFT 构造 Veff：Hartree、局域离子势、XC 与 NLCC
   -> 生成倒空间 PAW 投影子，构造 DION/QPAW 矩阵
+  -> 可选：GPU 构造 QDEP，得到逐原子的 D = DION + DeltaD
   -> 组装稠密复数 H、S 矩阵并进行厄米化
   -> 广义厄米对角化：CPU 使用 MKL，GPU 使用 cuSOLVER
   -> 输出本征值及 JSON 验证报告
@@ -82,7 +91,7 @@ CHGCAR + POTCAR
 
 CUDA 路径将 FFT 势构造、投影子计算、H/S 组装和本征值求解全部保留在设备端，
 避免传输完整的复数 H/S 稠密矩阵。平面波数增加后，三次标度的稠密广义本征
-求解会成为主要耗时；但这种设备驻留优化不改变当前仅 DION 的科学范围。主要
+求解会成为主要耗时。主要
 源码模块为：
 
 | 模块 | 职责 |
@@ -127,7 +136,7 @@ half inspect CHGCAR.smooth --encut 400
 # Gamma 固定密度重建；写出 JSON 报告
 half gamma CHGCAR.smooth POTCAR \
   --encut 400 --bands 8 --xc pbe --backend cuda \
-  --reference-eigenval EIGENVAL --output gamma_validation.json
+  --uspp-dij --reference-eigenval EIGENVAL --output gamma_validation.json
 
 # 显式使用 CPU 后端
 half gamma CHGCAR.smooth POTCAR \
@@ -146,23 +155,20 @@ Gamma 点，对应 3407×3407 的 complex128 广义本征问题。CPU 测试将�
 
 | 实现 | 资源 | wall time |
 | --- | --- | ---: |
-| HALF CUDA | RTX PRO 6000 | 1.60 s |
-| HALF CUDA | RTX 4090 | 1.795 s |
-| HALF CPU Fortran | 单逻辑核 | 43.94 s |
+| HALF CUDA（`--uspp-dij`） | RTX PRO 6000 | 1.696 s 中位数 |
 | HAPPY Python（`--uspp-dij`） | 单逻辑核 | 64.23 s |
 
-HALF CPU 单核比 HAPPY Python 快 **1.46×**；RTX 4090 与 RTX PRO 6000 相比
-单核 HALF CPU 分别快 **24.47×** 与 **27.41×**。同一矩阵规模下，PRO 6000
-约比 4090 快 **12%**。这里的输入、截断与基组规模一致，但并非数值等价的
-HfO2 对比：HALF 使用 DION，而计时的 HAPPY 使用了 `--uspp-dij`。HfO2 的
-数值一致性仍是独立验证门槛。完整原始时间、环境和约束见
+这组数值等价的 CUDA 结果比单核 HAPPY 快 **37.87×**。五次新进程运行的
+中位数为 `1.696 s`，其中有效势 `0.258 s`、包含 QDEP 的 H/S 组装 `0.349 s`、
+cuSOLVER `1.061 s`。更早的 CPU/4090 数据是 DION-only 历史记录，不再作为
+MIMIC_US 加速比引用。完整原始时间、环境和约束见
 [`docs/validation/hfo2_single_core_benchmark.json`](docs/validation/hfo2_single_core_benchmark.json)。
 
 ## 验证状态
 
-- Si Gamma/DION：与 HAPPY 本征值最大偏差约 `1.6e-11 eV`。
-- HfO2：已用于大矩阵性能测试，但尚未完成与 HAPPY 的逐带数值验收。
-- 任意 k 点、势依赖 MIMIC_US `D`、总能量/力与 `vaspwave.h5` 输出仍在移植中。
+- Si Gamma/MIMIC_US：与 HAPPY 的前 8 条本征值最大偏差约 `3e-12 eV`。
+- HfO2 Gamma/MIMIC_US：60 条本征值最大偏差约 `7.9e-12 eV`。
+- 任意 k 点、CPU QDEP、总能量/力与 `vaspwave.h5` 输出仍在移植中。
 
 详细验证记录见 [`docs/VALIDATION.md`](docs/VALIDATION.md)，功能状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。

@@ -1,0 +1,266 @@
+module half_cuda_uspp
+  use cudafor
+  use cufft
+  use half_kinds, only: dp
+  use half_constants, only: pi
+  use half_types, only: potcar_t, crystal_t
+  use half_math, only: inverse3
+  implicit none
+  private
+  public :: build_uspp_dij_cuda_species
+contains
+  attributes(global) subroutine real_to_complex_uspp(input,output,n)
+    real(dp),device,intent(in)::input(*)
+    complex(dp),device,intent(out)::output(*)
+    integer,value::n
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x;if(i<=n)output(i)=cmplx(input(i),0.0_dp,dp)
+  end subroutine
+
+  attributes(global) subroutine spline_prefilter_kernel(freq,n1,n2,n3,n)
+    complex(dp),device,intent(inout)::freq(*)
+    integer,value::n1,n2,n3,n
+    integer::i,t,i1,i2,i3
+    real(dp)::b1,b2,b3
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      t=i-1;i3=mod(t,n3);t=t/n3;i2=mod(t,n2);i1=t/n2
+      b1=(2.0_dp+cos(2.0_dp*pi*real(i1,dp)/real(n1,dp)))/3.0_dp
+      b2=(2.0_dp+cos(2.0_dp*pi*real(i2,dp)/real(n2,dp)))/3.0_dp
+      b3=(2.0_dp+cos(2.0_dp*pi*real(i3,dp)/real(n3,dp)))/3.0_dp
+      freq(i)=freq(i)/(b1*b2*b3)
+    end if
+  end subroutine
+
+  attributes(global) subroutine scale_complex_kernel(a,scale,n)
+    complex(dp),device,intent(inout)::a(*)
+    real(dp),value::scale
+    integer,value::n
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x;if(i<=n)a(i)=a(i)*scale
+  end subroutine
+
+  attributes(device) subroutine cubic_weights(t,w)
+    real(dp),value::t
+    real(dp)::w(4)
+    w(1)=(1.0_dp-t)**3/6.0_dp
+    w(2)=(3.0_dp*t**3-6.0_dp*t*t+4.0_dp)/6.0_dp
+    w(3)=(-3.0_dp*t**3+3.0_dp*t*t+3.0_dp*t+1.0_dp)/6.0_dp
+    w(4)=t**3/6.0_dp
+  end subroutine
+
+  attributes(global) subroutine sample_spheres_kernel(samples,coef,rgrid,dirs,positions,invlat, &
+      nrad,nang,natoms,n1,n2,n3)
+    real(dp),device,intent(out)::samples(*)
+    complex(dp),device,intent(in)::coef(*)
+    real(dp),device,intent(in)::rgrid(*),dirs(*),positions(*),invlat(*)
+    integer,value::nrad,nang,natoms,n1,n2,n3
+    integer::linear,ip,ir,iat,a,b,c,ia,ib,ic,ix,iy,iz,idx
+    real(dp)::cart(3),frac(3),coord(3),w1(4),w2(4),w3(4),value
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear>natoms*nrad*nang)return
+    ip=mod(linear-1,nang)+1;ir=mod((linear-1)/nang,nrad)+1;iat=(linear-1)/(nang*nrad)+1
+    do a=1,3;cart(a)=positions(iat+(a-1)*natoms)+rgrid(ir)*dirs(ip+(a-1)*nang);end do
+    do a=1,3
+      frac(a)=0.0_dp;do b=1,3;frac(a)=frac(a)+cart(b)*invlat(b+(a-1)*3);end do
+      frac(a)=frac(a)-floor(frac(a))
+    end do
+    coord(1)=frac(1)*n1;coord(2)=frac(2)*n2;coord(3)=frac(3)*n3
+    ix=floor(coord(1));iy=floor(coord(2));iz=floor(coord(3))
+    call cubic_weights(coord(1)-ix,w1);call cubic_weights(coord(2)-iy,w2);call cubic_weights(coord(3)-iz,w3)
+    value=0.0_dp
+    do a=1,4;ia=modulo(ix+a-2,n1)
+      do b=1,4;ib=modulo(iy+b-2,n2)
+        do c=1,4;ic=modulo(iz+c-2,n3);idx=ia*n2*n3+ib*n3+ic+1
+          value=value+w1(a)*w2(b)*w3(c)*real(coef(idx),dp)
+        end do
+      end do
+    end do
+    samples(linear)=value
+  end subroutine
+
+  attributes(global) subroutine project_vlm_kernel(vlm,samples,yweight,nrad,nang,natoms,naug)
+    real(dp),device,intent(out)::vlm(*)
+    real(dp),device,intent(in)::samples(*),yweight(*)
+    integer,value::nrad,nang,natoms,naug
+    integer::linear,ir,k,iat,ip
+    real(dp)::v
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear>natoms*naug*nrad)return
+    ir=mod(linear-1,nrad)+1;k=mod((linear-1)/nrad,naug)+1;iat=(linear-1)/(nrad*naug)+1;v=0.0_dp
+    do ip=1,nang
+      v=v+samples((iat-1)*nrad*nang+(ir-1)*nang+ip)*yweight((k-1)*nang+ip)
+    end do
+    vlm((iat-1)*naug*nrad+(k-1)*nrad+ir)=v
+  end subroutine
+
+  attributes(global) subroutine radial_v_kernel(radial_v,vlm,gshape,rgrid,rweight,laug,nrad,naug,natoms)
+    real(dp),device,intent(out)::radial_v(*)
+    real(dp),device,intent(in)::vlm(*),gshape(*),rgrid(*),rweight(*)
+    integer,device,intent(in)::laug(*)
+    integer,value::nrad,naug,natoms
+    integer::linear,iat,k,ir,l
+    real(dp)::v,r
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear>natoms*naug)return
+    k=mod(linear-1,naug)+1;iat=(linear-1)/naug+1;l=laug(k);v=0.0_dp
+    do ir=1,nrad;r=rgrid(ir);v=v+rweight(ir)*r*r*gshape(l*nrad+ir)*vlm((iat-1)*naug*nrad+(k-1)*nrad+ir);end do
+    radial_v((iat-1)*naug+k)=v
+  end subroutine
+
+  attributes(global) subroutine finish_dij_kernel(dij_atom,dion,multipole,radial_v,nlm,naug,natoms)
+    real(dp),device,intent(out)::dij_atom(*)
+    real(dp),device,intent(in)::dion(*),multipole(*),radial_v(*)
+    integer,value::nlm,naug,natoms
+    integer::linear,iat,ip,a,b,k,pairs
+    real(dp)::v
+    pairs=nlm*nlm;linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear>natoms*pairs)return
+    ip=mod(linear-1,pairs)+1;iat=(linear-1)/pairs+1;a=mod(ip-1,nlm)+1;b=(ip-1)/nlm+1
+    v=dion((b-1)*nlm+a)
+    do k=1,naug;v=v+multipole((k-1)*pairs+ip)*radial_v((iat-1)*naug+k);end do
+    dij_atom((b-1)*natoms*nlm+(a-1)*natoms+iat)=v
+  end subroutine
+  subroutine build_uspp_dij_cuda_species(dveff,shape,potcar,crystal,itype,ddij_atom)
+    real(dp),device,intent(in)::dveff(:)
+    integer,intent(in)::shape(3),itype
+    type(potcar_t),intent(in)::potcar
+    type(crystal_t),intent(in)::crystal
+    real(dp),device,allocatable,intent(out)::ddij_atom(:,:,:)
+    integer,parameter::ntheta=12,nphi=24
+    integer::nlm,lmax,naug,nrad,ngrid,natoms,pairs,ich,l,m,a,b,k,ir,ion0
+    integer::nang,it,ip,plan,status
+    integer,allocatable::chan(:),lv(:),mv(:)
+    integer,allocatable::laug(:)
+    real(dp),allocatable::multipole(:,:),gshape(:,:),rw(:),pos(:,:),dion_lm(:,:),dirs(:,:),yweight(:,:),invlat(:,:),xg(:),wg(:)
+    real(dp),device,allocatable::dmultipole(:,:),dgshape(:,:),dr(:),drw(:),dpos(:,:),ddion(:,:), &
+      ddirs(:,:),dyweight(:,:),dinv(:,:),dsamples(:),dvlm(:),dradial_v(:)
+    integer,device,allocatable::dlaug(:)
+    complex(dp),device,allocatable::dfreq(:),dcoef(:)
+    real(dp)::root1,root2,c1,c2,m1
+    nlm=0;lmax=0
+    do ich=1,potcar%channels;nlm=nlm+2*potcar%lps(ich)+1;lmax=max(lmax,2*potcar%lps(ich));end do
+    naug=(lmax+1)*(lmax+1);nrad=size(potcar%rgrid);ngrid=size(dveff);natoms=crystal%counts(itype);pairs=nlm*nlm;nang=ntheta*nphi
+    allocate(chan(nlm),lv(nlm),mv(nlm));a=0
+    do ich=1,potcar%channels;do m=-potcar%lps(ich),potcar%lps(ich);a=a+1;chan(a)=ich;lv(a)=potcar%lps(ich);mv(a)=m;end do;end do
+    allocate(rw(nrad),gshape(nrad,lmax+1));call radial_weights(potcar%rgrid,rw)
+    do l=0,lmax
+      call bessel_root(l,1,root1);call bessel_root(l,2,root2)
+      call compensation_coefficients(l,potcar%paw_rmax,root1,root2,potcar%rgrid,rw,c1,c2)
+      do ir=1,nrad
+        if(potcar%rgrid(ir)<=potcar%paw_rmax)then
+          gshape(ir,l+1)=c1*sph_bessel_h(l,root1*potcar%rgrid(ir)/potcar%paw_rmax)+ &
+            c2*sph_bessel_h(l,root2*potcar%rgrid(ir)/potcar%paw_rmax)
+        else;gshape(ir,l+1)=0.0_dp;end if
+      end do
+    end do
+    allocate(multipole(pairs,naug));multipole=0.0_dp
+    do b=1,nlm;do a=1,nlm
+      k=0
+      do l=0,lmax;do m=-l,l;k=k+1
+        if(abs(lv(a)-lv(b))<=l.and.l<=lv(a)+lv(b).and.mod(lv(a)+lv(b)+l,2)==0)then
+          m1=sum(rw*(potcar%wae(:,chan(a))*potcar%wae(:,chan(b))-potcar%wps(:,chan(a))*potcar%wps(:,chan(b)))*potcar%rgrid**l)
+          multipole((b-1)*nlm+a,k)=gaunt_numeric(lv(a),mv(a),lv(b),mv(b),l,m)*m1
+        end if
+      end do;end do
+    end do;end do
+    allocate(laug(naug),dirs(nang,3),yweight(nang,naug),xg(ntheta),wg(ntheta));call gauss_legendre(ntheta,xg,wg)
+    k=0;do l=0,lmax;do m=-l,l;k=k+1;laug(k)=l;end do;end do
+    ip=0
+    do it=1,ntheta;do m=0,nphi-1
+      ip=ip+1;dirs(ip,1)=sqrt(max(0.0_dp,1.0_dp-xg(it)*xg(it)))*cos(2*pi*real(m,dp)/real(nphi,dp))
+      dirs(ip,2)=sqrt(max(0.0_dp,1.0_dp-xg(it)*xg(it)))*sin(2*pi*real(m,dp)/real(nphi,dp));dirs(ip,3)=xg(it)
+      k=0;do l=0,lmax;do b=-l,l;k=k+1;yweight(ip,k)=ylm_h(l,b,xg(it),2*pi*real(m,dp)/real(nphi,dp))*wg(it)*2*pi/real(nphi,dp);end do;end do
+    end do;end do
+    ion0=sum(crystal%counts(:itype-1));allocate(pos(natoms,3));do a=1,natoms;pos(a,:)=matmul(crystal%positions(ion0+a,:),crystal%lattice);end do
+    allocate(dion_lm(nlm,nlm));dion_lm=0.0_dp
+    do b=1,nlm;do a=1,nlm;if(lv(a)==lv(b).and.mv(a)==mv(b))dion_lm(a,b)=potcar%dion(chan(a),chan(b));end do;end do
+    allocate(invlat(3,3));invlat=inverse3(crystal%lattice)
+    allocate(dmultipole(pairs,naug),dgshape(nrad,lmax+1),dr(nrad),drw(nrad),dpos(natoms,3),ddion(nlm,nlm), &
+      ddirs(nang,3),dyweight(nang,naug),dinv(3,3),dlaug(naug),dsamples(natoms*nrad*nang), &
+      dvlm(natoms*naug*nrad),dradial_v(natoms*naug),dfreq(ngrid),dcoef(ngrid),ddij_atom(natoms,nlm,nlm))
+    dmultipole=multipole;dgshape=gshape;dr=potcar%rgrid;drw=rw;dpos=pos;ddion=dion_lm
+    ddirs=dirs;dyweight=yweight;dinv=invlat;dlaug=laug
+    call real_to_complex_uspp<<<(ngrid+255)/256,256>>>(dveff,dfreq,ngrid)
+    status=cufftPlan3d(plan,shape(1),shape(2),shape(3),CUFFT_Z2Z);if(status/=CUFFT_SUCCESS)error stop 'HALF: QDEP cuFFT plan failed'
+    status=cufftExecZ2Z(plan,dfreq,dcoef,CUFFT_FORWARD);if(status/=CUFFT_SUCCESS)error stop 'HALF: QDEP spline forward FFT failed'
+    call spline_prefilter_kernel<<<(ngrid+255)/256,256>>>(dcoef,shape(1),shape(2),shape(3),ngrid)
+    status=cufftExecZ2Z(plan,dcoef,dfreq,CUFFT_INVERSE);if(status/=CUFFT_SUCCESS)error stop 'HALF: QDEP spline inverse FFT failed'
+    call scale_complex_kernel<<<(ngrid+255)/256,256>>>(dfreq,1.0_dp/real(ngrid,dp),ngrid);status=cufftDestroy(plan)
+    call sample_spheres_kernel<<<(natoms*nrad*nang+255)/256,256>>>(dsamples,dfreq,dr,ddirs,dpos,dinv,nrad,nang,natoms,shape(1),shape(2),shape(3))
+    call project_vlm_kernel<<<(natoms*naug*nrad+127)/128,128>>>(dvlm,dsamples,dyweight,nrad,nang,natoms,naug)
+    call radial_v_kernel<<<(natoms*naug+127)/128,128>>>(dradial_v,dvlm,dgshape,dr,drw,dlaug,nrad,naug,natoms)
+    call finish_dij_kernel<<<(natoms*pairs+127)/128,128>>>(ddij_atom,ddion,dmultipole,dradial_v,nlm,naug,natoms)
+    if(cudaDeviceSynchronize()/=cudaSuccess)error stop 'HALF: CUDA QDEP construction failed'
+  end subroutine
+
+  subroutine radial_weights(r,w)
+    real(dp),intent(in)::r(:);real(dp),intent(out)::w(:)
+    integer::i,n,last
+    real(dp)::h0,h1,s,alpha,beta,eta
+    n=size(r);w=0.0_dp;last=merge(n,n-1,mod(n,2)==1)
+    do i=1,last-2,2
+      h0=r(i+1)-r(i);h1=r(i+2)-r(i+1);s=(h0+h1)/6.0_dp
+      w(i)=w(i)+s*(2.0_dp-h1/h0)
+      w(i+1)=w(i+1)+s*(h0+h1)*(h0+h1)/(h0*h1)
+      w(i+2)=w(i+2)+s*(2.0_dp-h0/h1)
+    end do
+    if(mod(n,2)==0)then
+      h0=r(n-1)-r(n-2);h1=r(n)-r(n-1)
+      alpha=(2*h1*h1+3*h0*h1)/(6*(h0+h1))
+      beta=(h1*h1+3*h0*h1)/(6*h0)
+      eta=h1*h1*h1/(6*h0*(h0+h1))
+      w(n)=w(n)+alpha;w(n-1)=w(n-1)+beta;w(n-2)=w(n-2)-eta
+    end if
+  end subroutine
+
+  pure real(dp) function sph_bessel_h(l,x) result(v)
+    integer,intent(in)::l;real(dp),intent(in)::x;real(dp)::jm,j,jn,den,x2,term;integer::n,i,k
+    if(abs(x)<real(l+2,dp))then;den=1.0_dp;do i=1,l;den=den*real(2*i+1,dp);end do;x2=x*x;term=x**l/den;v=term;do k=0,30;term=-term*x2/(2.0_dp*real(k+1,dp)*real(2*l+2*k+3,dp));v=v+term;if(abs(term)<1.0e-16_dp*max(1.0_dp,abs(v)))exit;end do;return;end if
+    jm=sin(x)/x;if(l==0)then;v=jm;return;end if;j=sin(x)/(x*x)-cos(x)/x
+    if(l==1)then;v=j;return;end if
+    do n=1,l-1;jn=real(2*n+1,dp)*j/x-jm;jm=j;j=jn;end do;v=j
+  end function
+  subroutine bessel_root(l,which,root)
+    integer,intent(in)::l,which;real(dp),intent(out)::root;real(dp)::x0,x1,f0,f1;integer::found
+    x0=1.0e-4_dp;f0=sph_bessel_h(l,x0);found=0
+    do while(found<which);x1=x0+0.05_dp;f1=sph_bessel_h(l,x1);if(f0*f1<0)then;found=found+1;if(found==which)exit;end if;x0=x1;f0=f1;end do
+    do while(x1-x0>1e-13_dp);root=0.5_dp*(x0+x1);if(f0*sph_bessel_h(l,root)<=0)then;x1=root;else;x0=root;f0=sph_bessel_h(l,x0);end if;end do;root=0.5_dp*(x0+x1)
+  end subroutine
+  subroutine compensation_coefficients(l,rc,z1,z2,r,w,c1,c2)
+    integer,intent(in)::l;real(dp),intent(in)::rc,z1,z2,r(:),w(:);real(dp),intent(out)::c1,c2
+    real(dp)::a11,a12,a21,a22,det,xg(32),wg(32),rg(32)
+    a11=z1/rc*sph_bessel_deriv(l,z1);a12=z2/rc*sph_bessel_deriv(l,z2)
+    call gauss_legendre(32,xg,wg);rg=0.5_dp*rc*(xg+1.0_dp);wg=0.5_dp*rc*wg
+    a21=sum(wg*sph_bessel_vec(l,z1*rg/rc)*rg**(l+2));a22=sum(wg*sph_bessel_vec(l,z2*rg/rc)*rg**(l+2));det=a11*a22-a12*a21
+    c1=-a12/det;c2=a11/det
+  end subroutine
+  pure real(dp) function sph_bessel_deriv(l,x) result(v);integer,intent(in)::l;real(dp),intent(in)::x;if(l==0)then;v=-sph_bessel_h(1,x);else;v=sph_bessel_h(l-1,x)-real(l+1,dp)/x*sph_bessel_h(l,x);end if;end function
+  pure function sph_bessel_vec(l,x) result(v);integer,intent(in)::l;real(dp),intent(in)::x(:);real(dp)::v(size(x));integer::i;do i=1,size(x);v(i)=sph_bessel_h(l,x(i));end do;end function
+  real(dp) function gaunt_numeric(l1,m1,l2,m2,l3,m3) result(g)
+    integer,intent(in)::l1,m1,l2,m2,l3,m3;integer,parameter::nt=12,np=24
+    real(dp)::xg(nt),wg(nt),phi;integer::it,ip
+    call gauss_legendre(nt,xg,wg);g=0.0_dp
+    do it=1,nt
+      do ip=0,np-1;phi=2*pi*real(ip,dp)/real(np,dp);g=g+wg(it)*2*pi/real(np,dp)*ylm_h(l1,m1,xg(it),phi)*ylm_h(l2,m2,xg(it),phi)*ylm_h(l3,m3,xg(it),phi);end do
+    end do
+  end function
+  subroutine gauss_legendre(n,x,w)
+    integer,intent(in)::n;real(dp),intent(out)::x(n),w(n)
+    integer::i,j,m;real(dp)::z,z1,p1,p2,p3,pp
+    m=(n+1)/2
+    do i=1,m
+      z=cos(pi*(real(i,dp)-0.25_dp)/(real(n,dp)+0.5_dp))
+      do
+        p1=1.0_dp;p2=0.0_dp
+        do j=1,n;p3=p2;p2=p1;p1=((2*j-1)*z*p2-(j-1)*p3)/real(j,dp);end do
+        pp=real(n,dp)*(z*p1-p2)/(z*z-1.0_dp);z1=z;z=z1-p1/pp
+        if(abs(z-z1)<1.0e-15_dp)exit
+      end do
+      x(i)=-z;x(n+1-i)=z;w(i)=2.0_dp/((1.0_dp-z*z)*pp*pp);w(n+1-i)=w(i)
+    end do
+  end subroutine
+  pure real(dp) function ylm_h(l,m,x,phi) result(y);integer,intent(in)::l,m;real(dp),intent(in)::x,phi;real(dp)::p,norm;integer::am;am=abs(m);p=leg_h(l,am,x);norm=sqrt(real(2*l+1,dp)/(4*pi)*fact_h(l-am)/fact_h(l+am));if(m>0)then;y=sqrt(2.0_dp)*(-1.0_dp)**m*norm*p*cos(real(am,dp)*phi);else if(m<0)then;y=sqrt(2.0_dp)*(-1.0_dp)**m*norm*p*sin(real(am,dp)*phi);else;y=norm*p;end if;end function
+  pure real(dp) function leg_h(l,m,x) result(p);integer,intent(in)::l,m;real(dp),intent(in)::x;real(dp)::p0,p1,p2,f;integer::i,n;p0=1.0_dp;f=1.0_dp;do i=1,m;p0=-p0*f*sqrt(max(0.0_dp,1-x*x));f=f+2;end do;if(l==m)then;p=p0;return;end if;p1=x*real(2*m+1,dp)*p0;if(l==m+1)then;p=p1;return;end if;do n=m+2,l;p2=(real(2*n-1,dp)*x*p1-real(n+m-1,dp)*p0)/real(n-m,dp);p0=p1;p1=p2;end do;p=p1;end function
+  pure real(dp) function fact_h(n) result(v);integer,intent(in)::n;integer::i;v=1;do i=2,n;v=v*i;end do;end function
+end module half_cuda_uspp

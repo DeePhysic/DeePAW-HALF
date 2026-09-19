@@ -15,6 +15,7 @@ def test_expected_project_surface_exists():
         "src/half_basis.F90",
         "src/half_cuda.cuf",
         "src/half_cuda_potential.cuf",
+        "src/half_cuda_uspp.cuf",
         "src/half_cuda_assembly.cuf",
         "src/half_cpu.F90",
         "app/half_inspect.F90",
@@ -53,6 +54,33 @@ def test_full_cuda_gamma_pipeline_is_device_resident():
     assert "projector_kernel" in assembly
     assert "assemble_dense_gamma_cuda_full" in assembly
     assert "cusolverdnzhegvd" in solver
+
+
+def test_cuda_mimic_us_pipeline_is_device_resident_and_cli_enabled():
+    uspp = (ROOT / "src/half_cuda_uspp.cuf").read_text().lower()
+    potential = (ROOT / "src/half_cuda_potential.cuf").read_text().lower()
+    assembly = (ROOT / "src/half_cuda_assembly.cuf").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "sample_spheres_kernel" in uspp
+    assert "project_vlm_kernel" in uspp
+    assert "radial_v_kernel" in uspp
+    assert "finish_dij_kernel" in uspp
+    assert "reorder_chgcar_f_to_c_kernel" in potential
+    assert "build_uspp_dij_cuda_species" in assembly
+    assert "case('--uspp-dij')" in cli
+    assert "--uspp-dij is not implemented" not in cli
+
+
+def test_hfo2_cuda_mimic_us_parity_record():
+    import json
+
+    record = json.loads(
+        (ROOT / "docs/validation/hfo2_cuda_uspp_parity.json").read_text()
+    )
+    assert record["plane_waves"] == 3407
+    assert record["bands_compared"] == 60
+    assert record["max_abs_eigenvalue_error_eV"] < 1e-10
+    assert record["speedup_vs_happy_single_core"] > 30.0
 
 
 def test_physical_constants_follow_happy_definition():

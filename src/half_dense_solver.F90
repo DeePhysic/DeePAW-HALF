@@ -67,7 +67,7 @@ contains
           do i=1,n
             z=(0.0_dp,0.0_dp)
             do a=1,paw(it)%nlm; do b=1,paw(it)%nlm
-              z=z+paw(it)%projectors(iat,a,i)*paw(it)%dij(a,b)*conjg(paw(it)%projectors(iat,b,j))
+              z=z+paw(it)%projectors(iat,a,i)*paw(it)%dij_atom(iat,a,b)*conjg(paw(it)%projectors(iat,b,j))
             end do; end do
             h(i,j)=h(i,j)+z; z=(0.0_dp,0.0_dp)
             do a=1,paw(it)%nlm; do b=1,paw(it)%nlm

@@ -83,7 +83,9 @@ contains
     write(unit,'(A)') '  --encut EV                 plane-wave cutoff (default: 400)'
     write(unit,'(A)') '  --bands N                  eigenvalues to report (default: 8)'
     write(unit,'(A)') '  --xc lda|pbe               exchange-correlation model (default: pbe)'
-    write(unit,'(A)') '  --backend auto|cpu|cuda    eigensolver backend (default: auto)'
+    write(unit,'(A)') '  --backend auto|cpu|cuda    compute backend (default: auto)'
+    write(unit,'(A)') '  --solver evd|evj           CUDA eigensolver: divide-and-conquer or Jacobi (default: evd)'
+    write(unit,'(A)') '  --uspp-dij                 add potential-dependent MIMIC_US QDEP correction (CUDA)'
     write(unit,'(A)') '  --reference-eigenval FILE  compare against a VASP EIGENVAL file'
     write(unit,'(A)') '  --output FILE              JSON result (default: gamma_validation.json)'
   end subroutine
@@ -97,9 +99,10 @@ contains
     type(paw_species_t),allocatable::paw(:)
     real(dp),allocatable::veff(:),eigenvalues(:),reference(:)
     real(dp)::eh,exc,smin,smax,encut,elapsed,potential_seconds,assembly_seconds,gpu_seconds
+    logical::use_uspp
     integer::nbands,i,narg,ios,tick0,tick1,rate,unit
     character(len=1024)::charge_path,potential_path,arg,value,output_path,reference_path
-    character(len=16)::xc,backend,actual_backend
+    character(len=16)::xc,backend,actual_backend,solver,actual_solver
     narg=command_argument_count()
     if(narg>=offset+1)then
       call get_command_argument(offset+1,arg)
@@ -111,7 +114,7 @@ contains
     if(narg<offset+2)then; call print_gamma_help(0); call fail('gamma requires CHARGE and POTENTIAL'); end if
     call get_command_argument(offset+1,charge_path)
     call get_command_argument(offset+2,potential_path)
-    encut=400.0_dp; nbands=8; xc='pbe'; backend='auto'
+    encut=400.0_dp; nbands=8; xc='pbe'; backend='auto'; solver='evd';use_uspp=.false.
     output_path='gamma_validation.json'; reference_path=''
     i=offset+3
     do while(i<=narg)
@@ -130,12 +133,15 @@ contains
         call option_value(i,narg,'--backend',backend); backend=lower(trim(backend))
         if(trim(backend)/='auto'.and.trim(backend)/='cpu'.and.trim(backend)/='cuda') &
           call fail('--backend must be auto, cpu, or cuda')
+      case('--solver')
+        call option_value(i,narg,'--solver',solver); solver=lower(trim(solver))
+        if(trim(solver)/='evd'.and.trim(solver)/='evj')call fail('--solver must be evd or evj')
       case('--output')
         call option_value(i,narg,'--output',output_path)
       case('--reference-eigenval')
         call option_value(i,narg,'--reference-eigenval',reference_path)
       case('--uspp-dij')
-        call fail('--uspp-dij is not implemented yet; HALF currently uses POTCAR DION')
+        use_uspp=.true.
       case('--help','-h')
         call print_gamma_help(6); return
       case default
@@ -152,10 +158,14 @@ contains
 #ifdef HALF_CLI_CUDA
     if(trim(backend)=='auto'.or.trim(backend)=='cuda')then
       actual_backend='cuda'
+      actual_solver=solver
       call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',eigenvalues,smin,smax, &
-        potential_seconds,assembly_seconds,gpu_seconds)
+        potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
     else
       actual_backend='cpu'
+      if(use_uspp)call fail('--uspp-dij currently requires --backend cuda')
+      actual_solver='evd'
+      if(trim(solver)/='evd')call fail('--solver evj is available only with --backend cuda')
 #ifndef HALF_CLI_HAVE_MKL
       call fail('the CPU gamma backend requires oneMKL; use --backend cuda or rebuild with MKLROOT')
 #else
@@ -168,6 +178,9 @@ contains
 #else
     if(trim(backend)=='cuda')call fail('this HALF build has no CUDA backend')
     actual_backend='cpu'
+    if(use_uspp)call fail('--uspp-dij requires a CUDA build')
+    actual_solver='evd'
+    if(trim(solver)/='evd')call fail('--solver evj is available only with --backend cuda')
     call build_paw_operators(potcars,crystal,basis,paw)
     if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc)
     else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc);end if
@@ -185,19 +198,20 @@ contains
       open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
       if(ios/=0)call fail('cannot write output: '//trim(output_path))
       call write_gamma_json(unit,charge_path,potential_path,xc,actual_backend,encut,basis%npw, &
-        eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds)
+        eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp)
       close(unit)
     end if
     call write_gamma_json(6,charge_path,potential_path,xc,actual_backend,encut,basis%npw, &
-      eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds)
+      eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp)
 #endif
   end subroutine
 
   subroutine write_gamma_json(unit,charge,potential,xc,backend,encut,npw,eigenvalues,reference, &
-      smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds)
+      smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
     integer,intent(in)::unit
     integer(i64),intent(in)::npw
-    character(len=*),intent(in)::charge,potential,xc,backend
+    character(len=*),intent(in)::charge,potential,xc,backend,solver
+    logical,intent(in)::use_uspp
     real(dp),intent(in)::encut,eigenvalues(:),reference(:),smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds
     real(dp),allocatable::errors(:)
     integer::n
@@ -209,6 +223,8 @@ contains
     write(unit,'(A,A,A)') '  "potential": "',trim(potential),'",'
     write(unit,'(A,A,A)') '  "xc": "',trim(xc),'",'
     write(unit,'(A,A,A)') '  "backend": "',trim(backend),'",'
+    write(unit,'(A,A,A)') '  "solver": "',trim(solver),'",'
+    write(unit,'(A,A,A)') '  "uspp_dij": ',merge('true ','false',use_uspp),','
     write(unit,'(A,ES24.16,A)') '  "encut_eV": ',encut,','
     write(unit,'(A,I0,A)') '  "plane_waves": ',npw,','
     call write_real_array(unit,'gamma_eigenvalues_eV',eigenvalues,.true.)

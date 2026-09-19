@@ -1,0 +1,35 @@
+{
+  "system": "HfO2",
+  "operator": "Gamma fixed-density PBE MIMIC_US",
+  "input": "smooth CHGCAR plus concatenated Hf_pv and O PBE POTCAR",
+  "encut_eV": 520.0,
+  "plane_waves": 3407,
+  "bands_compared": 60,
+  "half_backend": "CUDA Fortran, cuFFT plus cuSOLVER EVD",
+  "half_option": "--uspp-dij",
+  "oracle": "DeePAW-HAPPY Python --uspp-dij",
+  "max_abs_eigenvalue_error_eV": 7.8017592386459e-12,
+  "rms_eigenvalue_error_eV": 2.313688721921229e-12,
+  "overlap_eigenvalue_min_half": 0.5274021312159157,
+  "overlap_eigenvalue_min_happy": 0.5274021312159209,
+  "overlap_eigenvalue_max_half": 2.137445007547488,
+  "overlap_eigenvalue_max_happy": 2.137445007547487,
+  "fresh_process_elapsed_seconds": [
+    1.818336,
+    1.695874,
+    1.693474,
+    1.693574,
+    1.712614
+  ],
+  "elapsed_seconds_median": 1.695874,
+  "potential_seconds_median": 0.2575848,
+  "assembly_including_qdep_seconds_median": 0.349113,
+  "gpu_solver_seconds_median": 1.0614381,
+  "happy_single_core_seconds": 64.23,
+  "speedup_vs_happy_single_core": 37.8742760370169,
+  "device": "RTX PRO 6000 Blackwell",
+  "notes": [
+    "All QDEP runtime sampling, angular projection, radial integration, atom-dependent D construction, H/S assembly, and eigensolution execute on the GPU.",
+    "CHGCAR values are explicitly reordered from VASP/Fortran x-fastest serialization to the cuFFT C-layout grid before potential construction."
+  ]
+}

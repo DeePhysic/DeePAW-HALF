@@ -49,10 +49,9 @@ eigenvalues agree with Python HAPPY to `1.21e-11 eV` on CPU and `1.62e-11 eV`
 with the CUDA 13 cuSOLVER path. The record is
 [`validation/si_gamma_full_operator.json`](validation/si_gamma_full_operator.json).
 
-This closes the Gamma/DION validation gate. Potential-dependent MIMIC_US D,
-arbitrary k points, occupations, total energy, and wavefunction output remain
-separate delivery gates; the result is not yet a complete replacement for all
-HAPPY commands.
+The later CUDA MIMIC_US validation below supersedes this Gamma/DION gate.
+Arbitrary k points, occupations, total energy, and wavefunction output remain
+separate delivery gates.
 
 On bare-metal `cmu001`, five fresh-process PBE runs gave medians of `5.21 s`
 for Python HAPPY, `0.53 s` for CPU Fortran, `0.63 s` for CUDA 13, and `0.66 s`
@@ -98,19 +97,20 @@ OpenMP and BLAS thread controls were set to one. HALF CPU Fortran took
 `43.94 s`; HAPPY Python with `--uspp-dij` took `64.23 s`, so HALF CPU was
 `1.46x` faster.
 
-The matching device-resident CUDA runs took `1.795 s` on the RTX 4090
-(including `1.189 s` in cuSOLVER) and `1.60 s` mean on the RTX PRO 6000
-(including `1.058 s` in cuSOLVER). Consequently, the RTX 4090 and RTX PRO
-6000 were respectively `24.47x` and `27.41x` faster than the one-core HALF
-CPU run, and `35.78x` and `40.07x` faster than one-core HAPPY Python. The
-PRO 6000 was about `12%` faster than the 4090 at this matrix size. Exact
-commands, environment, and raw timing values are recorded in
-[`validation/hfo2_single_core_benchmark.json`](validation/hfo2_single_core_benchmark.json).
+After the CUDA QDEP implementation and the CHGCAR Fortran-to-CUDA grid-layout
+fix, HALF with `--uspp-dij` reproduces all 60 recorded HAPPY HfO2 eigenvalues
+to `7.9e-12 eV` maximum and `2.4e-12 eV` RMS error; the overlap extrema also
+agree to roundoff. Five fresh
+processes on the RTX PRO 6000 took `1.818336`, `1.695874`, `1.693474`,
+`1.693574`, and `1.712614 s`, for a `1.695874 s` median. Median component
+times were `0.257585 s` for the effective potential, `0.349113 s` for GPU H/S
+assembly including QDEP, and `1.061438 s` for cuSOLVER. Against the matched
+`64.23 s` one-core HAPPY `--uspp-dij` run, this is a `37.87x` speedup.
+The machine-readable record is
+[`validation/hfo2_cuda_uspp_parity.json`](validation/hfo2_cuda_uspp_parity.json).
 
-The input, cutoff and basis size are matched, but this is not a numerically
-equivalent HfO2 comparison: HALF uses DION whereas the timed HAPPY command
-used `--uspp-dij`. HfO2 eigenvalue parity remains an independent validation
-gate.
+Earlier CPU and RTX 4090 timings in the historical JSON used HALF's DION-only
+operator and therefore are not cited as MIMIC_US speedups.
 
 ## HALF versus Python HAPPY
 

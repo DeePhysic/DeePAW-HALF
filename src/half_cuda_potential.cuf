@@ -8,6 +8,19 @@ module half_cuda_potential
   private
   public::build_veff_cuda
 contains
+  attributes(global) subroutine reorder_chgcar_f_to_c_kernel(input,output,n1,n2,n3,n)
+    real(dp),device,intent(in)::input(*)
+    real(dp),device,intent(out)::output(*)
+    integer,value::n1,n2,n3,n
+    integer::i,t,i1,i2,i3,source
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)then
+      t=i-1;i3=mod(t,n3);t=t/n3;i2=mod(t,n2);i1=t/n2
+      source=i1+n1*(i2+n2*i3)+1
+      output(i)=input(source)
+    end if
+  end subroutine
+
   attributes(device) function spline_eval_d(y,m2,xmax,x,n)result(value)
     real(dp),device,intent(in)::y(*),m2(*)
     real(dp),value::xmax,x
@@ -253,14 +266,15 @@ contains
     logical,intent(in),optional::compute_energies
     real(dp),device,allocatable,intent(out)::dveff(:)
     real(dp),intent(out)::e_hartree,e_xc
-    real(dp),device,allocatable::dcharge(:),drec(:,:),dlocal_r(:),dcore_r(:),deh(:),density(:),sigma(:),grad(:,:), &
+    real(dp),device,allocatable::drawcharge(:),dcharge(:),drec(:,:),dlocal_r(:),dcore_r(:),deh(:),density(:),sigma(:),grad(:,:), &
       fs(:),fn(:),flux(:),edens(:),dradial(:),dm2(:),dcore_values(:),dcore_m2(:),dpositions(:,:)
     complex(dp),device,allocatable::work(:),rho_g(:),local_g(:),core_g(:),freq(:),deriv(:)
     real(dp),allocatable::m2(:),m2core(:),positions(:,:),host_terms(:)
     integer::n,n1,n2,n3,it,iat,ion0,nrad,plan,status,blocks,alpha,ierr
     n=size(charge%values);n1=charge%shape(1);n2=charge%shape(2);n3=charge%shape(3);blocks=(n+255)/256
-    allocate(dcharge(n),drec(3,3),dlocal_r(n),dcore_r(n),deh(n),dveff(n),work(n),rho_g(n),local_g(n),core_g(n))
-    dcharge=charge%values;drec=crystal%reciprocal
+    allocate(drawcharge(n),dcharge(n),drec(3,3),dlocal_r(n),dcore_r(n),deh(n),dveff(n),work(n),rho_g(n),local_g(n),core_g(n))
+    drawcharge=charge%values;drec=crystal%reciprocal
+    call reorder_chgcar_f_to_c_kernel<<<blocks,256>>>(drawcharge,dcharge,n1,n2,n3,n)
     status=cufftPlan3d(plan,n1,n2,n3,CUFFT_Z2Z);if(status/=CUFFT_SUCCESS)error stop 'HALF: potential cuFFT plan failed'
     call charge_to_complex_kernel<<<blocks,256>>>(dcharge,work,n,1.0_dp/real(n,dp))
     status=cufftExecZ2Z(plan,work,rho_g,CUFFT_FORWARD);if(status/=CUFFT_SUCCESS)error stop 'HALF: density cuFFT failed'
@@ -305,12 +319,18 @@ contains
     end if
     ierr=cudaDeviceSynchronize();if(ierr/=cudaSuccess)error stop 'HALF: CUDA potential construction failed'
     e_hartree=0.0_dp;e_xc=0.0_dp
-    if(.not.present(compute_energies).or.compute_energies)then
+    if(present(compute_energies))then
+      if(.not.compute_energies)then
+        status=cufftDestroy(plan)
+        return
+      end if
+    end if
+    block
       allocate(host_terms(n))
       host_terms=deh;e_hartree=sum(host_terms)
       host_terms=edens;e_xc=sum(host_terms)*(crystal%volume/real(n,dp))/autoa**3*hatoev
       deallocate(host_terms)
-    end if
+    end block
     status=cufftDestroy(plan)
   end subroutine
 

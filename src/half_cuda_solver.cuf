@@ -2,6 +2,7 @@ module half_cuda_solver
   use cudafor
   use cusolverdn
   use cublas
+  use iso_c_binding,only:c_int,c_double
   use half_kinds,only:dp
   use half_types,only:plane_wave_basis_t,crystal_t,charge_grid_t,potcar_t
   use half_paw,only:paw_species_t
@@ -10,58 +11,79 @@ module half_cuda_solver
   implicit none
   private
   public::solve_dense_gamma_cuda,solve_dense_gamma_cuda_full
+#ifdef HALF_HAVE_EVJ
+  interface
+    integer(c_int) function half_cuda_zhegvj(n,a,b,w,tolerance,max_sweeps,residual,sweeps) &
+        bind(C,name='half_cuda_zhegvj')
+      import::c_int,c_double,c_devptr
+      integer(c_int),value::n,max_sweeps
+      type(c_devptr),value::a,b,w
+      real(c_double),value::tolerance
+      real(c_double)::residual
+      integer(c_int)::sweeps
+    end function
+  end interface
+#endif
 contains
-  subroutine solve_dense_gamma_cuda(veff,basis,paw,eigenvalues,overlap_min,overlap_max,assembly_seconds,gpu_seconds)
+  subroutine solve_dense_gamma_cuda(veff,basis,paw,eigenvalues,overlap_min,overlap_max,assembly_seconds,gpu_seconds,solver)
     real(dp),intent(in)::veff(:)
     type(plane_wave_basis_t),intent(in)::basis
     type(paw_species_t),intent(in)::paw(:)
     real(dp),allocatable,intent(out)::eigenvalues(:)
     real(dp),intent(out)::overlap_min,overlap_max
     real(dp),intent(out),optional::assembly_seconds,gpu_seconds
+    character(len=*),intent(in),optional::solver
     complex(dp),device,allocatable::dh(:,:),ds(:,:)
     integer(8)::tick0,tick1,rate
     call system_clock(tick0,rate)
     call assemble_dense_gamma_cuda(veff,basis,paw,dh,ds)
     call system_clock(tick1); if(present(assembly_seconds))assembly_seconds=real(tick1-tick0,dp)/real(rate,dp); tick0=tick1
-    call solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max)
+    call solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max,solver)
     call system_clock(tick1); if(present(gpu_seconds))gpu_seconds=real(tick1-tick0,dp)/real(rate,dp)
   end subroutine
 
   subroutine solve_dense_gamma_cuda_full(charge,potcars,crystal,basis,use_pbe,eigenvalues,overlap_min,overlap_max, &
-      potential_seconds,assembly_seconds,gpu_seconds)
+      potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
     type(plane_wave_basis_t),intent(in)::basis
     logical,intent(in)::use_pbe
+    logical,intent(in),optional::use_uspp
     real(dp),allocatable,intent(out)::eigenvalues(:)
     real(dp),intent(out)::overlap_min,overlap_max
     real(dp),intent(out),optional::potential_seconds,assembly_seconds,gpu_seconds
+    character(len=*),intent(in),optional::solver
     real(dp),device,allocatable::dveff(:)
     complex(dp),device,allocatable::dh(:,:),ds(:,:)
     real(dp)::eh,exc
     integer(8)::tick0,tick1,rate
     call system_clock(tick0,rate)
-    ! Diagnostic energy reductions are unused here; avoid copying whole grids
-    ! back to the host in the device-resident eigensolver path.
+    ! Energies are not reported by the Gamma eigenvalue command.  Skipping
+    ! their reductions avoids transferring full grids back to the host.
     call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.false.)
     call system_clock(tick1);if(present(potential_seconds))potential_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
-    call assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,dh,ds)
+    call assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,dh,ds,use_uspp)
     call system_clock(tick1);if(present(assembly_seconds))assembly_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
-    call solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max)
+    call solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max,solver)
     call system_clock(tick1);if(present(gpu_seconds))gpu_seconds=real(tick1-tick0,dp)/real(rate,dp)
   end subroutine
 
-  subroutine solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max)
+  subroutine solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max,solver)
     complex(dp),device,intent(inout)::dh(:,:),ds(:,:)
     real(dp),allocatable,intent(out)::eigenvalues(:)
     real(dp),intent(out)::overlap_min,overlap_max
+    character(len=*),intent(in),optional::solver
     complex(dp),device,allocatable::ds_original(:,:),dwork(:)
     real(dp),device,allocatable::dw(:)
     integer,device::dinfo
     type(cusolverDnHandle)::handle
     integer::n,lwork,status,infohost
+    integer(c_int)::jacobi_sweeps
+    real(c_double)::jacobi_residual
+    logical::use_jacobi
     n=size(dh,1)
+    use_jacobi=.false.; if(present(solver))use_jacobi=trim(solver)=='evj'
     allocate(ds_original(n,n),dw(n),eigenvalues(n)); ds_original=ds
     status=cusolverDnCreate(handle); if(status/=0)error stop 'HALF: cusolver create failed'
     status=cusolverDnZheevd_bufferSize(handle,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,ds,n,dw,lwork)
@@ -69,10 +91,24 @@ contains
     allocate(dwork(lwork)); status=cusolverDnZheevd(handle,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,ds,n,dw,dwork,lwork,dinfo)
     infohost=dinfo; if(status/=0.or.infohost/=0)error stop 'HALF: cusolver overlap eigensolve failed'
     eigenvalues=dw; overlap_min=eigenvalues(1); overlap_max=eigenvalues(n); deallocate(dwork); ds=ds_original
-    status=cusolverDnZhegvd_bufferSize(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,dw,lwork)
-    if(status/=0)error stop 'HALF: cusolver Zhegvd buffer query failed'
-    allocate(dwork(lwork)); status=cusolverDnZhegvd(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,dw,dwork,lwork,dinfo)
-    infohost=dinfo; if(status/=0.or.infohost/=0)error stop 'HALF: cusolver generalized eigensolve failed'
+    if(use_jacobi)then
+#ifdef HALF_HAVE_EVJ
+      ! NVHPC's CUDA Fortran module exposes heevj but not the generalized
+      ! Zhegvj entry point.  The small C++/CUDA bridge receives device
+      ! pointers directly, so this remains a device-resident solve.
+      status=half_cuda_zhegvj(int(n,c_int),c_devloc(dh),c_devloc(ds),c_devloc(dw), &
+        1.0e-12_c_double,100_c_int,jacobi_residual,jacobi_sweeps)
+      if(status/=0)error stop 'HALF: cusolver Jacobi generalized eigensolve failed'
+#else
+      error stop 'HALF: EVJ support was not enabled at build time'
+#endif
+    else
+      status=cusolverDnZhegvd_bufferSize(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,dw,lwork)
+      if(status/=0)error stop 'HALF: cusolver Zhegvd buffer query failed'
+      allocate(dwork(lwork)); status=cusolverDnZhegvd(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,dw,dwork,lwork,dinfo)
+      infohost=dinfo; if(status/=0.or.infohost/=0)error stop 'HALF: cusolver generalized eigensolve failed'
+    end if
     eigenvalues=dw; status=cusolverDnDestroy(handle)
   end subroutine
+
 end module half_cuda_solver

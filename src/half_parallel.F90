@@ -1,10 +1,9 @@
 module half_parallel
   use half_kinds, only: dp, i64
-#ifdef HALF_HAVE_MPI
-  use mpi, only: MPI_Init, MPI_Finalize, MPI_Initialized, MPI_Finalized, MPI_Comm_rank, MPI_Comm_size, &
-    MPI_Abort, MPI_Allreduce, MPI_COMM_WORLD, MPI_IN_PLACE, MPI_SUM, MPI_MIN, MPI_DOUBLE_PRECISION, MPI_INTEGER8
-#endif
   implicit none
+#ifdef HALF_HAVE_MPI
+  include 'mpif.h'
+#endif
   private
   public :: parallel_initialize, parallel_finalize, parallel_abort, parallel_rank, parallel_size, &
     parallel_root, parallel_owns, parallel_sum, parallel_min

@@ -35,6 +35,14 @@ mesh, and a two-rank Si finite-difference-force smoke test also completed. The
 machine-readable record is
 [`validation/hfo2_cpu_mpi.json`](validation/hfo2_cpu_mpi.json).
 
+The same four-rank input was also built with the installed oneAPI 2023 module.
+Intel ifort 2021.10 + Intel MPI 2021.10 took 41.62 seconds and IFX 2023.2 took
+84.09 seconds, while both agreed with the NVHPC result within `1.7e-11 eV`.
+Repeating ifort with oneMKL 2025.3 instead of the module's oneMKL 2023.2 took
+41.75 seconds, showing that the observed difference is not caused by the MKL
+version. For this older oneAPI release, HALF therefore supports both frontends
+but recommends `mpiifort`; NVHPC remains the fastest measured CPU build.
+
 Performance reports must state GPU, NVHPC/CUDA versions, precision, FFT grid,
 plane-wave count, bands, k points, and whether deterministic reductions were
 enabled. Iteration counts and wall time are reported separately.

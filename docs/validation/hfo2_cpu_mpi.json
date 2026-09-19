@@ -44,5 +44,13 @@
     "ranks": 2,
     "completed": true,
     "wall_seconds": 3.79
+  },
+  "compiler_comparison_4_ranks": {
+    "nvhpc_25_9_seconds": 29.87,
+    "oneapi_2023_mpiifort_seconds": 41.62,
+    "oneapi_2023_mpiifx_seconds": 84.09,
+    "oneapi_2023_mpiifort_with_onemkl_2025_3_seconds": 41.75,
+    "ifort_max_abs_eigenvalue_difference_eV": 1.34e-11,
+    "ifx_max_abs_eigenvalue_difference_eV": 1.66e-11
   }
 }

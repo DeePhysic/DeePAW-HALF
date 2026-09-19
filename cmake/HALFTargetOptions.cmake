@@ -9,6 +9,8 @@ function(half_set_fortran_options target)
     target_compile_options(${target} PRIVATE -O3 -Mextend)
   elseif(CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
     target_compile_options(${target} PRIVATE -O3 -ffree-line-length-none)
+  elseif(CMAKE_Fortran_COMPILER_ID MATCHES "IntelLLVM|Intel")
+    target_compile_options(${target} PRIVATE -O3)
   endif()
 endfunction()
 

@@ -134,6 +134,13 @@ cmake -S . -B build/cpu-mpi -DHALF_ENABLE_CUDA=OFF \
   -DHALF_ENABLE_MPI=ON -DHALF_MKL_ROOT="$MKLROOT"
 cmake --build build/cpu-mpi -j
 
+# Intel oneAPI 2023：直接使用 MPI wrapper；该版本推荐 mpiifort
+module load intel/oneapi2023
+cmake -S . -B build/cpu-oneapi-mpi -DCMAKE_Fortran_COMPILER=mpiifort \
+  -DHALF_ENABLE_CUDA=OFF -DHALF_ENABLE_MPI=ON \
+  -DHALF_MKL_ROOT="$MKLROOT"
+cmake --build build/cpu-oneapi-mpi -j
+
 cmake --preset cuda13-release
 cmake --build --preset cuda13-release
 ```

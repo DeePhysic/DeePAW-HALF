@@ -1,0 +1,15 @@
+stages:
+  - test
+
+pip-install:
+    stage: test
+    script:
+        - . /fsc/home/jupyter/miniconda3/etc/profile.d/conda.sh
+        - conda activate vasp-plugin
+        - python -m venv ./venv --system-site-packages
+        - source ./venv/bin/activate
+        - which pip
+        - pip install .
+        - python -m pytest  # this is required because using just pytest would use the python from conda
+    tags: [slurm]
+

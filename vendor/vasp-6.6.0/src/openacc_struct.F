@@ -1,0 +1,25 @@
+#include "symbol.inc"
+#ifdef ACC_OFFLOAD
+    MODULE mopenacc_struct_def
+      USE openacc, IS_ON_DEVICE => ACC_IS_PRESENT
+
+      PRIVATE
+
+      PUBLIC :: ACC_ASYNC_SYNC,IS_ON_DEVICE,ACC_PRESENT_COUNT, &
+                ACC_ATTACH_ASYNC,ACC_DETACH_ASYNC, &
+                ACC_GET_DEVICE_TYPE,ACC_DEVICE_HOST, &
+                ACC_ON_DEVICE,ACC_DEVICE_NOT_HOST
+
+      INTEGER, PUBLIC :: ACC_ASYNC_Q=ACC_ASYNC_SYNC
+!$OMP THREADPRIVATE(ACC_ASYNC_Q)
+
+#ifndef ACC_DEBUG
+      INTEGER, PARAMETER, PUBLIC :: ACC_ASYNC_ASYNC=1
+#else
+      INTEGER, PUBLIC            :: ACC_ASYNC_ASYNC=1
+#endif
+#ifdef USENCCL
+      PUBLIC :: ACC_GET_CUDA_STREAM, C_DEVLOC
+#endif
+    END MODULE mopenacc_struct_def
+#endif // ACC_OFFLOAD

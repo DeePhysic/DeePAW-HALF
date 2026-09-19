@@ -11,6 +11,7 @@ option(HALF_ENABLE_OPENMP "Parallelize the CPU backend with OpenMP" ON)
 option(HALF_ENABLE_MPI "Distribute CPU k points across MPI ranks" OFF)
 option(HALF_BUILD_SHARED_LIBRARY "Build the reusable libhalf shared library" ON)
 option(HALF_BUILD_EXAMPLES "Build libhalf API examples" ON)
+option(HALF_BUILD_VASP "Build the bundled private VASP 6.6.0 integration" OFF)
 set(HALF_GPU_CC "86" CACHE STRING "NVIDIA GPU compute capability, without the decimal point")
 set(HALF_CUDA_VERSION "12.4" CACHE STRING "CUDA toolkit selected by NVHPC")
 
@@ -292,6 +293,10 @@ if(HALF_BUILD_EXAMPLES)
     set_target_properties(half-mapped-example PROPERTIES LINKER_LANGUAGE Fortran)
     target_link_options(half-mapped-example PRIVATE -Mnomain -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC})
   endif()
+endif()
+
+if(HALF_BUILD_VASP)
+  include(HALFVaspIntegration)
 endif()
 
 configure_package_config_file(cmake/HALFConfig.cmake.in

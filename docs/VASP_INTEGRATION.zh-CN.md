@@ -1,7 +1,19 @@
 # VASP 6.6.0 直接调用 DeePAW-HALF 初始化波函数
 
-本文描述进程内集成方案，不复制或再分发 VASP 源码。下述插入点已依据用户提供的
-`vasp-edge-release.6.6.0` 源码核对。
+本文描述进程内集成方案。该私有分支按仓库所有者授权保存了用户提供的
+`vasp-edge-release.6.6.0` 源码；不得从此私有仓库向无 VASP 许可的第三方再分发。
+下述插入点已在该源码上核对并测试。
+
+私有分支 `vasp-6.6-half-integration` 已包含完整源码和一键构建入口：
+
+```bash
+git switch vasp-6.6-half-integration
+tools/half-cmake vasp all
+```
+
+CMake 会复制私有源码到构建目录，生成匹配当前 NVHPC/CUDA/cc 的
+`makefile.include`，从 oneMKL 源码构建 FFTW3 wrapper，先构建 `libhalf.so`，再
+构建并链接 `vasp_std`。源目录不会产生 `.o`、`.mod` 或可执行文件。
 
 ## VASP 启动时实际做了什么
 

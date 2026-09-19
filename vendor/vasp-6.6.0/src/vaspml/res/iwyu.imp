@@ -1,0 +1,29 @@
+[
+  # Avoid suggesting C library instead of C++ variant.
+  { "include": ["<stdlib.h>", "public", "<cstdlib>", "public"] },
+  # Avoid suggesting <utility> for operations on maps/sets (is automatically included).
+  { "include": ["<utility>", "public", "<map>", "public"] },
+  { "include": ["<utility>", "public", "<set>", "public"] },
+  # OPENBLAS symbols are found in cblas.h
+  { "include": ["<openblas_config.h>", "public", "<cblas.h>", "public"] },
+  # Avoid suggesting private header inside cppflow.
+  { "include": ["<cppflow/tensor.h>", "public", "<cppflow/cppflow.h>", "public"] },
+  { "include": ["<cppflow/model.h>", "public", "<cppflow/cppflow.h>", "public"] },
+  { "include": ["<tensorflow/c/tf_tensor.h>", "public", "<cppflow/cppflow.h>", "public"] },
+  # Avoid suggesting to forward-declare "struct tm;" or include private header.
+  { "include": [ "<bits/types/struct_tm.h>", "private", "<ctime>", "public" ] },
+  # Avoid suggesting private headers for shared memory.
+  { "include": [ "<bits/types/struct_shmid_ds.h>", "private", "<sys/ipc.h>", "public" ] },
+  { "include": [ "<sys/types.h>", "public", "<sys/ipc.h>", "public" ] },
+  # Avoid suggesting private headers if C++ parallel algorithms are used.
+  { "include": [ "<pstl/algorithm_impl.h>", "public", "<execution>", "public" ] },
+  { "include": [ "<pstl/execution_impl.h>", "public", "<execution>", "public" ] },
+  { "include": [ "<pstl/execution_defs.h>", "public", "<execution>", "public" ] },
+  { "include": [ "<pstl/glue_algorithm_impl.h>", "public", "<algorithm>", "public" ] },
+  { "include": [ "<pstl/glue_execution_defs.h>", "public", "<execution>", "public" ] },
+  # Assume mpi.hpp is already included by MlMPI.hpp.
+  { "include": [ "\"mpi.hpp\"", "public", "\"MlMPI.hpp\"", "public" ] },
+  # Ignore Boost "private" headers.
+  { "include": [ "@<boost/preprocessor/.*>", "public", "<boost/test/unit_test.hpp>", "public" ] },
+  { "include": [ "@<boost/test/.*>", "public", "<boost/test/unit_test.hpp>", "public" ] },
+]

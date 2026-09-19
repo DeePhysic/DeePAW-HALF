@@ -305,6 +305,30 @@ See [the API guide](docs/API.md), the
 [C example](examples/api/half_c_example.c), and the original
 [VASP-side adapter module](examples/vasp/half_vasp_init.F).
 
+The private `vasp-6.6-half-integration` branch vendors the complete VASP 6.6.0
+source under `vendor/vasp-6.6.0`. On the Pro 6000 host, one command configures
+and builds HALF, the oneMKL FFTW wrapper, and `vasp_std`, then runs the HALF
+tests:
+
+```bash
+tools/half-cmake vasp all
+```
+
+The tool detects the newest NVHPC under `/opt/nvidia/hpc_sdk/Linux_x86_64`, its
+bundled CUDA version, GPU compute capability, HPC-X MPI, and oneMKL under
+`/opt/intel/oneapi`. The executable is written to
+`build/vasp-cuda<CUDA>-cc<CC>-release/vasp-6.6.0/bin/vasp_std`.
+
+To additionally build VASP's own OpenACC GPU port, use:
+
+```bash
+tools/half-cmake vasp all -- -DHALF_VASP_ENABLE_OPENACC=ON
+```
+
+The default is the configuration validated on the Pro 6000: the VASP driver
+uses its NVHPC/HPC-X CPU path, while HALF performs potential construction, H/S
+assembly, and the generalized eigensolve on the CUDA GPU.
+
 The older focused executables remain available during the transition. For
 example:
 

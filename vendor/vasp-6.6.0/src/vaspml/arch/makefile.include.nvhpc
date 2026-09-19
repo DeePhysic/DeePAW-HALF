@@ -1,0 +1,64 @@
+# --------
+# Compiler
+# --------
+CXX             = mpic++
+
+# --------------
+# Compiler flags
+# --------------
+CXXFLAGS       := -O3
+CXXFLAGS       += -g
+CXXFLAGS       += -std=c++17
+CXXFLAGS       += -Wall -Wextra
+
+# -------------------
+# Include directories
+# -------------------
+INCLUDE        :=
+
+# -------
+# Linking
+# -------
+LD              = $(CXX)
+LDFLAGS        := -llapack -lblas
+
+# ------------
+# Preprocessor
+# ------------
+CPP_OPTIONS    :=
+#CPP_OPTIONS    += -DVASPML_DEBUG_LEVEL=3
+
+# --------------------
+# Dependency generator
+# --------------------
+CPP_DEP         = $(CXX)
+
+# --------------
+# Archiving tool
+# --------------
+AR              = ar
+ARFLAGS         = rcs
+
+# -----------------------
+# Additional make options
+# -----------------------
+#MAKE_OPTIONS   += --no-color
+#MAKE_OPTIONS   += --no-logo
+
+# ------------------------------
+# Multithreading and GPU support
+# (optional)
+# ------------------------------
+#CPP_OPTIONS    += -DVASPML_USE_STDEXECUTION
+#CXXFLAGS       += -stdpar=multicore,gpu -acc -gpu=mem:managed,cc60,cc70,cc80
+#INCLUDE        += -I${NVROOT}/math_libs/include -I${NVROOT}/cuda/include
+#LDFLAGS        += -L${NVROOT}/math_libs/lib64/ -lcublas
+#LDFLAGS        += -Wl,-rpath,${NVROOT}/math_libs/lib64
+
+# -----------------------------------
+# Boost library
+# (optional, only needed for testing)
+# -----------------------------------
+BOOST_ROOT     ?=
+BOOST_INCLUDE   = -isystem${BOOST_ROOT}/include
+BOOST_LIB       = -L${BOOST_ROOT}/lib -lboost_unit_test_framework

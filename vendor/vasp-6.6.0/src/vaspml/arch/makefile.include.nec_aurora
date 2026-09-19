@@ -1,0 +1,55 @@
+# --------
+# Compiler
+# --------
+CXX             = mpinc++
+
+# --------------
+# Compiler flags
+# --------------
+CXXFLAGS       := -O3
+CXXFLAGS       += -g
+CXXFLAGS       += -std=gnu++17 -pedantic-errors
+CXXFLAGS       += -Wall
+
+# -------------------
+# Include directories
+# -------------------
+INCLUDE        := -I${NLC_ROOT}/include
+
+# -------
+# Linking
+# -------
+LD              = $(CXX)
+LDFLAGS        := -L${NLC_ROOT}/lib -lblas_sequential -lcblas
+
+# ------------
+# Preprocessor
+# ------------
+CPP_OPTIONS    :=
+#CPP_OPTIONS    += -DVASPML_DEBUG_LEVEL=3
+
+# --------------------
+# Dependency generator
+# --------------------
+CPP_DEP         = gcc
+
+# --------------
+# Archiving tool
+# --------------
+AR              = ar
+ARFLAGS         = rcs
+
+# -----------------------
+# Additional make options
+# -----------------------
+#MAKE_OPTIONS   += --no-color
+#MAKE_OPTIONS   += --no-logo
+
+# -----------------------------------
+# Boost library
+# (optional, only needed for testing)
+# -----------------------------------
+BOOST_ROOT     ?=
+BOOST_INCLUDE   = -isystem${BOOST_ROOT}/include
+# Note: NEC only works with static (or header-only) linking.
+BOOST_LIB       = ${BOOST_ROOT}/lib/libboost_unit_test_framework.a

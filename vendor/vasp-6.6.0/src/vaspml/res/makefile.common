@@ -1,0 +1,15 @@
+# Stuff for pretty output.
+ifneq (,$(findstring no-color,$(MAKE_OPTIONS)))
+LOG_INOUT     = "%-78b %5b %39b"
+else
+LOG_INOUT     = "%-97b %5b %62b"
+C_VCYAN   = \033[38;2;047;181;171m
+C_VGREY   = \033[38;2;128;128;128m
+C_VBLUE   = \033[38;2;044;104;252m
+C_VRED    = \033[38;2;168;044;053m
+C_VGREEN  = \033[38;2;137;173;001m
+C_VPURPLE = \033[38;2;178;128;204m
+C_OFF     = \033[0m
+endif
+LOG_ARROW     = "====>"
+LOG_SEPARATOR = "---------------------------------------------------------------------------------------------------------------------------"

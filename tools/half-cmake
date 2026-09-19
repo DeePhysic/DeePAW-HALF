@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: tools/half-cmake BACKEND [ACTION] [-- CMAKE_ARGS...]
 
-BACKEND  cpu | cuda12 | cuda13
+BACKEND  cpu | cuda12 | cuda13 | vasp
 ACTION   configure | build | test | all (default: all)
 
 Environment:
@@ -14,12 +14,14 @@ Environment:
   HALF_BUILD_JOBS        parallel build jobs
   HALF_FORTRAN_COMPILER  Fortran compiler override
   MKLROOT                oneMKL prefix for the dense solver
+  HALF_CUDA_VERSION      CUDA toolkit bundled with NVHPC (auto-detected for vasp)
 
 Examples:
   tools/half-cmake cpu all
   MKLROOT=/opt/intel/oneapi/mkl/latest tools/half-cmake cpu build
   HALF_GPU_CC=89 tools/half-cmake cuda12 all
   tools/half-cmake cuda13 configure -- -DHALF_ENABLE_GPU_DEBUG=ON
+  tools/half-cmake vasp all
 EOF
 }
 
@@ -35,10 +37,41 @@ if [[ $# -gt 0 ]]; then shift; fi
 if [[ "${1:-}" == "--" ]]; then shift; fi
 extra_args=("$@")
 
+if [[ "${backend}" == "vasp" ]]; then
+  if ! command -v nvfortran >/dev/null 2>&1; then
+    nvhpc_fortran="$(find /opt/nvidia/hpc_sdk/Linux_x86_64 -path '*/compilers/bin/nvfortran' -type f 2>/dev/null | sort -V | tail -1)"
+    if [[ -z "${nvhpc_fortran}" ]]; then
+      echo "Cannot find nvfortran under /opt/nvidia/hpc_sdk/Linux_x86_64" >&2
+      exit 2
+    fi
+    export PATH="$(dirname "${nvhpc_fortran}"):${PATH}"
+  fi
+  nvhpc_fortran="$(command -v nvfortran)"
+  nvhpc_version_root="$(cd "$(dirname "${nvhpc_fortran}")/../.." && pwd)"
+  if [[ -f /opt/intel/oneapi/setvars.sh ]]; then
+    set +u
+    source /opt/intel/oneapi/setvars.sh --force >/dev/null 2>&1
+    set -u
+  fi
+  if [[ -d "${nvhpc_version_root}/comm_libs/hpcx/bin" ]]; then
+    export PATH="${nvhpc_version_root}/comm_libs/hpcx/bin:$(dirname "${nvhpc_fortran}"):${PATH}"
+  fi
+  if [[ -z "${MKLROOT:-}" ]]; then
+    echo "MKLROOT is unset and /opt/intel/oneapi/setvars.sh did not provide it" >&2
+    exit 2
+  fi
+  if ! command -v mpif90 >/dev/null 2>&1; then
+    echo "Cannot find the NVHPC/HPC-X mpif90 wrapper" >&2
+    exit 2
+  fi
+  export HALF_FORTRAN_COMPILER="${HALF_FORTRAN_COMPILER:-${nvhpc_fortran}}"
+fi
+
 case "${backend}" in
   cpu) preset="cpu-release"; build_dir="build/cpu-release" ;;
   cuda12) preset="cuda12-release" ;;
   cuda13) preset="cuda13-release" ;;
+  vasp) preset="base" ;;
   *) echo "Unknown backend: ${backend}" >&2; usage >&2; exit 2 ;;
 esac
 case "${action}" in
@@ -72,13 +105,37 @@ if [[ "${backend}" != "cpu" ]]; then
     echo "Invalid HALF_GPU_CC: ${gpu_cc}" >&2
     exit 2
   fi
-  build_dir="build/${backend}-cc${gpu_cc}-release"
+  if [[ "${backend}" == "vasp" ]]; then
+    cuda_version="${HALF_CUDA_VERSION:-$(find "${nvhpc_version_root}/math_libs" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | sed 's#.*/##' | sort -V | tail -1)}"
+    if [[ -z "${cuda_version}" ]]; then
+      echo "Cannot detect the CUDA toolkit bundled with NVHPC" >&2
+      exit 2
+    fi
+    build_dir="build/vasp-cuda${cuda_version}-cc${gpu_cc}-release"
+    gpu_args+=("-DHALF_CUDA_VERSION=${cuda_version}" "-DHALF_BUILD_VASP=ON" "-DHALF_MKL_ROOT=${MKLROOT}")
+  else
+    build_dir="build/${backend}-cc${gpu_cc}-release"
+  fi
   gpu_args+=("-DHALF_GPU_CC=${gpu_cc}")
 fi
 
 configure() {
-  "${cmake_command}" --fresh --preset "${preset}" -B "${project_root}/${build_dir}" \
-    "${compiler_args[@]}" "${gpu_args[@]}" "${extra_args[@]}"
+  if [[ "${backend}" == "vasp" ]]; then
+    # NVHPC can mistake the old SONAME symlink for a link input after a
+    # --fresh reconfigure. Remove only libhalf outputs; objects remain cached.
+    shopt -s nullglob
+    stale_half_libraries=("${project_root}/${build_dir}"/libhalf.so*)
+    shopt -u nullglob
+    if [[ ${#stale_half_libraries[@]} -gt 0 ]]; then
+      "${cmake_command}" -E rm -f "${stale_half_libraries[@]}"
+    fi
+    "${cmake_command}" --fresh -S "${project_root}" -B "${project_root}/${build_dir}" \
+      -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+      "${compiler_args[@]}" "${gpu_args[@]}" "${extra_args[@]}"
+  else
+    "${cmake_command}" --fresh --preset "${preset}" -B "${project_root}/${build_dir}" \
+      "${compiler_args[@]}" "${gpu_args[@]}" "${extra_args[@]}"
+  fi
 }
 build() {
   local parallel_args=()

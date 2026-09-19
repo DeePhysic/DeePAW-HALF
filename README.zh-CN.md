@@ -221,6 +221,31 @@ HAPPY 风格 NPZ，后者包含 k 点、权重、本征值、占据数和力。
 [C 示例](examples/api/half_c_example.c)，VASP 侧桥接模块见
 [`examples/vasp/half_vasp_init.F`](examples/vasp/half_vasp_init.F)。
 
+在私有分支 `vasp-6.6-half-integration` 中，VASP 6.6.0 完整源码位于
+`vendor/vasp-6.6.0`，可在 Pro 6000 节点用一条命令完成 HALF、MKL FFTW wrapper
+和 `vasp_std` 的配置、编译及 HALF 测试：
+
+```bash
+tools/half-cmake vasp all
+```
+
+脚本自动探测 `/opt/nvidia/hpc_sdk/Linux_x86_64` 下最新 NVHPC、其自带 CUDA
+版本、GPU compute capability、HPC-X MPI，以及 `/opt/intel/oneapi` 的 MKL。
+最终程序位于：
+
+```text
+build/vasp-cuda<CUDA>-cc<CC>-release/vasp-6.6.0/bin/vasp_std
+```
+
+需要让 VASP 本身也使用其 OpenACC GPU port 时可运行：
+
+```bash
+tools/half-cmake vasp all -- -DHALF_VASP_ENABLE_OPENACC=ON
+```
+
+默认保持已在 Pro 6000 验证的配置：VASP 主程序使用 NVHPC/HPC-X CPU 路径，
+HALF 的势、H/S 组装和广义本征求解使用 CUDA GPU。
+
 ## HfO2 大矩阵速度
 
 条件：HfO2 平滑 CHGCAR、匹配的 PBE `Hf_pv+O` POTCAR、PBE、520 eV、60 bands、

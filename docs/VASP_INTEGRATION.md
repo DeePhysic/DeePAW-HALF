@@ -1,8 +1,24 @@
 # VASP 6.6.0 direct initialization with DeePAW-HALF
 
-This note describes an in-process integration. It does not reproduce or
-redistribute VASP source code. The insertion points below were verified against
-the user-supplied `vasp-edge-release.6.6.0` tree.
+This note describes an in-process integration. With the repository owner's
+authorization, this private branch stores the user-supplied
+`vasp-edge-release.6.6.0` source. It must not be redistributed from this
+private repository to parties without a VASP license. The insertion points
+below were verified and tested in that source tree.
+
+The private `vasp-6.6-half-integration` branch contains the complete source and
+a one-command build:
+
+```bash
+git switch vasp-6.6-half-integration
+tools/half-cmake vasp all
+```
+
+CMake copies the private source into the build tree, generates a
+`makefile.include` matching the detected NVHPC/CUDA/compute capability, builds
+the FFTW3 wrapper from oneMKL sources, builds `libhalf.so`, and then links
+`vasp_std`. The vendored source tree remains free of object, module, and binary
+build artifacts.
 
 ## What VASP does at startup
 

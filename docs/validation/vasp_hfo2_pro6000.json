@@ -12,6 +12,15 @@
   "plane_waves": 3407,
   "bands": 56,
   "scf_steps": 1,
+  "one_click_cmake": {
+    "command": "tools/half-cmake vasp all",
+    "build_root": "/data/limusen/half-vasp-oneclick/build/vasp-cuda13.2-cc120-release",
+    "half_ctest": "8/8 passed",
+    "vasp_binary_built": true,
+    "hfo2_runtime_validation": true,
+    "wall_seconds_external": 4.89,
+    "first_davidson_rms": 0.000281
+  },
   "half_single_rank": {
     "mpi_ranks": 1,
     "ncore": 1,

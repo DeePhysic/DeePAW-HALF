@@ -63,6 +63,18 @@ def test_stable_library_api_and_cli_artifacts_are_exposed():
     assert "assemble_dense_gamma_cuda_full" in cuda_solver
 
 
+def test_private_vasp_one_click_build_is_wired():
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    integration = (ROOT / "cmake" / "HALFVaspIntegration.cmake").read_text()
+    tool = (ROOT / "tools" / "half-cmake").read_text()
+    adapter = ROOT / "vendor" / "vasp-6.6.0" / "src" / "half_vasp_init.F"
+    assert 'option(HALF_BUILD_VASP' in cmake
+    assert "add_custom_target(vasp-half ALL" in integration
+    assert "PrepareMklFftw.cmake" in integration
+    assert 'vasp) preset="base"' in tool
+    assert adapter.is_file()
+
+
 def test_build_rejects_non_nvhpc_compilers():
     source = (ROOT / "CMakeLists.txt").read_text()
     assert 'MATCHES "NVHPC|PGI"' in source

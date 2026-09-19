@@ -1,0 +1,15 @@
+SYSTEM = HfO2 native SAD initialization baseline
+LHALF_INIT = .FALSE.
+ISTART = 0
+ICHARG = 2
+ISPIN = 1
+ISYM = 0
+ENCUT = 520
+NBANDS = 56
+NELM = 1
+ALGO = Normal
+PREC = High
+LREAL = .FALSE.
+LWAVE = .FALSE.
+LCHARG = .FALSE.
+NWRITE = 2

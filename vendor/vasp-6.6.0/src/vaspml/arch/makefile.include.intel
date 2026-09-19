@@ -1,0 +1,54 @@
+# --------
+# Compiler
+# --------
+CXX             = mpiicpx
+
+# --------------
+# Compiler flags
+# --------------
+CXXFLAGS       := -O3
+CXXFLAGS       += -g
+CXXFLAGS       += -std=c++17
+CXXFLAGS       += -Wall
+
+# -------------------
+# Include directories
+# -------------------
+INCLUDE        :=
+
+# -------
+# Linking
+# -------
+LD              = $(CXX)
+LDFLAGS        := -qmkl=sequential 
+
+# ------------
+# Preprocessor
+# ------------
+CPP_OPTIONS    :=
+#CPP_OPTIONS    += -DVASPML_DEBUG_LEVEL=3
+
+# --------------------
+# Dependency generator
+# --------------------
+CPP_DEP         = $(CXX)
+
+# --------------
+# Archiving tool
+# --------------
+AR              = ar
+ARFLAGS         = rcs
+
+# -----------------------
+# Additional make options
+# -----------------------
+#MAKE_OPTIONS   += --no-color
+#MAKE_OPTIONS   += --no-logo
+
+# -----------------------------------
+# Boost library
+# (optional, only needed for testing)
+# -----------------------------------
+BOOST_ROOT     ?=
+BOOST_INCLUDE   = -isystem${BOOST_ROOT}/include
+BOOST_LIB       = -L${BOOST_ROOT}/lib -lboost_unit_test_framework

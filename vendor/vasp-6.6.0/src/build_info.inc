@@ -1,0 +1,7 @@
+    character(len=*), parameter :: cpp_options = 'Unknown'
+    character(len=*), parameter :: link_line   = 'Unknown'
+    character(len=*), parameter :: fc     = 'Unknown'
+    character(len=*), parameter :: fcl    = 'Unknown'
+    character(len=*), parameter :: fflags = 'Unknown'
+    character(len=*), parameter :: llibs  = 'Unknown'
+    character(len=*), parameter :: incs   = 'Unknown'

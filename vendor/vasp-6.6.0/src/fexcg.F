@@ -1,0 +1,2057 @@
+#include "symbol.inc"
+!******************** SUBROUTINE FEXCG ****************************
+!
+!> This subroutine calculates derivatives of the electron density
+!> and calls the subroutines that calculate xc quantities
+!> (GGA, meta-GGA, nonlocal van der Waals, dDsC) for the energy,
+!> potential, forces, stress tensor, etc.
+!>
+!> @param[in]  CHTOT_IN charge and magnetisation density in real space in (rho,mag) representation
+!> @param[out] CWORK xc-potential in real space in (rho,mag) representation
+!
+!******************************************************************
+
+      SUBROUTINE FEXCG(&
+     &   XC,NCDIJ,GRIDC,LATT_CUR,XCENC,EXC,CVZERO,XCSIF, &
+     &   KINEDEN,CHTOT_IN,DENCOR,CWORK,DMUWORK,XDM,IVDW,NPDDSC,NPMU)
+
+__GPU USE moffload
+
+      USE prec
+      USE base, only : CAST_COMPLEX_TO_RGRID
+      USE lattice
+      USE mpimy
+      USE mgrid
+      USE constant
+      USE xc_driver
+      USE mbj, ONLY : CMBJ, GET_CMBJ_PW, LscMBJ, SUM_GRHO_OVER_RHO_PW, UPDATE_CMBJ_AUX
+      USE tau_mu, ONLY : tau_handle
+      USE setexm_struct_def, ONLY : xc_info
+      USE xc_name
+      USE vdw_ll, ONLY : VDW_NONLOC, VDW_NONLOC_SPIN
+      USE VDW_rVV10, ONLY : VDW_NONLOC_RVV10
+      USE ggalib, ONLY : ggaapprox
+
+      IMPLICIT NONE
+
+      TYPE (grid_3d)     GRIDC
+      TYPE (latt)        LATT_CUR
+      TYPE (tau_handle)  KINEDEN
+      TYPE (xc_info)     XC
+
+      INTEGER :: IVDW,NPDDSC,NCDIJ,I,IDIR,JDIR,IDUMP,IONODE,ISP,NPMU,IDH
+      INTEGER :: N1,N2,N3,NC,NODE_ME
+      INTEGER :: NP1,NP4,NPVDW
+
+      REAL(q) XCSIF(3,3),STRESS(3,3),XDM(NPDDSC)
+      REAL(q) MAG_NORM,MAG_NORM_I,NABMAG(3),TAU_NORM,TAU_DOT_MDIR,LAP_NORM,LAP_DOT_MDIR
+      REAL(q) LAPLUP,LAPLDW,HESS_DOT_MDIR,HESSUP,HESSDW,XCENC,EXC,ABSNAB,ABSNABUP,ABSNABDW
+      REAL(q) ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D
+      REAL(q) DEXC1,DEXC2,DVC_,DVXC1,DVXC2,EVTOH,EXCL,XCENCC,VXC,VXC1,VXC2,DELTAV
+      REAL(q) GG,GX,GY,GZ,GI,GJ
+      REAL(q) MUUP,MUDW,EDCMU
+      REAL(q) DLAPU,DLAPD
+      REAL(q) CVMBJ
+      REAL(q) tXDM
+      REAL(q) RHO,RHO1,RHO2,RINPL
+      REAL(q) SIF11,SIF12,SIF22,SIF23,SIF31,SIF33
+      REAL(q) SIFLAP11,SIFLAP12,SIFLAP22,SIFLAP23,SIFLAP31,SIFLAP33
+      REAL(q) TAUD,TAUU
+      REAL(q) :: CHGMIN=1E-10_q, NABMIN=1E-10_q, TAUMIN=1E-10_q, LAPMIN=1E-10_q 
+      REAL(q), ALLOCATABLE :: DWORKG(:,:),NABLA1(:,:),NABLA2(:,:),NABLA3(:,:),DVC(:),LAPLACIAN(:,:)
+      REAL(q), ALLOCATABLE :: NABLATWO1(:,:), NABLATWO2(:,:), NABLATWO3(:,:)  ! nabla rho in two component representation
+      ! NABLATWO1..3 are likely not required a more carefull rewrite
+      REAL(q), ALLOCATABLE :: DWORK4(:),DWORK4S(:),DWORK6(:),DWORK6S(:),DWORK7(:),DWORK7S(:)
+      REAL(q), ALLOCATABLE :: DWORKL(:,:),DENSHESS(:,:,:)
+      REAL(q) DVXCFAC
+
+      COMPLEX(q) CVZERO
+      COMPLEX(q), ALLOCATABLE, TARGET :: CWGRAD(:,:), CWACC(:)
+      COMPLEX(q), TARGET :: CHTOT_IN(GRIDC%MPLWV,NCDIJ),CWORK(GRIDC%MPLWV,NCDIJ)
+
+      RGRID DENCOR(GRIDC%RL%NP)
+      RGRID DMUWORK(DIMREAL(NPMU),NCDIJ)
+      RGRID, ALLOCATABLE :: DWORK5(:),DWORK5S(:)
+      RGRID, POINTER :: DWGRAD(:,:) => NULL()
+      RGRID, POINTER :: DWACC(:) => NULL()
+      COMPLEX(q), POINTER :: CHTOT(:,:) => NULL()
+      RGRID, POINTER :: DHTOT(:,:) => NULL()
+      RGRID, POINTER :: DWORK(:,:) => NULL()
+      RGRID, POINTER :: DKINEDEN(:,:) => NULL()
+
+GPACC !$ACC ROUTINE (GGA_DRIVER) SEQ
+GPACC !$ACC ROUTINE (GGASPIN_DRIVER) SEQ
+GPACC !$ACC ROUTINE (GGAAPPROX) SEQ
+GPACC !$ACC ROUTINE (METAGGA_DRIVER) SEQ
+GPACC !$ACC ROUTINE (LscMBJ) SEQ
+GPACC !$ACC ROUTINE (GET_CMBJ_PW) SEQ
+
+      PROFILING_START('fexcg')
+
+      IF (XC%LDOMETAGGA) THEN
+         DVXCFAC=1.0_q
+      ELSE
+         DVXCFAC=0.5_q
+      ENDIF
+
+      NP1=GRIDC%RL%NP
+      NP4=1
+      NPVDW=1
+      IF ((NCDIJ==1).OR.XC%LUSE_VDW) NP4=NP1
+      IF (XC%LUSE_VDW) NPVDW=NP1
+
+      ALLOCATE(CWGRAD(GRIDC%MPLWV,NCDIJ),CWACC(GRIDC%MPLWV),DWORKG(NP1,MIN(NCDIJ,2)), &
+        NABLA1(NP1,NCDIJ),NABLA2(NP1,NCDIJ),NABLA3(NP1,NCDIJ),DVC(NP1), &
+        NABLATWO1(NP1,MIN(2,NCDIJ)),NABLATWO2(NP1,MIN(2,NCDIJ)),NABLATWO3(NP1,MIN(2,NCDIJ)), &
+        DWORK4(NP4),DWORK5(NPVDW),DWORK6(NPVDW),DWORK7(NPVDW))
+!#define project_density
+#ifdef project_density
+      ALLOCATE(CHTOT(SIZE(CHTOT_IN,1),SIZE(CHTOT_IN,2)))
+      CHTOT=CHTOT_IN
+      IF (NCDIJ==4) THEN
+      ! z only: clear x and y direction
+        CHTOT(:,2)=0
+        CHTOT(:,3)=0
+      ! y only: clear x and z direction
+      !  CHTOT(:,2)=0
+      !  CHTOT(:,4)=0
+      ! x only: clear y and z direction
+      !  CHTOT(:,3)=0
+      !  CHTOT(:,4)=0
+      ENDIF
+#else
+      CHTOT=>CHTOT_IN
+#endif
+GPACC !$ACC ENTER DATA CREATE(CWGRAD,CWACC,DWORKG,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,DVC,DWORK4,DWORK5,DWORK6,DWORK7) __IF_ASYNC__
+GPOMP !$OMP TARGET ENTER DATA MAP(ALLOC: CWGRAD,CWACC,DWORKG,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,DVC,DWORK4,DWORK5,DWORK6,DWORK7) IF(OFFLOAD_ON)
+
+      IF (XC%LSPIN_VDW) THEN
+         ALLOCATE(DWORK4S(NP4),DWORK5S(NPVDW),DWORK6S(NPVDW),DWORK7S(NPVDW))
+GPACC !$ACC ENTER DATA CREATE(DWORK4S,DWORK5S,DWORK6S,DWORK7S) __IF_ASYNC__
+GPOMP !$OMP TARGET ENTER DATA MAP(ALLOC: DWORK4S,DWORK5S,DWORK6S,DWORK7S) IF(OFFLOAD_ON)
+      ENDIF
+
+      IF (XC%LLAP) THEN
+         ALLOCATE(LAPLACIAN(NP1,NCDIJ))
+GPACC !$ACC ENTER DATA CREATE(LAPLACIAN) __IF_ASYNC__
+GPOMP !$OMP TARGET ENTER DATA MAP(ALLOC: LAPLACIAN) IF(OFFLOAD_ON)
+
+GPACC !$ACC KERNELS PRESENT(LAPLACIAN) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:LAPLACIAN) IF(OFFLOAD_ON)
+IFXW8 GPOMP !$OMP TEAMS WORKDISTRIBUTE IF(OFFLOAD_ON)
+         LAPLACIAN=0._q
+IFXW8 GPOMP !$OMP END TEAMS WORKDISTRIBUTE
+GPOMP !$OMP END TARGET
+GPACC !$ACC END KERNELS
+      ENDIF
+
+      IF (XC%LDLAP) THEN
+         ALLOCATE(DWORKL(GRIDC%RL%NP,NCDIJ),DENSHESS(GRIDC%RL%NP,6,NCDIJ))
+GPACC !$ACC ENTER DATA CREATE(DWORKL,DENSHESS) __IF_ASYNC__
+GPOMP !$OMP TARGET ENTER DATA MAP(ALLOC: DWORKL,DENSHESS) IF(OFFLOAD_ON)
+
+GPACC !$ACC KERNELS PRESENT(DWORKL,DENSHESS) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:DWORKL,DENSHESS) IF(OFFLOAD_ON)
+IFXW8 GPOMP !$OMP TEAMS WORKDISTRIBUTE IF(OFFLOAD_ON)
+         DWORKL=0
+         DENSHESS=0
+IFXW8 GPOMP !$OMP END TEAMS WORKDISTRIBUTE
+GPACC !$ACC END KERNELS
+GPOMP !$OMP END TARGET
+      ENDIF
+
+      CALL CAST_COMPLEX_TO_RGRID(CWGRAD,DWGRAD)
+      CALL CAST_COMPLEX_TO_RGRID(CWACC,DWACC)
+      CALL CAST_COMPLEX_TO_RGRID(CHTOT,DHTOT)
+      CALL CAST_COMPLEX_TO_RGRID(CWORK,DWORK)
+      IF (XC%LTAU) CALL CAST_COMPLEX_TO_RGRID(KINEDEN%TAU,DKINEDEN)
+GPACC !$ACC ENTER DATA CREATE(DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET ENTER DATA MAP(ALLOC: DWORK) IF(OFFLOAD_ON)
+
+      ! Flip CHTOT from (rho,mag) to (rho_up,rho_down) representation if needed (collinear case)
+      IF (NCDIJ==2) CALL RL_FLIP(CHTOT,GRIDC,NCDIJ,.TRUE.)
+
+      ! Non-collinear magnetism: gradient corrections in the
+      ! noncollinear case are calculated a bit differently than in the collinear case
+      ! CHTOT and KINEDEN should be in (rho,mag) representation
+
+!     TAUMIN=0 for MBJ is ok since there is no division by TAU
+      IF ((XC%ID(1)==ID_XC_MBJ) .OR. (XC%ID(1)==ID_XC_LMBJ)) TAUMIN=0._q
+
+! set to one for error-dumps
+#ifdef MPI
+      NODE_ME=GRIDC%COMM%NODE_ME
+      IONODE =GRIDC%COMM%IONODE
+      IDUMP=0
+#ifdef debug
+      IF (NODE_ME==IONODE) IDUMP=1
+#endif
+#else
+      NODE_ME=0
+      IONODE =0
+      IDUMP=0
+#ifdef debug
+      IDUMP=1
+#endif
+#endif
+
+#ifdef vector
+      IF ((XC%NXC==1).AND.(XC%ID(1)==ID_XC_PW91)) THEN
+        CALL vtutor%error("ERROR: only PW91 is supported if -Dvector is specified in the makefile \n &
+           &remove -Dvector from the makefile")
+      ENDIF
+#endif
+
+      RINPL=1._q/GRIDC%NPLWV                    ! Scaling of Energy
+      EVTOH=1._q/(2.*HSQDTM)*AUTOA5             ! KinEDens eV to Hartree
+
+!=======================================================================
+! First phase: Transform DENCOR (core charge) and
+!  CHTOT (pseudo chargedensity) to reciprocal space
+!=======================================================================
+      spin: DO ISP=1,NCDIJ
+      IF ((NCDIJ==1).OR.(NCDIJ==2)) THEN
+! set CWORK to total real charge in reciprocal space
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,LATT_CUR,DWORK,DENCOR,DHTOT,RINPL,NCDIJ,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LATT_CUR,DWORK,DENCOR,DHTOT) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LATT_CUR,DWORK,DENCOR,DHTOT) IF(OFFLOAD_ON)
+
+         DO I=1,GRIDC%RL%NP
+            DWORK(I,ISP)=REAL((DENCOR(I)/NCDIJ+DHTOT(I,ISP))*RINPL/LATT_CUR%OMEGA,KIND=q)
+         ENDDO
+
+__CPU !$OMP END PARALLEL DO
+      ELSEIF (NCDIJ==4) THEN
+         IF (ISP==1) THEN
+! Add core charge density to pseudo charge density
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,LATT_CUR,DWORK,DENCOR,DHTOT,RINPL,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LATT_CUR,DWORK,DENCOR,DHTOT) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LATT_CUR,DWORK,DENCOR,DHTOT) IF(OFFLOAD_ON)
+
+            DO I=1,GRIDC%RL%NP
+               DWORK(I,ISP)=REAL((DENCOR(I)+DHTOT(I,ISP))*RINPL/LATT_CUR%OMEGA,KIND=q)
+            ENDDO
+            
+__CPU !$OMP END PARALLEL DO
+         ELSE
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,LATT_CUR,DWORK,DHTOT,RINPL,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LATT_CUR,DWORK,DHTOT) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LATT_CUR,DWORK,DHTOT) IF(OFFLOAD_ON)
+            DO I=1,GRIDC%RL%NP
+               DWORK(I,ISP)=REAL(DHTOT(I,ISP)*RINPL/LATT_CUR%OMEGA,KIND=q)
+            ENDDO
+__CPU !$OMP END PARALLEL DO
+         ENDIF
+      ENDIF
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+      CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+!=======================================================================
+! now calculate the gradient of the charge density
+!=======================================================================
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,CWGRAD,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(CWGRAD,CWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:CWGRAD,CWORK) IF(OFFLOAD_ON)
+      DO  I=1,GRIDC%RC%NP
+        CWGRAD(I,ISP)=CWORK(I,ISP)
+      ENDDO
+__CPU !$OMP END PARALLEL DO
+
+! x-component:
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GX) SHARED(GRIDC,LATT_CUR,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWORK) PRIVATE(N1,N2,N3,NC,GX) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GX) IF(OFFLOAD_ON)
+
+!DIR$ IVDEP
+!$DIR FORCE_VECTOR
+!OCL NOVREC
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+         GX=(GRIDC%LPCTX(N1)*LATT_CUR%B(1,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(1,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(1,3))
+         CWORK(I,ISP)=CWORK(I,ISP)*GX*CITPI
+       ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! grad_x in real space:
+      CALL SETUNB(CWORK(1,ISP),GRIDC)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,1)
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,NABLA1,DWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLA1,DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLA1,DWORK) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RL%NP
+        NABLA1(I,ISP)= REAL( DWORK(I,ISP) ,KIND=q)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! y-component:
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,CWGRAD,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(CWGRAD,CWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:CWGRAD,CWORK) IF(OFFLOAD_ON)
+
+      DO  I=1,GRIDC%RC%NP
+        CWORK(I,ISP)=CWGRAD(I,ISP)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GY) SHARED(GRIDC,LATT_CUR,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWORK) PRIVATE(N1,N2,N3,NC,GY) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GY) IF(OFFLOAD_ON)
+
+!DIR$ IVDEP
+!$DIR FORCE_VECTOR
+!OCL NOVREC
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+         GY=(GRIDC%LPCTX(N1)*LATT_CUR%B(2,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(2,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(2,3))
+         CWORK(I,ISP)=CWORK(I,ISP)*GY*CITPI
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! grad_y in real space:
+      CALL SETUNB(CWORK(1,ISP),GRIDC)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,1)
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,NABLA2,DWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLA2,DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLA2,DWORK) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RL%NP
+        NABLA2(I,ISP)= REAL( DWORK(I,ISP) ,KIND=q)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! z-component:
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,CWGRAD,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(CWGRAD,CWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:CWGRAD,CWORK) IF(OFFLOAD_ON)
+
+      DO  I=1,GRIDC%RC%NP
+        CWORK(I,ISP)=CWGRAD(I,ISP)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GZ) SHARED(GRIDC,LATT_CUR,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,CWORK,LATT_CUR) PRIVATE(N1,N2,N3,NC,GZ) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,CWORK,LATT_CUR) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GZ) IF(OFFLOAD_ON)
+
+!DIR$ IVDEP
+!$DIR FORCE_VECTOR
+!OCL NOVREC
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+         GZ=(GRIDC%LPCTX(N1)*LATT_CUR%B(3,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(3,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(3,3))
+         CWORK(I,ISP)=CWORK(I,ISP)*GZ*CITPI
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! grad_z in real space:
+      CALL SETUNB(CWORK(1,ISP),GRIDC)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,1)
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,NABLA3,DWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLA3,DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLA3,DWORK) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RL%NP
+        NABLA3(I,ISP)= REAL( DWORK(I,ISP) ,KIND=q)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      IF (XC%LLAP) THEN
+        IF (XC%LDLAP) THEN
+
+          ! and if laplacian-dependent functional is called, also compute density hessian
+          ! indices for density hessian: 1 = xx, 2 = xy, 3 = xz, 4 = yy, 5 = yz, 6 = zz
+          IDH = 0
+          DO IDIR=1,3
+            DO JDIR = IDIR,3
+              IDH = IDH + 1
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GI,GJ) SHARED(GRIDC,LATT_CUR,CWGRAD,CWORK,ISP,IDIR,JDIR)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWGRAD,CWORK) PRIVATE(N1,N2,N3,NC,GI,GJ) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWGRAD,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GI,GJ) IF(OFFLOAD_ON)
+
+              DO I=1,GRIDC%RC%NP
+                N1= MOD((I-1),GRIDC%RC%NROW) +1
+                NC= (I-1)/GRIDC%RC%NROW+1
+                N2= GRIDC%RC%I2(NC)
+                N3= GRIDC%RC%I3(NC)
+
+                GI = GRIDC%LPCTX(N1)*LATT_CUR%B(IDIR,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(IDIR,2)&
+                &      +GRIDC%LPCTZ(N3)*LATT_CUR%B(IDIR,3)
+                GJ = GRIDC%LPCTX(N1)*LATT_CUR%B(JDIR,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(JDIR,2)&
+                &      +GRIDC%LPCTZ(N3)*LATT_CUR%B(JDIR,3)
+                CWORK(I,ISP) = CWGRAD(I,ISP) * GI*GJ*CITPI*CITPI
+              ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+              CALL SETUNB(CWORK(1,ISP),GRIDC)
+              CALL FFT3D(CWORK(1,ISP),GRIDC,1)
+              CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DENSHESS,DWORK,ISP,IDH)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DENSHESS,DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DENSHESS,DWORK) IF(OFFLOAD_ON)
+
+              DO I=1,GRIDC%RL%NP
+                 DENSHESS(I,IDH,ISP) = REAL( DWORK(I,ISP) ,KIND=q)
+              ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+            ENDDO
+          ENDDO
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,LAPLACIAN,DENSHESS,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LAPLACIAN,DENSHESS) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LAPLACIAN,DENSHESS) IF(OFFLOAD_ON)
+
+          DO I=1,GRIDC%RL%NP
+            LAPLACIAN(I,ISP) = DENSHESS(I,1,ISP) + DENSHESS(I,4,ISP) + DENSHESS(I,6,ISP)
+          ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+        ELSE
+
+          DO IDIR=1,3
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GG) SHARED(GRIDC,LATT_CUR,CWGRAD,CWORK,ISP,IDIR)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWGRAD,CWORK) PRIVATE(N1,N2,N3,NC,GG) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWGRAD,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GG) IF(OFFLOAD_ON)
+
+            DO I=1,GRIDC%RC%NP  ! loop over all grid points NP in the reciprocal (RC) grid
+               ! index of grid point along three reciprocal lattice vectors (N1, N2, N3)
+               N1= MOD((I-1),GRIDC%RC%NROW) +1
+               NC= (I-1)/GRIDC%RC%NROW+1
+               N2= GRIDC%RC%I2(NC)
+               N3= GRIDC%RC%I3(NC)
+               ! convert to lattice vector component in direction x, y or z (corresponding to index J)
+               GG=(GRIDC%LPCTX(N1)*LATT_CUR%B(IDIR,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(IDIR,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(IDIR,3))
+               CWORK(I,ISP)=CWGRAD(I,ISP)*GG*GG*CITPI*CITPI
+               !write(*,*)'xcgrad:cwgrad ', CWORK4(I), CWGRAD(I), G1, G2, CITPI
+            ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+            CALL SETUNB(CWORK(1,ISP),GRIDC)
+            CALL FFT3D(CWORK(1,ISP),GRIDC,1)
+            CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,LAPLACIAN,DWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LAPLACIAN,DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LAPLACIAN,DWORK) IF(OFFLOAD_ON)
+
+            DO I=1,GRIDC%RL%NP
+               LAPLACIAN(I,ISP)=LAPLACIAN(I,ISP)+REAL( DWORK(I,ISP) ,KIND=q)
+            ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+          ENDDO
+
+        ENDIF
+      ENDIF
+
+      ENDDO spin
+
+! gK: copy NABLA to two component representation NABLATWO1/2/3
+! gK: maybe this could be removed on the long run, but requires more code re-write
+      IF (NCDIJ<=2) THEN
+         DO ISP=1,NCDIJ
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3) IF(OFFLOAD_ON)
+
+           DO I=1,GRIDC%RL%NP
+              NABLATWO1(I,ISP)=NABLA1(I,ISP)
+              NABLATWO2(I,ISP)=NABLA2(I,ISP)
+              NABLATWO3(I,ISP)=NABLA3(I,ISP)
+           ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+         ENDDO
+
+      ENDIF
+!=======================================================================
+!  grad rho    d    f_xc
+! ---------- * ------------      (Phys.Rev.B 50,7 (1994) 4954)
+! |grad rho|   d |grad rho|
+!
+!  MIND: the factor OMEGA is difficult to understand:
+!   1/N sum_r energy_density * rho *OMEGA = Energy
+!   1/N sum_r energy_density * \bar rho   = Energy (\bar rho=rho*LATT_CUR%OMEGA)
+!=======================================================================
+
+GPACC !$ACC KERNELS PRESENT(DWORK,DVC,DWORKG) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:DWORK,DVC,DWORKG) IF(OFFLOAD_ON)
+IFXW8 GPOMP !$OMP TEAMS WORKDISTRIBUTE IF(OFFLOAD_ON)
+      DWORK = 0._q ; DVC = 0._q ; DWORKG = 0._q
+IFXW8 GPOMP !$OMP END TEAMS WORKDISTRIBUTE
+GPOMP !$OMP END TARGET
+GPACC !$ACC END KERNELS
+
+      EXC=0._q; CVMBJ=CMBJ
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP SHARED(GRIDC,LATT_CUR,XC,NCDIJ,CHGMIN,NABMIN,LAPMIN,TAUMIN,IVDW,XDM,DMUWORK,DVXCFAC,DHTOT,DENCOR,EVTOH,NABLA1,NABLA2,NABLA3,DWORK4,DWORK4S,DWORK7,DWORK7S,KINEDEN,DKINEDEN,DWORK,DWORKG,DVC,LAPLACIAN,DWORKL,NABLATWO1,NABLATWO2,NABLATWO3) &
+__CPU !$OMP PRIVATE(I,MAG_NORM,MAG_NORM_I,RHO1,RHO2,NABMAG,ABSNABUP,ABSNABDW,ABSNAB,TAU_NORM,TAU_DOT_MDIR,TAUU,TAUD,LAP_NORM,LAP_DOT_MDIR,LAPLUP,LAPLDW,EXCL,DEXC1,DEXC2,DVXC1,DVXC2,DVC_,DLAPU,DLAPD,MUUP,MUDW,RHO,TXDM) &
+__CPU !$OMP FIRSTPRIVATE(CVMBJ) &
+__CPU !$OMP REDUCTION(+:EXC)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,XC,DMUWORK,DHTOT,DENCOR,NABLA1,NABLA2,NABLA3,DWORK4,DWORK4S,DWORK7,DWORK7S,KINEDEN%TAUC,DKINEDEN,DWORK,DWORKG,DVC,LAPLACIAN,DWORKL,NABLATWO1,NABLATWO2,NABLATWO3) &
+GPACC !$ACC PRIVATE(MAG_NORM,MAG_NORM_I,RHO1,RHO2,NABMAG,ABSNABUP,ABSNABDW,ABSNAB,TAU_NORM,TAU_DOT_MDIR,TAUU,TAUD, &
+GPACC !$ACC LAP_NORM,LAP_DOT_MDIR,LAPLUP,LAPLDW,EXCL,DEXC1,DEXC2,DVXC1,DVXC2,DVC_,DLAPU,DLAPD,MUUP,MUDW,RHO,TXDM) &
+GPACC !$ACC FIRSTPRIVATE(CVMBJ) REDUCTION(+:EXC) __IF_ASYNC__
+
+! for OpenMP present checks are performed with MAP(PRESENT,TO:...), so for conditional data,
+! MAP(ALLOC:...) is used to avoid potentially copying the data for the parallel loop.
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,XC, &
+GPOMP !$OMP DMUWORK,DHTOT,DENCOR,NABLA1,NABLA2,NABLA3,DWORK4,DWORK7,DWORK,DWORKG,DVC,NABLATWO1,NABLATWO2,NABLATWO3) &
+GPOMP !$OMP MAP(ALLOC:DWORK4S,DWORK7S,KINEDEN%TAUC,DKINEDEN,LAPLACIAN,DWORKL) &
+GPOMP !$OMP PRIVATE(MAG_NORM,MAG_NORM_I,RHO1,RHO2,NABMAG,ABSNABUP, &
+GPOMP !$OMP ABSNABDW,ABSNAB,TAU_NORM,TAU_DOT_MDIR,TAUU,TAUD,LAP_NORM,LAP_DOT_MDIR,LAPLUP, &
+GPOMP !$OMP LAPLDW,EXCL,DEXC1,DEXC2,DVXC1,DVXC2,DVC_,DLAPU,DLAPD,MUUP,MUDW,RHO,TXDM) &
+GPOMP !$OMP FIRSTPRIVATE(CVMBJ) REDUCTION(+:EXC) IF(OFFLOAD_ON)
+
+! Just an active region instead of the parallel loop for debugging purposes
+!
+! GPOMP !$OMP TARGET MAP(PRESENT,TO:GRIDC,LATT_CUR,XC, &
+! GPOMP !$OMP DMUWORK,DHTOT,DENCOR,NABLA1,NABLA2,NABLA3,DWORK4,DWORK7,DWORK,DWORKG,DVC,NABLATWO1,NABLATWO2,NABLATWO3) &
+! GPOMP !$OMP MAP(ALLOC:DWORK4S,DWORK7S,KINEDEN%TAUC,DKINEDEN,LAPLACIAN,DWORKL) IF(OFFLOAD_ON)
+      DO I=1,GRIDC%RL%NP
+
+         IF (NCDIJ==1) THEN
+         ! nonspin-polarized case
+            RHO1=MAX(REAL((DHTOT(I,1)+DENCOR(I))*0.5_q/LATT_CUR%OMEGA ,KIND=q), CHGMIN)
+            RHO2=RHO1
+
+            ABSNAB=SQRT(NABLA1(I,1)*NABLA1(I,1)+NABLA2(I,1)*NABLA2(I,1) &
+                 +NABLA3(I,1)*NABLA3(I,1))
+
+            ABSNABUP= 0.5_q*ABSNAB
+            ABSNABDW= 0.5_q*ABSNAB
+
+!           not needed for MBJ
+            IF ((XC%ID(1)/=ID_XC_MBJ) .AND. (XC%ID(1)/=ID_XC_LMBJ)) THEN
+               ABSNABUP=MAX(ABSNABUP,NABMIN)
+               ABSNABDW=MAX(ABSNABDW,NABMIN)
+               ABSNAB=MAX(ABSNAB,2*NABMIN)
+            ENDIF
+
+            IF (XC%LLAP) THEN
+               LAPLUP=0.5_q*REAL(LAPLACIAN(I,1),KIND=q)
+            ELSE
+               LAPLUP=0._q
+            ENDIF
+            LAPLDW=LAPLUP
+
+            IF (XC%LTAU) THEN
+               TAUU=MAX(0.5_q*REAL(DKINEDEN(I,1)+KINEDEN%TAUC(I),KIND=q), TAUMIN)
+            ELSE
+               TAUU=0._q
+            ENDIF
+            TAUD=TAUU
+
+            DWORK4(I)=2.0_q*RHO1
+
+            IF (XC%LUSE_VDW) DWORK7(I)=ABSNAB
+
+            ! DDsC dispersion correction
+            IF (IVDW==4) CALL GGAapprox(ABS(RHO1)*AUTOA3,ABSNABUP*AUTOA4,XDM(I))
+
+         ELSEIF (NCDIJ==2) THEN
+         ! Spin-polarized case
+            RHO1= MAX(REAL((DHTOT(I,1)+DENCOR(I)*0.5_q)/LATT_CUR%OMEGA ,KIND=q), CHGMIN)
+            RHO2= MAX(REAL((DHTOT(I,2)+DENCOR(I)*0.5_q)/LATT_CUR%OMEGA ,KIND=q), CHGMIN)
+
+            ABSNABUP=SQRT(NABLA1(I,1)*NABLA1(I,1)+NABLA2(I,1)*NABLA2(I,1) &
+                          +NABLA3(I,1)*NABLA3(I,1))
+
+            ABSNABDW=SQRT(NABLA1(I,2)*NABLA1(I,2)+NABLA2(I,2)*NABLA2(I,2) &
+                          +NABLA3(I,2)*NABLA3(I,2))
+
+            ABSNAB= (NABLA1(I,1)+NABLA1(I,2))*(NABLA1(I,1)+NABLA1(I,2))+ &
+                    (NABLA2(I,1)+NABLA2(I,2))*(NABLA2(I,1)+NABLA2(I,2))+ &
+                    (NABLA3(I,1)+NABLA3(I,2))*(NABLA3(I,1)+NABLA3(I,2))
+            ABSNAB=SQRT(ABSNAB)
+
+!           not needed for MBJ
+            IF ((XC%ID(1)/=ID_XC_MBJ) .AND. (XC%ID(1)/=ID_XC_LMBJ)) THEN
+               ABSNABUP=MAX(ABSNABUP,NABMIN)
+               ABSNABDW=MAX(ABSNABDW,NABMIN)
+               ABSNAB=MAX(ABSNAB,2*NABMIN)
+            ENDIF
+!
+! presently VASP converges very badly if correlation_ABS_DRHOUP_ABS_DRHOD
+! is not set
+! it is probably the exchange potential, which is partly canceled by
+! the correlation energy if ABSNAB=ABSNABUP+ABSNABDW
+! so let us stick to ABSNAB=ABSNABUP+ABSNABDW for the time beeing
+!
+!#define  correlation_ABS_DRHOUP_ABS_DRHOD
+#ifdef correlation_ABS_DRHOUP_ABS_DRHOD
+            ABSNAB=ABSNABUP+ABSNABDW
+#endif
+            IF (XC%LLAP) THEN
+               LAPLUP=REAL(LAPLACIAN(I,1),KIND=q)
+               LAPLDW=REAL(LAPLACIAN(I,2),KIND=q)
+            ELSE
+               LAPLUP=0._q
+               LAPLDW=0._q
+            ENDIF
+
+            IF (XC%LTAU) THEN
+               TAUU=MAX(REAL(DKINEDEN(I,1)+KINEDEN%TAUC(I)*0.5_q,KIND=q), TAUMIN)
+               TAUD=MAX(REAL(DKINEDEN(I,2)+KINEDEN%TAUC(I)*0.5_q,KIND=q), TAUMIN)
+            ELSE
+               TAUU=0._q
+               TAUD=0._q
+            ENDIF
+
+            IF (XC%LUSE_VDW) THEN
+               IF (XC%LSPIN_VDW) THEN
+                  DWORK4(I)=RHO1
+                  DWORK4S(I)=RHO2
+                  DWORK7(I)=ABSNABUP
+                  DWORK7S(I)=ABSNABDW
+               ELSE
+                  DWORK4(I)=RHO1+RHO2
+                  DWORK7(I)=ABSNAB
+               ENDIF
+            ENDIF
+
+            ! DDsC dispersion correction
+            IF (IVDW.eq.4) then
+               CALL GGAapprox(ABS(RHO1)*AUTOA3,ABSNABUP*AUTOA4,XDM(I))
+               CALL GGAapprox(ABS(RHO2)*AUTOA3,ABSNABDW*AUTOA4,tXDM)
+               XDM(I)=(XDM(I)+tXDM)*0.5_q
+            ENDIF
+
+         ELSEIF (NCDIJ==4) THEN
+         ! non-collinear case
+!
+! | m |
+!
+            MAG_NORM=SQRT(ABS( &
+           &    DHTOT(I,2)*DHTOT(I,2)+DHTOT(I,3)*DHTOT(I,3)+DHTOT(I,4)*DHTOT(I,4)))
+! introduce regularization for m nabla m / |m|
+            MAG_NORM_I=1._q/SQRT(MAG_NORM**2+(LATT_CUR%OMEGA*XC%NABMAG_REG)**2)
+!
+! RHO1: \rho_up   = ( \rho_tot + | m | )/2
+! RHO2: \rho_down = ( \rho_tot - | m | )/2
+!
+            RHO1= MAX(REAL((DHTOT(I,1)+DENCOR(I)+MAG_NORM)*0.5_q/LATT_CUR%OMEGA ,KIND=q), CHGMIN)
+            RHO2= MAX(REAL((DHTOT(I,1)+DENCOR(I)-MAG_NORM)*0.5_q/LATT_CUR%OMEGA ,KIND=q), CHGMIN)
+!
+! \nabla | m |
+!
+            NABMAG(1)=(NABLA1(I,2)*DHTOT(I,2)+NABLA1(I,3)*DHTOT(I,3)+NABLA1(I,4)*DHTOT(I,4))*MAG_NORM_I
+            NABMAG(2)=(NABLA2(I,2)*DHTOT(I,2)+NABLA2(I,3)*DHTOT(I,3)+NABLA2(I,4)*DHTOT(I,4))*MAG_NORM_I
+            NABMAG(3)=(NABLA3(I,2)*DHTOT(I,2)+NABLA3(I,3)*DHTOT(I,3)+NABLA3(I,4)*DHTOT(I,4))*MAG_NORM_I
+!
+! | ( \nabla \rho + \nabla | m | )/2 |
+!
+            ABSNABUP=SQRT( &
+           &            (NABLA1(I,1)+NABMAG(1))*(NABLA1(I,1)+NABMAG(1)) + &
+           &             (NABLA2(I,1)+NABMAG(2))*(NABLA2(I,1)+NABMAG(2)) + &
+           &              (NABLA3(I,1)+NABMAG(3))*(NABLA3(I,1)+NABMAG(3)) ) * 0.5_q
+!
+! | ( \nabla \rho - \nabla | m | )/2 |
+!
+            ABSNABDW=SQRT( &
+           &            (NABLA1(I,1)-NABMAG(1))*(NABLA1(I,1)-NABMAG(1)) + &
+           &             (NABLA2(I,1)-NABMAG(2))*(NABLA2(I,1)-NABMAG(2)) + &
+           &              (NABLA3(I,1)-NABMAG(3))*(NABLA3(I,1)-NABMAG(3)) ) *0.5_q
+!
+! | \nabla \rho |
+!
+            ABSNAB=SQRT(NABLA1(I,1)*NABLA1(I,1)+NABLA2(I,1)*NABLA2(I,1)+NABLA3(I,1)*NABLA3(I,1))
+! I guess this comment should be removed, right????
+! presently VASP converges very badly if correlation_ABS_DRHOUP_ABS_DRHOD
+! is not set
+! it is probably the exchange potential, which is partly canceled by
+! the correlation energy if ABSNAB=ABSNABUP+ABSNABDW
+! so let us stick to ABSNAB=ABSNABUP+ABSNABDW for the time beeing
+!
+!#define  correlation_ABS_DRHOUP_ABS_DRHOD
+#ifdef correlation_ABS_DRHOUP_ABS_DRHOD
+            ABSNAB=ABSNABUP+ABSNABDW
+#endif
+!
+! store ( \nabla \rho - \nabla | m | )/2
+!
+            NABLATWO1(I,2)=(NABLA1(I,1)-NABMAG(1))*0.5_q
+            NABLATWO2(I,2)=(NABLA2(I,1)-NABMAG(2))*0.5_q
+            NABLATWO3(I,2)=(NABLA3(I,1)-NABMAG(3))*0.5_q
+!
+! store ( \nabla \rho + \nabla | m | )/2
+!
+            NABLATWO1(I,1)=(NABLA1(I,1)+NABMAG(1))*0.5_q
+            NABLATWO2(I,1)=(NABLA2(I,1)+NABMAG(2))*0.5_q
+            NABLATWO3(I,1)=(NABLA3(I,1)+NABMAG(3))*0.5_q
+
+            IF (XC%LLAP) THEN
+               IF (XC%ILAPNCL==1) THEN
+                  ! lap_up = (lap_tot + lap*hat{m})/2
+                  ! lap_dn = (lap_tot - lap*hat{m})/2
+                  ! The regularization of MAG_NORM_I is not used for the Laplacian. Tests would be needed.
+                  MAG_NORM_I=1._q/MAX(MAG_NORM/LATT_CUR%OMEGA,CHGMIN)/LATT_CUR%OMEGA
+!                  MAG_NORM_I=1._q/SQRT(MAG_NORM**2+(LATT_CUR%OMEGA*XC%NABMAG_REG)**2)
+                  LAP_DOT_MDIR=(DHTOT(I,2)*LAPLACIAN(I,2)+DHTOT(I,3)*LAPLACIAN(I,3)+DHTOT(I,4)*LAPLACIAN(I,4))*MAG_NORM_I
+                  LAPLUP=REAL((LAPLACIAN(I,1)+LAP_DOT_MDIR)*0.5_q,KIND=q)
+                  LAPLDW=REAL((LAPLACIAN(I,1)-LAP_DOT_MDIR)*0.5_q,KIND=q)
+               ELSEIF (XC%ILAPNCL==2) THEN
+                  ! lap_up = (lap_tot + |lap m|)/2
+                  ! lap_dn = (lap_tot - |lap m|)/2
+                  LAP_NORM=MAX(SQRT(ABS( &
+                 &   LAPLACIAN(I,2)*LAPLACIAN(I,2)+LAPLACIAN(I,3)*LAPLACIAN(I,3)+LAPLACIAN(I,4)*LAPLACIAN(I,4))), LAPMIN)
+                  LAPLUP=REAL((LAPLACIAN(I,1)+LAP_NORM)*0.5_q,KIND=q)
+                  LAPLDW=REAL((LAPLACIAN(I,1)-LAP_NORM)*0.5_q,KIND=q)
+               ENDIF
+            ELSE
+               LAPLUP=0._q
+               LAPLDW=0._q
+            ENDIF
+
+            IF (XC%LTAU) THEN
+               IF (XC%ITAUNCL==1) THEN
+                  ! tau_up = (tau_tot + tau*hat{m})/2
+                  ! tau_dn = (tau_tot - tau*hat{m})/2
+                  ! The regularization of MAG_NORM_I is not used for the kinetic-energy density. Tests would be needed.
+                  MAG_NORM_I=1._q/MAX(MAG_NORM/LATT_CUR%OMEGA,CHGMIN)/LATT_CUR%OMEGA
+!                  MAG_NORM_I=1._q/SQRT(MAG_NORM**2+(LATT_CUR%OMEGA*XC%NABMAG_REG)**2)
+                  TAU_DOT_MDIR=(DHTOT(I,2)*DKINEDEN(I,2)+DHTOT(I,3)*DKINEDEN(I,3)+DHTOT(I,4)*DKINEDEN(I,4))*MAG_NORM_I
+                  TAUU=MAX(REAL((DKINEDEN(I,1)+TAU_DOT_MDIR)*0.5_q+KINEDEN%TAUC(I)*0.5_q,KIND=q), TAUMIN)
+                  TAUD=MAX(REAL((DKINEDEN(I,1)-TAU_DOT_MDIR)*0.5_q+KINEDEN%TAUC(I)*0.5_q,KIND=q), TAUMIN)
+               ELSEIF (XC%ITAUNCL==2) THEN
+                  ! tau_up = (tau_tot + |tau|)/2
+                  ! tau_dn = (tau_tot - |tau|)/2
+                  TAU_NORM=MAX(SQRT(ABS( &
+                 &   DKINEDEN(I,2)*DKINEDEN(I,2)+DKINEDEN(I,3)*DKINEDEN(I,3)+DKINEDEN(I,4)*DKINEDEN(I,4))), TAUMIN)
+                  TAUU=MAX(REAL((DKINEDEN(I,1)+TAU_NORM)*0.5_q,KIND=q), TAUMIN)
+                  TAUD=MAX(REAL((DKINEDEN(I,1)-TAU_NORM)*0.5_q,KIND=q), TAUMIN)
+               ENDIF
+            ELSE
+               TAUU=0._q
+               TAUD=0._q
+            ENDIF
+!
+! store total charge and total gradient for non-local vdW-DF
+            IF (XC%LUSE_VDW) THEN
+               IF (XC%LSPIN_VDW) THEN
+                  DWORK4(I)=RHO1
+                  DWORK4S(I)=RHO2
+                  DWORK7(I)=ABSNABUP
+                  DWORK7S(I)=ABSNABDW
+               ELSE
+                  DWORK4(I)=RHO1+RHO2
+                  DWORK7(I)=ABSNAB
+               ENDIF
+            ENDIF
+
+            ! DDsC dispersion correction
+            IF (IVDW.eq.4) then
+               CALL GGAapprox(ABS(RHO1)*AUTOA3,ABSNABUP*AUTOA4,XDM(I))
+               CALL GGAapprox(ABS(RHO2)*AUTOA3,ABSNABDW*AUTOA4,tXDM)
+               XDM(I)=(XDM(I)+tXDM)*0.5_q
+            ENDIF
+
+         ENDIF
+
+         IF (XC%LDOMETAGGA) THEN
+
+            ! The CMBJ parameter may depend on the spatial position,
+            ! if so, it is set here to the right entry in CMBJ_AUX
+            CALL GET_CMBJ_PW(XC,I,CVMBJ)
+
+            CALL METAGGA_DRIVER(&
+           &   XC,RHO1*AUTOA3,RHO2*AUTOA3,ABSNABUP*AUTOA4,ABSNABDW*AUTOA4,ABSNAB*AUTOA4, &
+           &   LAPLUP*AUTOA5,LAPLDW*AUTOA5,TAUU*EVTOH,TAUD*EVTOH, &
+           &   EXCL,DEXC1,DEXC2,DVXC1,DVXC2,DVC_,MUUP,MUDW,DLAPU,DLAPD,CVMBJ)
+
+            RHO=RHO1+RHO2
+
+            IF (LscMBJ()) CALL SUM_GRHO_OVER_RHO_PW(RHO*AUTOA3,ABSNAB*AUTOA4)
+
+            EXC=EXC+EXCL*RHO*RYTOEV*LATT_CUR%OMEGA
+            DVXC1=DVXC1*RYTOEV*AUTOA
+            DVXC2=DVXC2*RYTOEV*AUTOA
+            DVC_ =DVC_ *RYTOEV*AUTOA
+            IF (XC%LDLAP) THEN
+              DLAPU=DLAPU*RYTOEV*AUTOA2
+              DLAPD=DLAPD*RYTOEV*AUTOA2
+            ENDIF
+
+#ifdef correlation_ABS_DRHOUP_ABS_DRHOD
+            DVXC1=DVXC1+DVC_
+            DVXC2=DVXC2+DVC_
+            DVC_=0
+#endif
+
+            ! Store d f_xc / d \tau_up,down in DMUWORK if required
+            IF (XC%LMU) THEN
+               DMUWORK(I,1)=MUUP
+               IF ((NCDIJ==2).OR.(NCDIJ==4)) DMUWORK(I,2)=MUDW
+            ENDIF
+
+            ! Store d f_x/ d (|\nabla \rho_up,down| ) / |\nabla \rho_up,down| in DWORK
+            ! and  d f_xc/ d \rho_up,down  in DWORKG
+            DWORK(I,1)  = DVXC1 / MAX(ABSNABUP, NABMIN)
+            DWORKG(I,1) = DEXC1*RYTOEV
+            IF (XC%LDLAP) DWORKL(I,1) = DLAPU
+            IF ((NCDIJ==2).OR.(NCDIJ==4)) THEN
+               DWORK(I,2)  = DVXC2 / MAX(ABSNABDW, NABMIN)
+               DWORKG(I,2) = DEXC2*RYTOEV
+               IF (XC%LDLAP) DWORKL(I,2) = DLAPD
+            ENDIF
+            ! Store d f_c/ d(|\nabla \rho|) / |\nabla \rho| in DVC
+            DVC(I)=DVC_/MAX(ABSNAB, NABMIN)
+
+         ENDIF
+
+         IF (NCDIJ==1) THEN
+            RHO=RHO1+RHO2
+            CALL GGA_DRIVER(XC,RHO*AUTOA3,ABSNAB*AUTOA4,EXCL,DEXC1,DVXC1,.FALSE.)
+            EXC=EXC+EXCL*RHO*RYTOEV*LATT_CUR%OMEGA
+            DWORK(I,1)  = DWORK(I,1) + DVXCFAC*DVXC1*RYTOEV*AUTOA/MAX(ABSNABUP,NABMIN)
+            DWORKG(I,1) = DWORKG(I,1) + DEXC1*RYTOEV
+
+         ELSEIF ((NCDIJ==2).OR.(NCDIJ==4)) THEN
+            CALL GGASPIN_DRIVER(XC,RHO1*AUTOA3,RHO2*AUTOA3, &
+        &      ABSNABUP*AUTOA4,ABSNABDW*AUTOA4,ABSNAB*AUTOA4, &
+        &      EXCL,DEXC1,DEXC2,DVXC1,DVXC2,DVC_,.FALSE.)
+
+            RHO=RHO1+RHO2
+
+            EXC=EXC+EXCL*RHO*RYTOEV*LATT_CUR%OMEGA
+            DVXC1=DVXC1*RYTOEV*AUTOA
+            DVXC2=DVXC2*RYTOEV*AUTOA
+            DVC_ =DVC_ *RYTOEV*AUTOA
+#ifdef correlation_ABS_DRHOUP_ABS_DRHOD
+            DVXC1=DVXC1+DVC_
+            DVXC2=DVXC2+DVC_
+            DVC_=0
+#endif
+
+!
+!   store d f/ d (|d rho| ) / |d rho|  in DWORK
+!
+            DWORK(I,1)  = DWORK(I,1) + DVXC1 / MAX(ABSNABUP,NABMIN)
+            DWORK(I,2)  = DWORK(I,2) + DVXC2 / MAX(ABSNABDW,NABMIN)
+            DVC(I)      = DVC(I) + DVC_  / MAX(ABSNAB,NABMIN)
+!
+!   store d f/ d rho  in DWORKG
+!
+            DWORKG(I,1) = DWORKG(I,1) + DEXC1*RYTOEV
+            DWORKG(I,2) = DWORKG(I,2) + DEXC2*RYTOEV
+
+         ENDIF
+
+      ENDDO
+__CPU !$OMP END PARALLEL DO
+
+      IF (XC%LLAP) THEN
+GPACC !$ACC EXIT DATA DELETE(LAPLACIAN) __IF_ASYNC__
+GPOMP !$OMP TARGET EXIT DATA MAP(RELEASE:LAPLACIAN) IF(OFFLOAD_ON)
+         DEALLOCATE(LAPLACIAN)
+      ENDIF
+GPACC CALL VTUTOR_OFFLOAD_CHECK()
+
+!=======================================================================
+! non-local vdW-DF contributions
+!=======================================================================
+      IF (XC%LUSE_VDW) THEN
+         IF (NCDIJ==1) THEN
+            IF ((XC%IVDW_NL==1).OR.(XC%IVDW_NL==3).OR.(XC%IVDW_NL==4)) THEN
+
+GPACC !$ACC KERNELS PRESENT(DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:DWORK) IF(OFFLOAD_ON)
+               DWORK = DWORK/2._q/DVXCFAC
+GPOMP !$OMP END TARGET
+GPACC !$ACC END KERNELS
+
+               CALL VDW_NONLOC(DWORK4,DWORK(:,1),DWORKG(:,1),DWORK7,EXC,GRIDC,LATT_CUR,STRESS,1,XC%IVDW_NL,XC%ZAB_VDW,XC%GAMMA_VDW,XC%ALPHA_VDW)
+
+GPACC !$ACC KERNELS PRESENT(DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:DWORK) IF(OFFLOAD_ON)
+               DWORK = DWORK*2._q*DVXCFAC
+GPOMP !$OMP END TARGET
+GPACC !$ACC END KERNELS
+
+            ELSEIF (XC%IVDW_NL==2) THEN
+
+GPACC !$ACC KERNELS PRESENT(DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:DWORK) IF(OFFLOAD_ON)
+               DWORK = DWORK/2._q/DVXCFAC
+GPOMP !$OMP END TARGET
+GPACC !$ACC END KERNELS
+
+               CALL VDW_NONLOC_RVV10(DWORK4,DWORK(:,1),DWORKG(:,1),DWORK7,EXC,GRIDC,LATT_CUR,STRESS,1,XC%BPARAM,XC%CPARAM)
+
+GPACC !$ACC KERNELS PRESENT(DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:DWORK) IF(OFFLOAD_ON)
+               DWORK = DWORK*2._q*DVXCFAC
+GPOMP !$OMP END TARGET
+GPACC !$ACC END KERNELS
+
+            ENDIF
+         ELSEIF ((NCDIJ==2).OR.(NCDIJ==4)) THEN
+
+GPACC !$ACC KERNELS PRESENT(DWORK5,DWORK6,DWORK5S,DWORK6S) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:DWORK5,DWORK6,DWORK5S,DWORK6S) IF(OFFLOAD_ON)
+            DWORK5=0._q
+            DWORK6=0._q
+            IF (XC%LSPIN_VDW) THEN
+               DWORK5S=0._q
+               DWORK6S=0._q
+            ENDIF
+GPOMP !$OMP END TARGET
+GPACC !$ACC END KERNELS
+
+            IF ((XC%IVDW_NL==1).OR.(XC%IVDW_NL==3).OR.(XC%IVDW_NL==4)) THEN
+               IF (XC%LSPIN_VDW) THEN
+                  CALL VDW_NONLOC_spin( DWORK4, DWORK4S, DWORK5, DWORK5S, &
+                     & DWORK6, DWORK6S, DWORK7, DWORK7S, EXC,GRIDC,LATT_CUR,stress,XC%IVDW_NL,XC%ZAB_VDW,XC%GAMMA_VDW,XC%ALPHA_VDW)
+               ELSE
+                  CALL VDW_NONLOC(DWORK4,DWORK5,DWORK6,DWORK7,EXC,GRIDC,LATT_CUR,STRESS,2,XC%IVDW_NL,XC%ZAB_VDW,XC%GAMMA_VDW,XC%ALPHA_VDW)
+               ENDIF
+            ELSEIF (XC%IVDW_NL==2) THEN
+               CALL VDW_NONLOC_RVV10(DWORK4,DWORK5,DWORK6,DWORK7,EXC,GRIDC,LATT_CUR,STRESS,2,XC%BPARAM,XC%CPARAM)
+            ENDIF
+            IF (XC%LSPIN_VDW) THEN
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,DWORK5,DWORK5S,NABLATWO1,NABLATWO2,NABLATWO3)
+
+GPACC !$ACC PARALLEL PRESENT(DWORK,DWORK5,DWORK5S,NABLATWO1,NABLATWO2,NABLATWO3,DWORKG,DWORK6,DWORK6S) __IF_ASYNC__
+GPACC !$ACC LOOP GANG VECTOR
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,DWORK5,DWORK5S,NABLATWO1,NABLATWO2,NABLATWO3) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RL%NP
+                  DWORK(I,1)=DWORK(I,1)+DWORK5(I)/ MAX(SQRT(NABLATWO1(I,1)*NABLATWO1(I,1)+NABLATWO2(I,1)*NABLATWO2(I,1) &
+                            +NABLATWO3(I,1)*NABLATWO3(I,1)),1.E-10_q)
+                  DWORK(I,2)=DWORK(I,2)+DWORK5S(I)/ MAX(SQRT(NABLATWO1(I,2)*NABLATWO1(I,2)+NABLATWO2(I,2)*NABLATWO2(I,2) &
+                            +NABLATWO3(I,2)*NABLATWO3(I,2)),1.E-10_q)
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORKG,DWORK6,DWORK6S)
+
+GPACC !$ACC LOOP GANG VECTOR
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORKG,DWORK6,DWORK6S) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RL%NP
+                  DWORKG(I,1)=DWORKG(I,1)+DWORK6(I)
+                  DWORKG(I,2)=DWORKG(I,2)+DWORK6S(I)
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+GPACC !$ACC END PARALLEL
+            ELSE
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,DWORK5,NABLATWO1,NABLATWO2,NABLATWO3)
+
+GPACC !$ACC PARALLEL PRESENT(DWORK,DWORK5,NABLATWO1,NABLATWO2,NABLATWO3,DWORKG,DWORK6) __IF_ASYNC__
+GPACC !$ACC LOOP GANG VECTOR
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,DWORK5,NABLATWO1,NABLATWO2,NABLATWO3) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RL%NP
+                  DWORK(I,1)=DWORK(I,1)+DWORK5(I)/ MAX(SQRT(NABLATWO1(I,1)*NABLATWO1(I,1)+NABLATWO2(I,1)*NABLATWO2(I,1) &
+              &             +NABLATWO3(I,1)*NABLATWO3(I,1)),1.E-10_q)
+                  DWORK(I,2)=DWORK(I,2)+DWORK5(I)/ MAX(SQRT(NABLATWO1(I,2)*NABLATWO1(I,2)+NABLATWO2(I,2)*NABLATWO2(I,2) &
+              &             +NABLATWO3(I,2)*NABLATWO3(I,2)),1.E-10_q)
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORKG,DWORK6)
+
+GPACC !$ACC LOOP GANG VECTOR
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORKG,DWORK6) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RL%NP
+                  DWORKG(I,1)=DWORKG(I,1)+DWORK6(I)
+                  DWORKG(I,2)=DWORKG(I,2)+DWORK6(I)
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+GPACC !$ACC END PARALLEL
+            ENDIF
+         ENDIF
+      ENDIF
+
+!**********************************************************************
+! TR: update the values for local SC CMBJ
+!**********************************************************************
+
+      IF ((XC%ID(1)==ID_XC_MBJ).OR.(XC%ID(1)==ID_XC_LMBJ)) &
+     &   CALL UPDATE_CMBJ_AUX(GRIDC,LATT_CUR,XC,DHTOT,DENCOR,NABLATWO1,NABLATWO2,NABLATWO3,NCDIJ)
+
+!=======================================================================
+! gradient terms in stress tensor
+!          d    f_xc     grad rho  x grad rho
+! sum_r   ------------   --------------------- * LATT_CUR%OMEGA
+!         d |grad rho|        |grad rho|
+!=======================================================================
+      SIF11=0
+      SIF22=0
+      SIF33=0
+      SIF12=0
+      SIF23=0
+      SIF31=0
+      IF ((XC%ID(1)/=ID_XC_MBJ) .AND. (XC%ID(1)/=ID_XC_LMBJ)) THEN
+      IF (NCDIJ==1) THEN
+         IF (XC%LDOMETAGGA) THEN
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+__CPU !$OMP REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+GPACC !$ACC REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+GPOMP !$OMP REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31) IF(OFFLOAD_ON)
+
+            DO I=1,GRIDC%RL%NP
+               SIF11=SIF11+NABLATWO1(I,1)*NABLATWO1(I,1)*DWORK(I,1)*0.5_q
+               SIF22=SIF22+NABLATWO2(I,1)*NABLATWO2(I,1)*DWORK(I,1)*0.5_q
+               SIF33=SIF33+NABLATWO3(I,1)*NABLATWO3(I,1)*DWORK(I,1)*0.5_q
+               SIF12=SIF12+NABLATWO1(I,1)*NABLATWO2(I,1)*DWORK(I,1)*0.5_q
+               SIF23=SIF23+NABLATWO2(I,1)*NABLATWO3(I,1)*DWORK(I,1)*0.5_q
+               SIF31=SIF31+NABLATWO3(I,1)*NABLATWO1(I,1)*DWORK(I,1)*0.5_q
+
+               SIF11=SIF11+NABLATWO1(I,1)*(NABLATWO1(I,1))*DVC(I)
+               SIF22=SIF22+NABLATWO2(I,1)*(NABLATWO2(I,1))*DVC(I)
+               SIF33=SIF33+NABLATWO3(I,1)*(NABLATWO3(I,1))*DVC(I)
+               SIF12=SIF12+NABLATWO1(I,1)*(NABLATWO2(I,1))*DVC(I)
+               SIF23=SIF23+NABLATWO2(I,1)*(NABLATWO3(I,1))*DVC(I)
+               SIF31=SIF31+NABLATWO3(I,1)*(NABLATWO1(I,1))*DVC(I)
+            ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+         ELSE
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,NABLATWO1,NABLATWO2,NABLATWO3,DWORK) &
+__CPU !$OMP REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLATWO1,NABLATWO2,NABLATWO3,DWORK) &
+GPACC !$ACC& REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLATWO1,NABLATWO2,NABLATWO3,DWORK) &
+GPOMP !$OMP REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31) IF(OFFLOAD_ON)
+
+            DO I=1,GRIDC%RL%NP
+               SIF11=SIF11+NABLATWO1(I,1)*NABLATWO1(I,1)*DWORK(I,1)
+               SIF22=SIF22+NABLATWO2(I,1)*NABLATWO2(I,1)*DWORK(I,1)
+               SIF33=SIF33+NABLATWO3(I,1)*NABLATWO3(I,1)*DWORK(I,1)
+               SIF12=SIF12+NABLATWO1(I,1)*NABLATWO2(I,1)*DWORK(I,1)
+               SIF23=SIF23+NABLATWO2(I,1)*NABLATWO3(I,1)*DWORK(I,1)
+               SIF31=SIF31+NABLATWO3(I,1)*NABLATWO1(I,1)*DWORK(I,1)
+            ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+         ENDIF
+      ELSEIF ((NCDIJ==2).OR.(NCDIJ==4)) THEN
+
+GPACC !$ACC PARALLEL LOOP COLLAPSE(2) PRESENT(NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+GPACC !$ACC REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) MAP(PRESENT,TO:NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+GPOMP !$OMP REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31) IF(OFFLOAD_ON)
+
+         DO ISP=1,MIN(NCDIJ,2)
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC,ISP) &
+__CPU !$OMP REDUCTION(+:SIF11,SIF22,SIF33,SIF12,SIF23,SIF31)
+         DO I=1,GRIDC%RL%NP
+            SIF11=SIF11+NABLATWO1(I,ISP)*NABLATWO1(I,ISP)*DWORK(I,ISP)
+            SIF22=SIF22+NABLATWO2(I,ISP)*NABLATWO2(I,ISP)*DWORK(I,ISP)
+            SIF33=SIF33+NABLATWO3(I,ISP)*NABLATWO3(I,ISP)*DWORK(I,ISP)
+            SIF12=SIF12+NABLATWO1(I,ISP)*NABLATWO2(I,ISP)*DWORK(I,ISP)
+            SIF23=SIF23+NABLATWO2(I,ISP)*NABLATWO3(I,ISP)*DWORK(I,ISP)
+            SIF31=SIF31+NABLATWO3(I,ISP)*NABLATWO1(I,ISP)*DWORK(I,ISP)
+
+            SIF11=SIF11+NABLATWO1(I,ISP)*(NABLATWO1(I,1)+NABLATWO1(I,2))*DVC(I)
+            SIF22=SIF22+NABLATWO2(I,ISP)*(NABLATWO2(I,1)+NABLATWO2(I,2))*DVC(I)
+            SIF33=SIF33+NABLATWO3(I,ISP)*(NABLATWO3(I,1)+NABLATWO3(I,2))*DVC(I)
+            SIF12=SIF12+NABLATWO1(I,ISP)*(NABLATWO2(I,1)+NABLATWO2(I,2))*DVC(I)
+            SIF23=SIF23+NABLATWO2(I,ISP)*(NABLATWO3(I,1)+NABLATWO3(I,2))*DVC(I)
+            SIF31=SIF31+NABLATWO3(I,ISP)*(NABLATWO1(I,1)+NABLATWO1(I,2))*DVC(I)
+         ENDDO
+__CPU !$OMP END PARALLEL DO
+         ENDDO
+      ENDIF
+
+! wait here for device offloading since the addition is done on the host
+GPACC !$ACC WAIT(ACC_ASYNC_Q) IF(OFFLOAD_ON)
+
+      SIF11=SIF11*RINPL*LATT_CUR%OMEGA
+      SIF22=SIF22*RINPL*LATT_CUR%OMEGA
+      SIF33=SIF33*RINPL*LATT_CUR%OMEGA
+      SIF12=SIF12*RINPL*LATT_CUR%OMEGA
+      SIF23=SIF23*RINPL*LATT_CUR%OMEGA
+      SIF31=SIF31*RINPL*LATT_CUR%OMEGA
+      ENDIF   ! XC%ID(1)/=ID_XC_MBJ and XC%ID(1)/=ID_XC_LMBJ
+
+!=======================================================================
+! calculate
+!              d    f_xc     grad rho
+!        div  (------------  --------  )
+!              d |grad rho| |grad rho|
+!
+! in reciprocal space
+!=======================================================================
+
+    IF (NCDIJ<=2) THEN
+      IF (NCDIJ==1) THEN
+         IF (XC%LDOMETAGGA) THEN
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D) SHARED(GRIDC,NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+GPACC !$ACC& PRIVATE(ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+GPOMP !$OMP PRIVATE(ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D) IF(OFFLOAD_ON)
+
+            DO I=1,GRIDC%RL%NP
+               ANAB1U= NABLATWO1(I,1)*0.5_q
+               ANAB2U= NABLATWO2(I,1)*0.5_q
+               ANAB3U= NABLATWO3(I,1)*0.5_q
+               ANAB1D= ANAB1U
+               ANAB2D= ANAB2U
+               ANAB3D= ANAB3U
+               NABLATWO1(I,1) = ANAB1U* DWORK(I,1) + (ANAB1U+ANAB1D) * DVC(I)
+               NABLATWO2(I,1) = ANAB2U* DWORK(I,1) + (ANAB2U+ANAB2D) * DVC(I)
+               NABLATWO3(I,1) = ANAB3U* DWORK(I,1) + (ANAB3U+ANAB3D) * DVC(I)
+            ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+         ELSE
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,NABLATWO1,NABLATWO2,NABLATWO3,DWORK)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLATWO1,NABLATWO2,NABLATWO3,DWORK) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLATWO1,NABLATWO2,NABLATWO3,DWORK) IF(OFFLOAD_ON)
+
+            DO I=1,GRIDC%RL%NP
+               NABLATWO1(I,1) = NABLATWO1(I,1)* REAL( DWORK(I,1) ,KIND=q)
+               NABLATWO2(I,1) = NABLATWO2(I,1)* REAL( DWORK(I,1) ,KIND=q)
+               NABLATWO3(I,1) = NABLATWO3(I,1)* REAL( DWORK(I,1) ,KIND=q)
+            ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+         ENDIF
+      ELSEIF (NCDIJ==2) THEN
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D) SHARED(GRIDC,NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+GPACC !$ACC& PRIVATE(ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:NABLATWO1,NABLATWO2,NABLATWO3,DWORK,DVC) &
+GPOMP !$OMP PRIVATE(ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D) IF(OFFLOAD_ON)
+
+         DO I=1,GRIDC%RL%NP
+            ANAB1U= NABLATWO1(I,1)
+            ANAB2U= NABLATWO2(I,1)
+            ANAB3U= NABLATWO3(I,1)
+            ANAB1D= NABLATWO1(I,2)
+            ANAB2D= NABLATWO2(I,2)
+            ANAB3D= NABLATWO3(I,2)
+
+            NABLATWO1(I,1) = ANAB1U* DWORK(I,1) + (ANAB1U+ANAB1D) * DVC(I)
+            NABLATWO2(I,1) = ANAB2U* DWORK(I,1) + (ANAB2U+ANAB2D) * DVC(I)
+            NABLATWO3(I,1) = ANAB3U* DWORK(I,1) + (ANAB3U+ANAB3D) * DVC(I)
+
+            NABLATWO1(I,2) = ANAB1D* DWORK(I,2) + (ANAB1U+ANAB1D) * DVC(I)
+            NABLATWO2(I,2) = ANAB2D* DWORK(I,2) + (ANAB2U+ANAB2D) * DVC(I)
+            NABLATWO3(I,2) = ANAB3D* DWORK(I,2) + (ANAB3U+ANAB3D) * DVC(I)
+         ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      ENDIF
+
+      DO ISP=1,NCDIJ
+! x-component:
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,NABLATWO1,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,NABLATWO1) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,NABLATWO1) IF(OFFLOAD_ON)
+
+!DIR$ IVDEP
+!$DIR FORCE_VECTOR
+!OCL NOVREC
+      DO I=1,GRIDC%RL%NP
+        DWORK(I,ISP) = NABLATWO1(I,ISP)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+      CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GX) SHARED(GRIDC,LATT_CUR,CWGRAD,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWGRAD,CWORK) PRIVATE(N1,N2,N3,NC,GX) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWGRAD,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GX) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+
+         GX=(GRIDC%LPCTX(N1)*LATT_CUR%B(1,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(1,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(1,3))
+         CWGRAD(I,ISP)=CWORK(I,ISP)*GX*CITPI
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! y-component:
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,NABLATWO2,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,NABLATWO2) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,NABLATWO2) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RL%NP
+        DWORK(I,ISP) = NABLATWO2(I,ISP)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+      CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GY) SHARED(GRIDC,LATT_CUR,CWGRAD,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,CWORK,CWGRAD,LATT_CUR) PRIVATE(N1,N2,N3,NC,GY) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWGRAD,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GY) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+
+         GY=(GRIDC%LPCTX(N1)*LATT_CUR%B(2,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(2,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(2,3))
+         CWGRAD(I,ISP)=CWGRAD(I,ISP)+CWORK(I,ISP)*GY*CITPI
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! z-component:
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,NABLATWO3,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,NABLATWO3) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,NABLATWO3) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RL%NP
+        DWORK(I,ISP) = NABLATWO3(I,ISP)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+      CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GZ) SHARED(GRIDC,LATT_CUR,CWGRAD,CWORK,ISP,RINPL)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,CWORK,CWGRAD,LATT_CUR) PRIVATE(N1,N2,N3,NC,GZ) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWGRAD,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GZ) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+
+         GZ=(GRIDC%LPCTX(N1)*LATT_CUR%B(3,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(3,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(3,3))
+         CWGRAD(I,ISP)=(CWGRAD(I,ISP)+CWORK(I,ISP)*GZ*CITPI)*RINPL
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      CALL SETUNB(CWGRAD(1,ISP),GRIDC)
+      CALL FFT3D(CWGRAD(1,ISP),GRIDC,1)
+      CALL OPSYNC(CWGRAD(1,ISP),DWGRAD(1,ISP),GRIDC%NPLWV)
+      ENDDO
+!=======================================================================
+    ELSE  ! non-collinear case
+!=======================================================================
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,MAG_NORM,MAG_NORM_I,ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D,NABMAG,DVC_) SHARED(GRIDC,LATT_CUR,XC,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,DHTOT,DWORK,DWGRAD,DVC)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LATT_CUR,XC,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,DHTOT,DWORK,DWGRAD,DVC) &
+GPACC !$ACC& PRIVATE(MAG_NORM,MAG_NORM_I,ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D,NABMAG,DVC_) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LATT_CUR,XC,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,DHTOT,DWORK,DWGRAD,DVC) &
+GPOMP !$OMP PRIVATE(MAG_NORM,MAG_NORM_I,ANAB1U,ANAB2U,ANAB3U,ANAB1D,ANAB2D,ANAB3D,NABMAG,DVC_) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RL%NP
+         ANAB1U= NABLATWO1(I,1)
+         ANAB2U= NABLATWO2(I,1)
+         ANAB3U= NABLATWO3(I,1)
+         ANAB1D= NABLATWO1(I,2)
+         ANAB2D= NABLATWO2(I,2)
+         ANAB3D= NABLATWO3(I,2)
+
+
+         ! gradient with respect to total density
+         ! d e_xc /d (|nabla rho|)  (nabla rho) +  
+         ! d e_xc /d (|nabla rho+|m| ) / nabla  rho+|m|| * (nabla  rho+|m|)
+         ! d e_xc /d (|nabla rho-|m| ) / nabla  rho-|m|| * (nabla  rho-|m|)
+         NABLA1(I,1)=(ANAB1U+ANAB1D) * DVC(I) +  (ANAB1U* DWORK(I,1) +  ANAB1D* DWORK(I,2))*0.5_q
+         NABLA2(I,1)=(ANAB2U+ANAB2D) * DVC(I) +  (ANAB2U* DWORK(I,1) +  ANAB2D* DWORK(I,2))*0.5_q
+         NABLA3(I,1)=(ANAB3U+ANAB3D) * DVC(I) +  (ANAB3U* DWORK(I,1) +  ANAB3D* DWORK(I,2))*0.5_q
+
+         ! difference between up and down contributions to get the magnetic "field"
+         NABMAG(1) = (ANAB1U* DWORK(I,1) - ANAB1D* DWORK(I,2))*0.5_q 
+         NABMAG(2) = (ANAB2U* DWORK(I,1) - ANAB2D* DWORK(I,2))*0.5_q 
+         NABMAG(3) = (ANAB3U* DWORK(I,1) - ANAB3D* DWORK(I,2))*0.5_q 
+         ! calculate 1/|m|
+         MAG_NORM=SQRT(ABS(DHTOT(I,2)*DHTOT(I,2)+DHTOT(I,3)*DHTOT(I,3)+DHTOT(I,4)*DHTOT(I,4)))
+         ! introduce regularization for m nabla m / |m|
+         MAG_NORM_I=1._q/SQRT(MAG_NORM**2+(LATT_CUR%OMEGA*XC%NABMAG_REG)**2)
+         ! contribution B multiply with - nabla vec m /|m| (stored in NABLA1(:,I))
+         DWGRAD(I,:)=0
+         ! this term really can create a huge potential if magnetization density is small
+         DWGRAD(I,2)=-(NABLA1(I,2)*NABMAG(1)+NABLA2(I,2)*NABMAG(2)+NABLA3(I,2)*NABMAG(3))*MAG_NORM_I*LATT_CUR%OMEGA
+         DWGRAD(I,3)=-(NABLA1(I,3)*NABMAG(1)+NABLA2(I,3)*NABMAG(2)+NABLA3(I,3)*NABMAG(3))*MAG_NORM_I*LATT_CUR%OMEGA
+         DWGRAD(I,4)=-(NABLA1(I,4)*NABMAG(1)+NABLA2(I,4)*NABMAG(2)+NABLA3(I,4)*NABMAG(3))*MAG_NORM_I*LATT_CUR%OMEGA
+         DVC_=(DWGRAD(I,2)*DHTOT(I,2)+DWGRAD(I,3)*DHTOT(I,3)+DWGRAD(I,4)*DHTOT(I,4))*MAG_NORM_I
+         DWGRAD(I,2)=DWGRAD(I,2)-REAL(DHTOT(I,2),KIND=q)*MAG_NORM_I*DVC_
+         DWGRAD(I,3)=DWGRAD(I,3)-REAL(DHTOT(I,3),KIND=q)*MAG_NORM_I*DVC_
+         DWGRAD(I,4)=DWGRAD(I,4)-REAL(DHTOT(I,4),KIND=q)*MAG_NORM_I*DVC_
+
+         ! now multiply NABMAG with magnetization direction term (A) in derivation
+         NABLA1(I,2)=NABMAG(1)*DHTOT(I,2)*MAG_NORM_I
+         NABLA2(I,2)=NABMAG(2)*DHTOT(I,2)*MAG_NORM_I
+         NABLA3(I,2)=NABMAG(3)*DHTOT(I,2)*MAG_NORM_I
+
+         NABLA1(I,3)=NABMAG(1)*DHTOT(I,3)*MAG_NORM_I
+         NABLA2(I,3)=NABMAG(2)*DHTOT(I,3)*MAG_NORM_I
+         NABLA3(I,3)=NABMAG(3)*DHTOT(I,3)*MAG_NORM_I
+
+         NABLA1(I,4)=NABMAG(1)*DHTOT(I,4)*MAG_NORM_I
+         NABLA2(I,4)=NABMAG(2)*DHTOT(I,4)*MAG_NORM_I
+         NABLA3(I,4)=NABMAG(3)*DHTOT(I,4)*MAG_NORM_I
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      DO ISP=1,NCDIJ
+! x-component:
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,NABLA1,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,NABLA1) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,NABLA1) IF(OFFLOAD_ON)
+
+!DIR$ IVDEP
+!$DIR FORCE_VECTOR
+!OCL NOVREC
+      DO I=1,GRIDC%RL%NP
+        DWORK(I,ISP) = NABLA1(I,ISP)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+      CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GX) SHARED(GRIDC,LATT_CUR,RINPL,CWORK,CWACC,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWORK,CWACC) PRIVATE(N1,N2,N3,NC,GX) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWORK,CWACC) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GX) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+
+         GX=(GRIDC%LPCTX(N1)*LATT_CUR%B(1,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(1,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(1,3))
+         CWACC(I)=CWORK(I,ISP)*(GX*CITPI*RINPL)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! y-component:
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,NABLA2,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,NABLA2) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,NABLA2) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RL%NP
+        DWORK(I,ISP) = NABLA2(I,ISP)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+      CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GY) SHARED(GRIDC,LATT_CUR,RINPL,CWORK,CWACC,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWORK,CWACC) PRIVATE(N1,N2,N3,NC,GY) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWORK,CWACC) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GY) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+
+         GY=(GRIDC%LPCTX(N1)*LATT_CUR%B(2,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(2,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(2,3))
+         CWACC(I)=CWACC(I)+CWORK(I,ISP)*(GY*CITPI*RINPL)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+! z-component:
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,NABLA3,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,NABLA3) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,NABLA3) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RL%NP
+        DWORK(I,ISP) = NABLA3(I,ISP)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+      CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+      CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GZ) SHARED(GRIDC,LATT_CUR,RINPL,CWORK,CWACC,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWORK,CWACC) PRIVATE(N1,N2,N3,NC,GZ) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWORK,CWACC) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GZ) IF(OFFLOAD_ON)
+
+      DO I=1,GRIDC%RC%NP
+         N1= MOD((I-1),GRIDC%RC%NROW) +1
+         NC= (I-1)/GRIDC%RC%NROW+1
+         N2= GRIDC%RC%I2(NC)
+         N3= GRIDC%RC%I3(NC)
+
+         GZ=(GRIDC%LPCTX(N1)*LATT_CUR%B(3,1)+GRIDC%LPCTY(N2)*LATT_CUR%B(3,2)+GRIDC%LPCTZ(N3)*LATT_CUR%B(3,3))
+         CWACC(I)=CWACC(I)+CWORK(I,ISP)*(GZ*CITPI*RINPL)
+      ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      CALL SETUNB(CWACC(1),GRIDC)
+      CALL FFT3D(CWACC(1),GRIDC,1)
+      CALL OPSYNC(CWACC(1),DWACC(1),GRIDC%NPLWV)
+
+GPACC !$ACC KERNELS PRESENT(DWGRAD,DWACC) __IF_ASYNC__
+GPOMP !$OMP TARGET MAP(PRESENT,TO:DWGRAD,DWACC) IF(OFFLOAD_ON)
+! todo: WORKDISTRIBUTE does not work, because of complicated slice operation
+      DWGRAD(:,ISP)=REAL(DWGRAD(:,ISP)+DWACC(:),KIND=q)
+GPOMP !$OMP END TARGET
+GPACC !$ACC END KERNELS 
+
+      ENDDO
+
+    ENDIF
+
+!=======================================================================
+! laplacian terms in stress tensor
+!                     d  f_xc         d^2 n_sigma
+! sum_(r,sigma)    ------------      ------------- * LATT_CUR%OMEGA
+!                  d lap rho_sigma     d r_i d r_j
+!=======================================================================
+
+! if ispin == 1, then denshess(:,:,1) is the Hessian of the total density
+! dworkl is still d f_xc / d lap rho_sigma, so the sum will still yield
+! twice the sum over a single spin channel. No additional factor needed
+
+! if ispin == 2, then denshess(:,:,sigma) is the Hessian for each spin channel sigma,
+! no correcting factor needed
+
+! this has to appear here rather than with the gradient contribution to
+! the stress tensor because DWORK is required for the gradient contributions
+! to the XC potential
+
+      IF (XC%LDLAP) THEN
+         SIFLAP11=0
+         SIFLAP22=0
+         SIFLAP33=0
+         SIFLAP12=0
+         SIFLAP23=0
+         SIFLAP31=0
+
+         IF ((NCDIJ==1).OR.(NCDIJ==2)) THEN
+
+GPACC !$ACC PARALLEL LOOP COLLAPSE(2) PRESENT(DWORKL,DENSHESS) &
+GPACC !$ACC REDUCTION(+:SIFLAP11,SIFLAP22,SIFLAP33,SIFLAP12,SIFLAP23,SIFLAP31) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO COLLAPSE(2) MAP(PRESENT,TO:DWORKL,DENSHESS) &
+GPOMP !$OMP REDUCTION(+:SIFLAP11,SIFLAP22,SIFLAP33,SIFLAP12,SIFLAP23,SIFLAP31) IF(OFFLOAD_ON)
+
+            DO ISP=1,NCDIJ
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC, DWORKL, DENSHESS, ISP) &
+__CPU !$OMP REDUCTION(+: SIFLAP11, SIFLAP22, SIFLAP33, SIFLAP12, SIFLAP23, SIFLAP31)
+               DO I=1,GRIDC%RL%NP
+                  SIFLAP11=SIFLAP11 + 2._q*DWORKL(I,ISP)*DENSHESS(I,1,ISP)
+                  SIFLAP22=SIFLAP22 + 2._q*DWORKL(I,ISP)*DENSHESS(I,4,ISP)
+                  SIFLAP33=SIFLAP33 + 2._q*DWORKL(I,ISP)*DENSHESS(I,6,ISP)
+                  SIFLAP12=SIFLAP12 + 2._q*DWORKL(I,ISP)*DENSHESS(I,2,ISP)
+                  SIFLAP23=SIFLAP23 + 2._q*DWORKL(I,ISP)*DENSHESS(I,5,ISP)
+                  SIFLAP31=SIFLAP31 + 2._q*DWORKL(I,ISP)*DENSHESS(I,3,ISP)
+               ENDDO
+__CPU !$OMP END PARALLEL DO
+            ENDDO
+
+         ELSEIF (NCDIJ==4) THEN
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DHTOT,DWORKL,DENSHESS) &
+GPACC !$ACC PRIVATE(MAG_NORM,MAG_NORM_I,HESS_DOT_MDIR,HESSUP,HESSDW) &
+GPACC !$ACC REDUCTION(+:SIFLAP11,SIFLAP22,SIFLAP33,SIFLAP12,SIFLAP23,SIFLAP31) __IF_ASYNC__
+
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DHTOT,DWORKL,DENSHESS) &
+GPOMP !$OMP PRIVATE(MAG_NORM,MAG_NORM_I,HESS_DOT_MDIR,HESSUP,HESSDW) &
+GPOMP !$OMP REDUCTION(+:SIFLAP11,SIFLAP22,SIFLAP33,SIFLAP12,SIFLAP23,SIFLAP31) IF(OFFLOAD_ON)
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,MAG_NORM,MAG_NORM_I,HESS_DOT_MDIR,HESSUP,HESSDW) SHARED(GRIDC, DHTOT, DWORKL, DENSHESS, CHGMIN, ISP) &
+__CPU !$OMP REDUCTION(+: SIFLAP11, SIFLAP22, SIFLAP33, SIFLAP12, SIFLAP23, SIFLAP31)
+            DO I=1,GRIDC%RL%NP
+
+               MAG_NORM=SQRT(ABS( &
+            &      DHTOT(I,2)*DHTOT(I,2)+DHTOT(I,3)*DHTOT(I,3)+DHTOT(I,4)*DHTOT(I,4)))
+               MAG_NORM_I=1._q/MAX(MAG_NORM,CHGMIN)
+
+               HESS_DOT_MDIR=(DHTOT(I,2)*DENSHESS(I,1,2)+DHTOT(I,3)*DENSHESS(I,1,3)+DHTOT(I,4)*DENSHESS(I,1,4))*MAG_NORM_I
+               HESSUP=REAL((DENSHESS(I,1,1)+HESS_DOT_MDIR)*0.5_q,KIND=q)
+               HESSDW=REAL((DENSHESS(I,1,1)-HESS_DOT_MDIR)*0.5_q,KIND=q)
+               SIFLAP11=SIFLAP11 + 2._q*(DWORKL(I,1)*HESSUP + DWORKL(I,2)*HESSDW)
+
+               HESS_DOT_MDIR=(DHTOT(I,2)*DENSHESS(I,4,2)+DHTOT(I,3)*DENSHESS(I,4,3)+DHTOT(I,4)*DENSHESS(I,4,4))*MAG_NORM_I
+               HESSUP=REAL((DENSHESS(I,4,1)+HESS_DOT_MDIR)*0.5_q,KIND=q)
+               HESSDW=REAL((DENSHESS(I,4,1)-HESS_DOT_MDIR)*0.5_q,KIND=q)
+               SIFLAP22=SIFLAP22 + 2._q*(DWORKL(I,1)*HESSUP + DWORKL(I,2)*HESSDW)
+
+               HESS_DOT_MDIR=(DHTOT(I,2)*DENSHESS(I,6,2)+DHTOT(I,3)*DENSHESS(I,6,3)+DHTOT(I,4)*DENSHESS(I,6,4))*MAG_NORM_I
+               HESSUP=REAL((DENSHESS(I,6,1)+HESS_DOT_MDIR)*0.5_q,KIND=q)
+               HESSDW=REAL((DENSHESS(I,6,1)-HESS_DOT_MDIR)*0.5_q,KIND=q)
+               SIFLAP33=SIFLAP33 + 2._q*(DWORKL(I,1)*HESSUP + DWORKL(I,2)*HESSDW)
+
+               HESS_DOT_MDIR=(DHTOT(I,2)*DENSHESS(I,2,2)+DHTOT(I,3)*DENSHESS(I,2,3)+DHTOT(I,4)*DENSHESS(I,2,4))*MAG_NORM_I
+               HESSUP=REAL((DENSHESS(I,2,1)+HESS_DOT_MDIR)*0.5_q,KIND=q)
+               HESSDW=REAL((DENSHESS(I,2,1)-HESS_DOT_MDIR)*0.5_q,KIND=q)
+               SIFLAP12=SIFLAP12 + 2._q*(DWORKL(I,1)*HESSUP + DWORKL(I,2)*HESSDW)
+
+               HESS_DOT_MDIR=(DHTOT(I,2)*DENSHESS(I,5,2)+DHTOT(I,3)*DENSHESS(I,5,3)+DHTOT(I,4)*DENSHESS(I,5,4))*MAG_NORM_I
+               HESSUP=REAL((DENSHESS(I,5,1)+HESS_DOT_MDIR)*0.5_q,KIND=q)
+               HESSDW=REAL((DENSHESS(I,5,1)-HESS_DOT_MDIR)*0.5_q,KIND=q)
+               SIFLAP23=SIFLAP23 + 2._q*(DWORKL(I,1)*HESSUP + DWORKL(I,2)*HESSDW)
+
+               HESS_DOT_MDIR=(DHTOT(I,2)*DENSHESS(I,3,2)+DHTOT(I,3)*DENSHESS(I,3,3)+DHTOT(I,4)*DENSHESS(I,3,4))*MAG_NORM_I
+               HESSUP=REAL((DENSHESS(I,3,1)+HESS_DOT_MDIR)*0.5_q,KIND=q)
+               HESSDW=REAL((DENSHESS(I,3,1)-HESS_DOT_MDIR)*0.5_q,KIND=q)
+               SIFLAP31=SIFLAP31 + 2._q*(DWORKL(I,1)*HESSUP + DWORKL(I,2)*HESSDW)
+
+            ENDDO
+__CPU !$OMP END PARALLEL DO
+
+         ENDIF
+
+! wait here for device offloading since the addition is done on the host
+GPACC !$ACC WAIT(ACC_ASYNC_Q) IF(OFFLOAD_ON)
+         SIF11=SIF11 + SIFLAP11*RINPL*LATT_CUR%OMEGA
+         SIF22=SIF22 + SIFLAP22*RINPL*LATT_CUR%OMEGA
+         SIF33=SIF33 + SIFLAP33*RINPL*LATT_CUR%OMEGA
+         SIF12=SIF12 + SIFLAP12*RINPL*LATT_CUR%OMEGA
+         SIF23=SIF23 + SIFLAP23*RINPL*LATT_CUR%OMEGA
+         SIF31=SIF31 + SIFLAP31*RINPL*LATT_CUR%OMEGA
+
+!=======================================================================
+! calculate
+!               d    f_xc
+!        lap ( ------------ )
+!               d lap rho
+!
+! in reciprocal space
+!=======================================================================
+
+         IF (NCDIJ<=2) THEN
+
+            DO ISP=1,NCDIJ
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,DWORKL,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,DWORKL) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,DWORKL) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RL%NP
+                  DWORK(I,ISP) = DWORKL(I,ISP)
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+               CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+               CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+               CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GX,GY,GZ,GG) SHARED(GRIDC,LATT_CUR,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWORK) PRIVATE(N1,N2,N3,NC,GX,GY,GZ,GG) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GX,GY,GZ,GG) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RC%NP
+                  N1= MOD((I-1),GRIDC%RC%NROW) +1
+                  NC= (I-1)/GRIDC%RC%NROW+1
+                  N2= GRIDC%RC%I2(NC)
+                  N3= GRIDC%RC%I3(NC)
+
+                  GX = GRIDC%LPCTX(N1)*LATT_CUR%B(1,1) &
+                 &    + GRIDC%LPCTY(N2)*LATT_CUR%B(1,2) &
+                 &    + GRIDC%LPCTZ(N3)*LATT_CUR%B(1,3)
+                  GY = GRIDC%LPCTX(N1)*LATT_CUR%B(2,1) &
+                 &    + GRIDC%LPCTY(N2)*LATT_CUR%B(2,2) &
+                 &    + GRIDC%LPCTZ(N3)*LATT_CUR%B(2,3)
+                  GZ = GRIDC%LPCTX(N1)*LATT_CUR%B(3,1) &
+                 &    + GRIDC%LPCTY(N2)*LATT_CUR%B(3,2) &
+                 &    + GRIDC%LPCTZ(N3)*LATT_CUR%B(3,3)
+                  GG = GX**2 + GY**2 + GZ**2
+
+                  CWORK(I,ISP) = GG*CITPI*CITPI*CWORK(I,ISP)
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+               CALL SETUNB(CWORK(1,ISP),GRIDC)
+               CALL FFT3D(CWORK(1,ISP),GRIDC,1)
+               CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC,DWORK,DWORKL,ISP,RINPL)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,DWORKL) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,DWORKL) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RL%NP
+                  DWORKL(I,ISP) = REAL(DWORK(I,ISP),KIND=q)*RINPL
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+            ENDDO
+
+!=======================================================================
+         ELSE  ! non-collinear case
+!=======================================================================
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,DELTAV,MAG_NORM,MAG_NORM_I,VXC) SHARED(GRIDC,LATT_CUR,CHGMIN,DWORK,DWORKL,DHTOT)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWORK) PRIVATE(DELTAV,MAG_NORM,MAG_NORM_I,VXC) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,DWORK,DWORKL,DHTOT) &
+GPOMP !$OMP PRIVATE(DELTAV,MAG_NORM,MAG_NORM_I,VXC) IF(OFFLOAD_ON)
+
+            DO I=1,GRIDC%RL%NP
+               VXC   =(DWORKL(I,1)+DWORKL(I,2))*0.5_q
+               DELTAV=(DWORKL(I,1)-DWORKL(I,2))*0.5_q
+
+               MAG_NORM=SQRT(ABS(DHTOT(I,2)*DHTOT(I,2)+ DHTOT(I,3)*DHTOT(I,3) + DHTOT(I,4)*DHTOT(I,4)))
+               MAG_NORM_I=1._q/MAX(MAG_NORM/LATT_CUR%OMEGA,CHGMIN)/LATT_CUR%OMEGA
+
+               DWORK(I,1)=VXC
+               DWORK(I,2)=DELTAV*REAL(DHTOT(I,2),KIND=q)*MAG_NORM_I
+               DWORK(I,3)=DELTAV*REAL(DHTOT(I,3),KIND=q)*MAG_NORM_I
+               DWORK(I,4)=DELTAV*REAL(DHTOT(I,4),KIND=q)*MAG_NORM_I
+            ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+            DO ISP=1,NCDIJ
+
+               CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+               CALL FFT3D(CWORK(1,ISP),GRIDC,-1)
+               CALL TRUNC_HIGH_FREQU(LATT_CUR, GRIDC, CWORK(1,ISP))
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,N1,N2,N3,NC,GX,GY,GZ,GG) SHARED(GRIDC,LATT_CUR,CWORK,ISP)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(GRIDC,LATT_CUR,CWORK) PRIVATE(N1,N2,N3,NC,GX,GY,GZ,GG) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:GRIDC,LATT_CUR,CWORK) &
+GPOMP !$OMP PRIVATE(N1,N2,N3,NC,GX,GY,GZ,GG) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RC%NP
+                  N1= MOD((I-1),GRIDC%RC%NROW) +1
+                  NC= (I-1)/GRIDC%RC%NROW+1
+                  N2= GRIDC%RC%I2(NC)
+                  N3= GRIDC%RC%I3(NC)
+
+                  GX = GRIDC%LPCTX(N1)*LATT_CUR%B(1,1) &
+                 &   + GRIDC%LPCTY(N2)*LATT_CUR%B(1,2) &
+                 &   + GRIDC%LPCTZ(N3)*LATT_CUR%B(1,3)
+                  GY = GRIDC%LPCTX(N1)*LATT_CUR%B(2,1) &
+                 &   + GRIDC%LPCTY(N2)*LATT_CUR%B(2,2) &
+                 &   + GRIDC%LPCTZ(N3)*LATT_CUR%B(2,3)
+                  GZ = GRIDC%LPCTX(N1)*LATT_CUR%B(3,1) &
+                 &   + GRIDC%LPCTY(N2)*LATT_CUR%B(3,2) &
+                 &   + GRIDC%LPCTZ(N3)*LATT_CUR%B(3,3)
+                  GG = GX**2 + GY**2 + GZ**2
+
+                  CWORK(I,ISP) = GG*CITPI*CITPI*CWORK(I,ISP)
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+               CALL SETUNB(CWORK(1,ISP),GRIDC)
+               CALL FFT3D(CWORK(1,ISP),GRIDC,1)
+               CALL OPSYNC(DWORK(1,ISP),CWORK(1,ISP),GRIDC%NPLWV)
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I) SHARED(GRIDC, DWORK, DWORKL, ISP, RINPL)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(DWORK,DWORKL) __IF_ASYNC__
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:DWORK,DWORKL) IF(OFFLOAD_ON)
+
+               DO I=1,GRIDC%RL%NP
+                  DWORKL(I,ISP) = REAL(DWORK(I,ISP),KIND=q)*RINPL
+               ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+            ENDDO
+
+         ENDIF
+      ENDIF
+
+!=======================================================================
+! Now calculate double counting corrections
+! finalize stress tensor etc.
+!=======================================================================
+      XCENC=0._q
+      CVZERO=0._q
+      XCENCC=0._q
+      EDCMU=0._q
+
+      IF (NCDIJ==1) THEN
+      ! nonspin-polarized case
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,RHO,VXC,TAUU) SHARED(GRIDC,LATT_CUR,XC,DWORK4,DWORKG,DWGRAD,DWORK,DWORKL,DHTOT,RINPL,TAUMIN,DKINEDEN,KINEDEN,DMUWORK) &
+__CPU !$OMP REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LATT_CUR,XC,DWORK4,DWORKG,DWGRAD,DWORK,DWORKL,DHTOT,DKINEDEN,KINEDEN%TAUC,DMUWORK) &
+GPACC !$ACC REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU) PRIVATE(RHO,VXC,TAUU) __IF_ASYNC__
+
+! for OpenMP present checks are performed with MAP(PRESENT,TO:...), so for conditional data,
+! MAP(ALLOC:...) is used to avoid potentially copying the data for the parallel loop.
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LATT_CUR,XC,DWORK4,DWORKG,DWGRAD,DWORK,DHTOT) &
+GPOMP !$OMP MAP(ALLOC:DWORKL,DKINEDEN,KINEDEN%TAUC,DMUWORK) REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU) &
+GPOMP !$OMP PRIVATE(RHO,VXC,TAUU) IF(OFFLOAD_ON)
+
+         DO I=1,GRIDC%RL%NP
+            RHO=REAL( DWORK4(I) ,KIND=q)
+            VXC=DWORKG(I,1)- REAL( DWGRAD(I,1) ,KIND=q)
+            IF (XC%LDLAP) THEN
+               VXC=VXC + DWORKL(I,1)
+            ENDIF
+            DWORK(I,1)=VXC
+            CVZERO=CVZERO+VXC
+            XCENCC=XCENCC-VXC*RHO*LATT_CUR%OMEGA
+            XCENC=XCENC  -VXC* REAL( DHTOT(I,1) ,KIND=q)
+            IF (XC%LMU) THEN
+               TAUU=MAX(0.5_q*REAL(DKINEDEN(I,1)+KINEDEN%TAUC(I),KIND=q), TAUMIN)
+               EDCMU=EDCMU+DMUWORK(I,1)*(TAUU-KINEDEN%TAUC(I)*0.5_q)
+               DMUWORK(I,1)=0.5_q*DMUWORK(I,1)*RYTOEV*AUTOA2
+            ENDIF
+         ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      ELSEIF (NCDIJ==2) THEN
+      ! Spin-polarized case
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,RHO1,RHO2,VXC1,VXC2,VXC,TAUU,TAUD) SHARED(GRIDC,LATT_CUR,XC,DENCOR,NCDIJ,DWORKG,DWGRAD,DWORK,DWORKL,DHTOT,RINPL,CHGMIN,TAUMIN,DKINEDEN,KINEDEN,DMUWORK) &
+__CPU !$OMP REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LATT_CUR,XC,DENCOR,DWORKG,DWGRAD,DWORK,DWORKL,DHTOT,DKINEDEN,KINEDEN%TAUC,DMUWORK) &
+GPACC !$ACC REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU) PRIVATE(RHO1,RHO2,VXC1,VXC2,VXC,TAUU,TAUD) __IF_ASYNC__
+
+! for OpenMP present checks are performed with MAP(PRESENT,TO:...), so for conditional data,
+! MAP(ALLOC:...) is used to avoid potentially copying the data for the parallel loop.
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LATT_CUR,XC,DENCOR,DWORKG,DWGRAD,DWORK,DHTOT) &
+GPOMP !$OMP MAP(ALLOC:DWORKL,DKINEDEN,KINEDEN%TAUC,DMUWORK) REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU) &
+GPOMP !$OMP PRIVATE(RHO1,RHO2,VXC1,VXC2,VXC,TAUU,TAUD) IF(OFFLOAD_ON)
+
+         DO I=1,GRIDC%RL%NP
+            RHO1= MAX(REAL((DHTOT(I,1)+DENCOR(I)/NCDIJ)/LATT_CUR%OMEGA ,KIND=q), CHGMIN)
+            RHO2= MAX(REAL((DHTOT(I,2)+DENCOR(I)/NCDIJ)/LATT_CUR%OMEGA ,KIND=q), CHGMIN)
+
+            VXC1=DWORKG(I,1)- REAL( DWGRAD(I,1) ,KIND=q)
+            VXC2=DWORKG(I,2)- REAL( DWGRAD(I,2) ,KIND=q)
+            IF (XC%LDLAP) THEN
+               VXC1=VXC1 + DWORKL(I,1)
+               VXC2=VXC2 + DWORKL(I,2)
+            ENDIF
+            DWORK(I,1)=VXC1
+            DWORK(I,2)=VXC2
+            VXC = 0.5_q*(VXC1+VXC2)
+            CVZERO=CVZERO+VXC
+            XCENCC=XCENCC-VXC1*RHO1*LATT_CUR%OMEGA-VXC2*RHO2*LATT_CUR%OMEGA
+            XCENC=XCENC  -VXC1* REAL( DHTOT(I,1) ,KIND=q) -VXC2* REAL( DHTOT(I,2) ,KIND=q)
+            IF (XC%LMU) THEN
+               TAUU=MAX(REAL(DKINEDEN(I,1)+KINEDEN%TAUC(I)*0.5_q,KIND=q), TAUMIN)
+               TAUD=MAX(REAL(DKINEDEN(I,2)+KINEDEN%TAUC(I)*0.5_q,KIND=q), TAUMIN)
+               EDCMU=EDCMU+0.5_q*(DMUWORK(I,1)*TAUU+DMUWORK(I,2)*TAUD-(DMUWORK(I,1)+DMUWORK(I,2))*KINEDEN%TAUC(I)*0.5_q)
+               DMUWORK(I,1)=0.5_q*DMUWORK(I,1)*RYTOEV*AUTOA2
+               DMUWORK(I,2)=0.5_q*DMUWORK(I,2)*RYTOEV*AUTOA2
+            ENDIF
+         ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      ELSEIF (NCDIJ==4) THEN
+      ! non-collinear case
+
+__CPU !$OMP PARALLEL DO SCHEDULE(STATIC) DEFAULT(NONE) &
+__CPU !$OMP PRIVATE(I,MAG_NORM,MAG_NORM_I,VXC1,VXC2,VXC,DELTAV,TAU_DOT_MDIR) SHARED(GRIDC,LATT_CUR,XC,DENCOR,DWORKG,DWGRAD,DWORK,DWORKL,DHTOT,RINPL,CHGMIN,DKINEDEN,DMUWORK) &
+__CPU !$OMP REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU)
+
+GPACC !$ACC PARALLEL LOOP PRESENT(LATT_CUR,XC,DENCOR,DWORKG,DWGRAD,DWORK,DWORKL,DHTOT,DKINEDEN,DMUWORK) &
+GPACC !$ACC REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU) PRIVATE(MAG_NORM,MAG_NORM_I,VXC1,VXC2,VXC,DELTAV,TAU_DOT_MDIR) __IF_ASYNC__
+
+! for OpenMP present checks are performed with MAP(PRESENT,TO:...), so for conditional data,
+! MAP(ALLOC:...) is used to avoid potentially copying the data for the parallel loop.
+GPOMP !$OMP TARGET TEAMS DISTRIBUTE PARALLEL DO MAP(PRESENT,TO:LATT_CUR,XC,DENCOR,DWORKG,DWGRAD,DWORK,DHTOT) &
+GPOMP !$OMP MAP(ALLOC:DWORKL,DKINEDEN,DMUWORK) REDUCTION(+:CVZERO,XCENCC,XCENC,EDCMU) &
+GPOMP !$OMP PRIVATE(MAG_NORM,MAG_NORM_I,VXC1,VXC2,VXC,DELTAV,TAU_DOT_MDIR) IF(OFFLOAD_ON)
+
+         DO I=1,GRIDC%RL%NP
+!
+! | m |
+!
+            MAG_NORM=SQRT(ABS(DHTOT(I,2)*DHTOT(I,2)+ DHTOT(I,3)*DHTOT(I,3) + DHTOT(I,4)*DHTOT(I,4)))
+            ! no regularization for derivative of energy density with respect to |m|
+            MAG_NORM_I=1._q/MAX(MAG_NORM/LATT_CUR%OMEGA,CHGMIN)/LATT_CUR%OMEGA
+
+            VXC1=DWORKG(I,1)
+            VXC2=DWORKG(I,2)
+            VXC   =(VXC1+VXC2)*0.5_q
+            DELTAV=(VXC1-VXC2)*0.5_q
+
+            DWORK(I,1)=VXC-REAL( DWGRAD(I,1) ,KIND=q)
+            DWORK(I,2)=DELTAV*REAL(DHTOT(I,2),KIND=q)*MAG_NORM_I-REAL( DWGRAD(I,2) ,KIND=q)
+            DWORK(I,3)=DELTAV*REAL(DHTOT(I,3),KIND=q)*MAG_NORM_I-REAL( DWGRAD(I,3) ,KIND=q)
+            DWORK(I,4)=DELTAV*REAL(DHTOT(I,4),KIND=q)*MAG_NORM_I-REAL( DWGRAD(I,4) ,KIND=q)
+
+            IF (XC%LDLAP) THEN
+               DWORK(I,1)=DWORK(I,1)+DWORKL(I,1)
+               DWORK(I,2)=DWORK(I,2)+DWORKL(I,2)
+               DWORK(I,3)=DWORK(I,3)+DWORKL(I,3)
+               DWORK(I,4)=DWORK(I,4)+DWORKL(I,4)
+            ENDIF
+
+            IF (XC%LMU) THEN
+               VXC   =(DMUWORK(I,1)+DMUWORK(I,2))*0.5_q
+               DELTAV=(DMUWORK(I,1)-DMUWORK(I,2))*0.5_q
+
+!The following term, (df_xc/dtau_sigma)*(dtau_sigma/dm_a), is commented out since it is probably zero in the general case.
+!It can be shown analytically that it does not contribute to the double-counting term (and this was checked numerically, ~1E-19).
+!However, numerically this term has some small influence in the Hamiltonian, which is most likely due to noise.
+!The same can be said about (df_xc/dlap_sigma)*(dlap_sigma/dm_a) for the Laplacian-dependent functionals.
+!               IF (XC%ITAUNCL==1) THEN
+!                  TAU_DOT_MDIR=(DHTOT(I,2)*DKINEDEN(I,2)+DHTOT(I,3)*DKINEDEN(I,3)+DHTOT(I,4)*DKINEDEN(I,4))*MAG_NORM_I
+!                  DWORK(I,2) = DWORK(I,2) + DELTAV*(-REAL(DHTOT(I,2),KIND=q)*TAU_DOT_MDIR*MAG_NORM_I + DKINEDEN(I,2))*MAG_NORM_I*LATT_CUR%OMEGA
+!                  DWORK(I,3) = DWORK(I,3) + DELTAV*(-REAL(DHTOT(I,3),KIND=q)*TAU_DOT_MDIR*MAG_NORM_I + DKINEDEN(I,3))*MAG_NORM_I*LATT_CUR%OMEGA
+!                  DWORK(I,4) = DWORK(I,4) + DELTAV*(-REAL(DHTOT(I,4),KIND=q)*TAU_DOT_MDIR*MAG_NORM_I + DKINEDEN(I,4))*MAG_NORM_I*LATT_CUR%OMEGA
+!               ENDIF
+
+               DMUWORK(I,1)=VXC
+               DMUWORK(I,2)=DELTAV*REAL(DHTOT(I,2),KIND=q)*MAG_NORM_I
+               DMUWORK(I,3)=DELTAV*REAL(DHTOT(I,3),KIND=q)*MAG_NORM_I
+               DMUWORK(I,4)=DELTAV*REAL(DHTOT(I,4),KIND=q)*MAG_NORM_I
+
+               EDCMU = EDCMU + 0.5_q*(DMUWORK(I,1)*REAL(DKINEDEN(I,1)) & 
+                     + DMUWORK(I,2)*REAL(DKINEDEN(I,2)) + DMUWORK(I,3)*REAL(DKINEDEN(I,3)) + DMUWORK(I,4)*REAL(DKINEDEN(I,4)))
+
+               DMUWORK(I,1:4)=0.5_q*DMUWORK(I,1:4)*RYTOEV*AUTOA2
+
+            ENDIF
+
+            CVZERO=CVZERO+DWORK(I,1)
+            XCENCC=XCENCC-DWORK(I,1)*REAL(DHTOT(I,1)+DENCOR(I)) & 
+                 -(DWORK(I,2)*REAL(DHTOT(I,2))+DWORK(I,3)*REAL(DHTOT(I,3))+DWORK(I,4)*REAL(DHTOT(I,4)))
+            XCENC =XCENC -DWORK(I,1)*REAL(DHTOT(I,1)) & 
+                 -(DWORK(I,2)*REAL(DHTOT(I,2))+DWORK(I,3)*REAL(DHTOT(I,3))+DWORK(I,4)*REAL(DHTOT(I,4)))
+         ENDDO
+
+__CPU !$OMP END PARALLEL DO
+
+      ENDIF
+
+GPACC !$ACC WAIT(ACC_ASYNC_Q) IF(OFFLOAD_ON)
+
+GPACC !$ACC EXIT DATA DELETE(DWORKL,DENSHESS) __IF_ASYNC__
+GPOMP !$OMP TARGET EXIT DATA MAP(RELEASE:DWORKL,DENSHESS) IF(OFFLOAD_ON)
+
+      EDCMU =EDCMU*LATT_CUR%OMEGA
+      CVZERO=CVZERO*RINPL
+      XCENC =(XCENC+EXC-EDCMU)*RINPL
+      XCENCC=(XCENCC+EXC)*RINPL
+      EXC   =EXC*RINPL
+      EDCMU =EDCMU*RINPL
+
+      SIF11=SIF11-XCENCC
+      SIF22=SIF22-XCENCC
+      SIF33=SIF33-XCENCC
+      XCSIF(1,1)=SIF11
+      XCSIF(2,2)=SIF22
+      XCSIF(3,3)=SIF33
+      XCSIF(1,2)=SIF12
+      XCSIF(2,1)=SIF12
+      XCSIF(2,3)=SIF23
+      XCSIF(3,2)=SIF23
+      XCSIF(3,1)=SIF31
+      XCSIF(1,3)=SIF31
+
+      IF (XC%LUSE_VDW) XCSIF = XCSIF - STRESS
+
+      IF (.NOT.XC%LMU) THEN
+         CALLMPI( M_sum_2(GRIDC%COMM, EXC, XCENC))
+      ELSE
+         CALLMPI( M_sum_3(GRIDC%COMM, EXC, XCENC, EDCMU))
+      ENDIF
+      CALLMPI( M_sum_d(GRIDC%COMM, XCSIF, 9))
+      CALLMPI( M_sum_z(GRIDC%COMM,CVZERO,1))
+
+      ! Flip CHTOT back to (rho,mag) if needed (collinear case)
+      IF (NCDIJ==2) CALL RL_FLIP(CHTOT,GRIDC,NCDIJ,.FALSE.)
+#ifdef project_density
+      DEALLOCATE(CHTOT)
+#endif
+
+GPACC !$ACC EXIT DATA DELETE(CWGRAD,CWACC,DWORK,DWORKG,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,DVC,DWORK4,DWORK5,DWORK6,DWORK7) __IF_ASYNC__
+GPOMP !$OMP TARGET EXIT DATA MAP(RELEASE:CWGRAD,CWACC,DWORK,DWORKG,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,DVC,DWORK4,DWORK5,DWORK6,DWORK7) IF(OFFLOAD_ON)
+
+      DEALLOCATE(CWGRAD,CWACC,DWORKG,NABLA1,NABLA2,NABLA3,NABLATWO1,NABLATWO2,NABLATWO3,DVC,DWORK4,DWORK5,DWORK6,DWORK7)
+
+      IF (XC%LSPIN_VDW) THEN
+GPACC !$ACC EXIT DATA DELETE(DWORK4S,DWORK5S,DWORK6S,DWORK7S) __IF_ASYNC__
+GPOMP !$OMP TARGET EXIT DATA MAP(RELEASE:DWORK4S,DWORK5S,DWORK6S,DWORK7S) IF(OFFLOAD_ON)
+         DEALLOCATE(DWORK4S,DWORK5S,DWORK6S,DWORK7S)
+      ENDIF
+
+      PROFILING_STOP('fexcg')
+
+      RETURN
+      END SUBROUTINE FEXCG

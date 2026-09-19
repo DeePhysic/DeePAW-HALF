@@ -10,7 +10,8 @@
 ```
 
 HAPPY 是移植过程中的数值 oracle。当前 CUDA Gamma/MIMIC_US 固定密度路径已在
-Si 与 HfO2 上通过逐本征值验证；CPU QDEP 也已闭合，任意 k 点、总能量与力仍在移植中。
+Si 与 HfO2 上通过逐本征值验证；CPU QDEP 与任意单 k 点也已闭合，band path、
+总能量与力仍在移植中。
 
 ## 数值模型：从固定密度到本征值
 
@@ -68,7 +69,7 @@ CPU 与 CUDA 路径现已实现上式完整的 Gamma 点 MIMIC_US 项；`--uspp-
 校正。GPU 先对周期有效势进行三次 B 样条预滤波，再围绕每个原子在球面网格取样，
 投影到实球谐函数，并用 VASP 的双球贝塞尔补偿函数完成径向积分，最后与 AE−PS
 多极矩收缩得到每个原子的 $D_{ij}^I$。矩阵自由算符、任意 k 点、能量和力仍是
-计划项。权威状态见
+计划项；单个非 Gamma k 点可用 `--kpoint KX KY KZ`。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 
 对已实现的 DION 问题，`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，化为
@@ -138,6 +139,11 @@ half gamma CHGCAR.smooth POTCAR \
   --encut 400 --bands 8 --xc pbe --backend cuda \
   --uspp-dij --reference-eigenval EIGENVAL --output gamma_validation.json
 
+# 任意分数倒空间 k 点
+half gamma CHGCAR.smooth POTCAR \
+  --encut 400 --bands 8 --backend cuda --uspp-dij \
+  --kpoint 0.125 0.25 0.375 --output kpoint_validation.json
+
 # 显式使用 CPU 后端
 half gamma CHGCAR.smooth POTCAR \
   --encut 400 --bands 8 --xc pbe --backend cpu
@@ -170,7 +176,7 @@ MIMIC_US 加速比引用。完整原始时间、环境和约束见
 
 - Si Gamma/MIMIC_US：与 HAPPY 的前 8 条本征值最大偏差约 `3e-12 eV`。
 - HfO2 Gamma/MIMIC_US：60 条本征值最大偏差约 `7.9e-12 eV`。
-- 任意 k 点、总能量/力与 `vaspwave.h5` 输出仍在移植中。
+- band path/k 网格、总能量/力与 `vaspwave.h5` 输出仍在移植中。
 
 详细验证记录见 [`docs/VALIDATION.md`](docs/VALIDATION.md)，功能状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。

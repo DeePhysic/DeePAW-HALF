@@ -83,6 +83,7 @@ contains
     write(unit,'(A)') 'Options:'
     write(unit,'(A)') '  --encut EV                 plane-wave cutoff (default: 400)'
     write(unit,'(A)') '  --bands N                  eigenvalues to report (default: 8)'
+    write(unit,'(A)') '  --kpoint KX KY KZ          fractional reciprocal k point (default: Gamma)'
     write(unit,'(A)') '  --xc lda|pbe               exchange-correlation model (default: pbe)'
     write(unit,'(A)') '  --backend auto|cpu|cuda    compute backend (default: auto)'
     write(unit,'(A)') '  --solver evd|evj           CUDA eigensolver: divide-and-conquer or Jacobi (default: evd)'
@@ -99,7 +100,7 @@ contains
     type(potcar_t),allocatable::potcars(:)
     type(paw_species_t),allocatable::paw(:)
     real(dp),allocatable::veff(:),eigenvalues(:),reference(:)
-    real(dp)::eh,exc,smin,smax,encut,elapsed,potential_seconds,assembly_seconds,gpu_seconds
+    real(dp)::eh,exc,smin,smax,encut,elapsed,potential_seconds,assembly_seconds,gpu_seconds,kpoint(3)
     logical::use_uspp
     integer::nbands,i,narg,ios,tick0,tick1,rate,unit
     character(len=1024)::charge_path,potential_path,arg,value,output_path,reference_path
@@ -115,7 +116,7 @@ contains
     if(narg<offset+2)then; call print_gamma_help(0); call fail('gamma requires CHARGE and POTENTIAL'); end if
     call get_command_argument(offset+1,charge_path)
     call get_command_argument(offset+2,potential_path)
-    encut=400.0_dp; nbands=8; xc='pbe'; backend='auto'; solver='evd';use_uspp=.false.
+    encut=400.0_dp; nbands=8; xc='pbe'; backend='auto'; solver='evd';use_uspp=.false.;kpoint=0.0_dp
     output_path='gamma_validation.json'; reference_path=''
     i=offset+3
     do while(i<=narg)
@@ -127,6 +128,14 @@ contains
       case('--bands')
         call option_value(i,narg,'--bands',value); read(value,*,iostat=ios)nbands
         if(ios/=0.or.nbands<1)call fail('invalid --bands value')
+      case('--kpoint')
+        if(i+3>narg)call fail('--kpoint requires KX KY KZ')
+        call get_command_argument(i+1,value);read(value,*,iostat=ios)kpoint(1)
+        if(ios/=0)call fail('invalid --kpoint KX value')
+        call get_command_argument(i+2,value);read(value,*,iostat=ios)kpoint(2)
+        if(ios/=0)call fail('invalid --kpoint KY value')
+        call get_command_argument(i+3,value);read(value,*,iostat=ios)kpoint(3)
+        if(ios/=0)call fail('invalid --kpoint KZ value');i=i+3
       case('--xc')
         call option_value(i,narg,'--xc',xc); xc=lower(trim(xc))
         if(trim(xc)/='lda'.and.trim(xc)/='pbe')call fail('--xc must be lda or pbe')
@@ -154,7 +163,7 @@ contains
     call system_clock(tick0,rate)
     call read_chgcar(trim(charge_path),crystal,rho)
     call read_potcar(trim(potential_path),potcars)
-    call build_plane_wave_basis(crystal,rho%shape,encut,[0.0_dp,0.0_dp,0.0_dp],basis)
+    call build_plane_wave_basis(crystal,rho%shape,encut,kpoint,basis)
     potential_seconds=0.0_dp;assembly_seconds=0.0_dp;gpu_seconds=0.0_dp
 #ifdef HALF_CLI_CUDA
     if(trim(backend)=='auto'.or.trim(backend)=='cuda')then
@@ -199,21 +208,21 @@ contains
       open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
       if(ios/=0)call fail('cannot write output: '//trim(output_path))
       call write_gamma_json(unit,charge_path,potential_path,xc,actual_backend,encut,basis%npw, &
-        eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp)
+        eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp,kpoint)
       close(unit)
     end if
     call write_gamma_json(6,charge_path,potential_path,xc,actual_backend,encut,basis%npw, &
-      eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp)
+      eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp,kpoint)
 #endif
   end subroutine
 
   subroutine write_gamma_json(unit,charge,potential,xc,backend,encut,npw,eigenvalues,reference, &
-      smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
+      smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,kpoint)
     integer,intent(in)::unit
     integer(i64),intent(in)::npw
     character(len=*),intent(in)::charge,potential,xc,backend,solver
     logical,intent(in)::use_uspp
-    real(dp),intent(in)::encut,eigenvalues(:),reference(:),smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds
+    real(dp),intent(in)::encut,eigenvalues(:),reference(:),smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,kpoint(3)
     real(dp),allocatable::errors(:)
     integer::n
     n=min(size(eigenvalues),size(reference)); allocate(errors(n))
@@ -226,6 +235,8 @@ contains
     write(unit,'(A,A,A)') '  "backend": "',trim(backend),'",'
     write(unit,'(A,A,A)') '  "solver": "',trim(solver),'",'
     write(unit,'(A,A,A)') '  "uspp_dij": ',merge('true ','false',use_uspp),','
+    write(unit,'(A,ES24.16,A,ES24.16,A,ES24.16,A)') '  "kpoint_fractional": [', &
+      kpoint(1),', ',kpoint(2),', ',kpoint(3),'],'
     write(unit,'(A,ES24.16,A)') '  "encut_eV": ',encut,','
     write(unit,'(A,I0,A)') '  "plane_waves": ',npw,','
     call write_real_array(unit,'gamma_eigenvalues_eV',eigenvalues,.true.)

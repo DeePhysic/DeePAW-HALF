@@ -115,6 +115,16 @@ is `1.47x` faster than HAPPY; CUDA is `25.82x` faster than CPU Fortran. The
 earlier RTX 4090 timing used HALF's DION-only operator and therefore is not
 cited as a MIMIC_US speedup.
 
+## Arbitrary single k point
+
+The existing basis, kinetic, projector, local-potential-difference and PAW
+assembly kernels were validated away from Gamma by exposing
+`--kpoint KX KY KZ`. For Si at fractional k point `(0.125, 0.25, 0.375)`, PBE,
+400 eV and full MIMIC_US, HALF and HAPPY select 733 plane waves. The first
+eight eigenvalues agree with a `1.37e-12 eV` maximum and `6.36e-13 eV` RMS
+error. See
+[`validation/si_arbitrary_kpoint.json`](validation/si_arbitrary_kpoint.json).
+
 ## HALF versus Python HAPPY
 
 For the implemented Si slice (CHGCAR read, smooth electron count, and 400 eV

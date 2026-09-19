@@ -42,7 +42,7 @@ Version 0.4 provides a numerically closed Gamma fixed-density path on CUDA:
 
 The CUDA MIMIC_US path reproduces HAPPY for both Si (725 plane waves) and HfO2
 (3407 plane waves): the tested eigenvalues agree to about `1e-11 eV` or better.
-Arbitrary k points, energy/forces and `vaspwave.h5` output are tracked
+Band paths/k meshes, energy/forces and `vaspwave.h5` output are tracked
 in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md); HALF is not yet a
 complete replacement for every HAPPY workflow.
 
@@ -110,7 +110,7 @@ prefiltered for periodic cubic B-spline interpolation on the GPU, sampled on
 concentric angular grids around every atom, projected onto real spherical
 harmonics, radially integrated against VASP's two-Bessel compensation
 functions, and contracted with the AE-minus-PS multipole moments. Matrix-free
-application, arbitrary-k bands, energy and forces remain planned. The authoritative status is
+application, multi-point band paths, energy and forces remain planned. The authoritative status is
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
 For the implemented DION problem, `S` is positive definite and the generalized
@@ -211,6 +211,11 @@ CPU/CUDA backend selection:
 ./build/cuda12-cc89-release/half gamma CHGCAR.smooth POTCAR \
   --encut 400 --bands 8 --xc pbe --backend cuda --uspp-dij \
   --reference-eigenval EIGENVAL --output gamma_validation.json
+
+# Solve an arbitrary fractional reciprocal k point with the same operator.
+./build/cuda12-cc89-release/half gamma CHGCAR.smooth POTCAR \
+  --encut 400 --bands 8 --backend cuda --uspp-dij \
+  --kpoint 0.125 0.25 0.375 --output kpoint_validation.json
 
 # Inspect parsed POTCAR or PAW data.
 ./build/cpu-release/half potcar POTCAR

@@ -81,6 +81,22 @@ def test_cpu_mimic_us_pipeline_is_available():
     assert "--uspp-dij requires a cuda build" not in cli
 
 
+def test_arbitrary_kpoint_cli_is_enabled():
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "case('--kpoint')" in cli
+    assert "build_plane_wave_basis(crystal,rho%shape,encut,kpoint,basis)" in cli
+
+
+def test_si_arbitrary_kpoint_parity_record():
+    import json
+
+    record = json.loads(
+        (ROOT / "docs/validation/si_arbitrary_kpoint.json").read_text()
+    )
+    assert record["plane_waves"] == 733
+    assert record["max_abs_eigenvalue_error_eV"] < 1e-10
+
+
 def test_hfo2_cuda_mimic_us_parity_record():
     import json
 

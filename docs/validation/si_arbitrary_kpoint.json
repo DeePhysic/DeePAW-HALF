@@ -1,0 +1,32 @@
+{
+  "system": "Si",
+  "operator": "fixed-density PBE MIMIC_US at an arbitrary k point",
+  "kpoint_fractional": [0.125, 0.25, 0.375],
+  "encut_eV": 400.0,
+  "plane_waves": 733,
+  "bands_compared": 8,
+  "half_backend": "CUDA Fortran with --uspp-dij",
+  "oracle": "DeePAW-HAPPY dense_hs_at_k",
+  "max_abs_eigenvalue_error_eV": 1.3655743202889425e-12,
+  "rms_eigenvalue_error_eV": 6.357008875396094e-13,
+  "half_eigenvalues_eV": [
+    -4.7950266475407055,
+    1.5164961804380908,
+    3.098813817834682,
+    4.37923081376695,
+    8.231458822084795,
+    9.661486150376572,
+    9.983186993809877,
+    11.275155404086512
+  ],
+  "happy_eigenvalues_eV": [
+    -4.795026647540013,
+    1.5164961804394563,
+    3.0988138178346474,
+    4.379230813766981,
+    8.231458822084832,
+    9.661486150376323,
+    9.983186993809188,
+    11.275155404087101
+  ]
+}

@@ -127,6 +127,17 @@ def test_native_hdf5_input_and_vaspwave_output_are_enabled():
     assert "case('--vaspwave-h5')" in cli
 
 
+def test_si_finite_difference_force_parity_record():
+    import json
+
+    record = json.loads((ROOT / "docs/validation/si_force_parity.json").read_text())
+    assert record["max_abs_force_error_eV_per_Angstrom"] < 1e-8
+    assert record["speedup"] > 40.0
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "case('--forces')" in cli
+    assert "evaluate_free_energy" in cli
+
+
 def test_si_arbitrary_kpoint_parity_record():
     import json
 

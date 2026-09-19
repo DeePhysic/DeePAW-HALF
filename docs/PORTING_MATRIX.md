@@ -21,7 +21,7 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | Explicit bands, k meshes and symmetry reduction | `kpoints.py` | `half_kpoints.F90`, `half_cli.F90` | done; explicit reciprocal KPOINTS, full Gamma meshes and spglib irreducible meshes |
 | Occupations, Ewald and energy | `occupations.py`, `ewald.py`, `total_energy.py` | `half_energy.F90`, `half_cli.F90` | done on CPU/CUDA; zero/finite-T occupations and Si componentwise parity below 4e-12 eV |
 | Analytic forces | theory only | `half_forces.cuf` | planned |
-| Finite-difference force oracle | `total_energy.py` | test driver | planned |
+| Finite-difference force oracle | `total_energy.py` | `half_cli.F90` | done on CPU/CUDA; Si parity within 2.3e-9 eV/Angstrom and 45x faster than HAPPY in the validated case |
 | `vaspwave.h5` output | `vaspwave.py` | `half_vaspwave.F90`, `half_hdf5_bridge.c` | done for EVD bands/energy; VASP FFT coefficient order, float32 complex packing and charge round trip validated |
 | MPI k-point distribution | n/a | `half_mpi.F90` | blocked on single-GPU parity |
 

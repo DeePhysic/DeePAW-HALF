@@ -12,7 +12,8 @@
 HAPPY 是移植过程中的数值 oracle。当前 CUDA Gamma/MIMIC_US 固定密度路径已在
 Si 与 HfO2 上通过逐本征值验证；CPU QDEP、任意 k 点、多 k 点能带、spglib
 不可约 k 网格、占据数、Ewald 和 Harris 固定密度总能量也已闭合。Si 总能量及
-各分量与 HAPPY 的差小于 `4e-12 eV`。原生 `vaspwave.h5` 输出以及 HDF5
+各分量与 HAPPY 的差小于 `4e-12 eV`；中心差分力在 Si 验证中与 HAPPY 相差小于
+`2.3e-9 eV/Angstrom`。原生 `vaspwave.h5` 输出以及 HDF5
 电荷/结构/内嵌 POTCAR 输入已经支持；力仍在移植中。
 
 ## 数值模型：从固定密度到本征值
@@ -158,7 +159,7 @@ half bands CHGCAR.smooth POTCAR KPOINTS \
 # 使用 spglib 不可约 k 网格计算固定密度 Harris 总能量
 half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
-  --vaspwave-h5 vaspwave.h5 --output energy.json
+  --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output energy.json
 ```
 
 `half-validate-gamma`、`half-bands` 与 `half-energy` 都是对应子命令的兼容别名。

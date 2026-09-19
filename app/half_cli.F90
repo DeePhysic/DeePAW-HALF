@@ -8,6 +8,7 @@ program half_cli
   use half_paw, only: paw_species_t, build_paw_operators
   use half_uspp, only: build_uspp_dij_cpu
   use half_energy, only: compute_occupations,ewald_energy
+  use half_math,only:inverse3
   use half_cpu, only: cpu_density_mean
 #ifdef HALF_CLI_HAVE_MKL
   use half_potential, only: build_veff_lda, build_veff_pbe
@@ -608,10 +609,13 @@ contains
     real(dp)::eh,exc,exv,smin,smax,potential_seconds,assembly_seconds,gpu_seconds
     real(dp)::ewald,ewald_real,ewald_recip,ewald_self,ewald_background,atomic_reference,local_g0
     real(dp)::paw_atomic,internal_energy,free_energy
+    real(dp)::force_step,displaced_energies(2),inverse_lattice(3,3),delta_cart(3)
+    real(dp),allocatable::forces(:,:)
+    type(crystal_t)::displaced
     integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,hdf5_path
     character(len=16)::xc,backend,solver,actual_backend
-    logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic
+    logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)
     type(wave_block_t),allocatable::waves(:)
@@ -629,7 +633,8 @@ contains
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
     encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.0_dp;nbands=0
     xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';hdf5_path=''
-    use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;paw_atomic=0;atomic_reference=0;i=offset+3
+    use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.
+    paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;i=offset+3
     do while(i<=narg)
       call get_command_argument(i,arg)
       select case(trim(arg))
@@ -652,6 +657,9 @@ contains
       case('--solver');call option_value(i,narg,'--solver',solver);solver=lower(trim(solver))
         if(trim(solver)/='evd'.and.trim(solver)/='evj')call fail('--solver must be evd or evj')
       case('--no-uspp-dij');use_uspp=.false.
+      case('--forces');do_forces=.true.
+      case('--force-step');call option_value(i,narg,'--force-step',value);read(value,*,iostat=ios)force_step
+        if(ios/=0.or.force_step<=0)call fail('invalid --force-step value')
       case('--paw-atomic-double-counting');call option_value(i,narg,'--paw-atomic-double-counting',value);read(value,*,iostat=ios)paw_atomic
         if(ios/=0)call fail('invalid --paw-atomic-double-counting value');have_paw_atomic=.true.
       case('--atomic-reference-energy');call option_value(i,narg,'--atomic-reference-energy',value);read(value,*,iostat=ios)atomic_reference
@@ -747,15 +755,29 @@ contains
     internal_energy=band_energy-eh-exv+exc+ewald+local_g0+atomic_reference
     if(have_paw_atomic)internal_energy=internal_energy+paw_atomic
     free_energy=internal_energy+entropy_term
+    if(do_forces)then
+      allocate(forces(crystal%nions,3));inverse_lattice=inverse3(crystal%lattice)
+      do iat=1,crystal%nions;do i=1,3;do ion=1,2
+        displaced=crystal;delta_cart=0.0_dp;delta_cart(i)=merge(-force_step,force_step,ion==1)
+        displaced%positions(iat,:)=modulo(displaced%positions(iat,:)+matmul(delta_cart,inverse_lattice),1.0_dp)
+        call evaluate_free_energy(displaced,rho,potcars,encut,kspacing,kpoints_path,full_mesh,symprec,nbands,sigma,xc, &
+          actual_backend,solver,use_uspp,atomic_reference,paw_atomic,have_paw_atomic,displaced_energies(ion))
+      end do
+      forces(iat,i)=-(displaced_energies(2)-displaced_energies(1))/(2.0_dp*force_step)
+      write(0,'(A,I0,A,I0,A,ES16.8)')'HALF force: atom ',iat,' axis ',i,' force_eV_per_A=',forces(iat,i)
+      end do;end do
+    else
+      allocate(forces(0,0))
+    end if
     if(trim(output_path)=='-')then;unit=6
     else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
       if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
     call write_energy_json(unit,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
       eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
-      have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp)
+      have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step)
     if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
       eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
-      have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp);end if
+      have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step);end if
 #endif
   end subroutine
 
@@ -767,18 +789,81 @@ contains
     write(unit,'(A)')'         --symprec VALUE --bands N --sigma EV --xc lda|pbe'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj --no-uspp-dij --output FILE'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
+    write(unit,'(A)')'         --forces --force-step ANGSTROM'
     write(unit,'(A)')'         --atomic-reference-energy EV --paw-atomic-double-counting EV'
   end subroutine
 
+  subroutine evaluate_free_energy(crystal,rho,potcars,encut,kspacing,kpoints_path,full_mesh,symprec,nbands,sigma,xc, &
+      backend,solver,use_uspp,atomic_reference,paw_atomic,have_paw_atomic,free_energy)
+    type(crystal_t),intent(in)::crystal
+    type(charge_grid_t),intent(in)::rho
+    type(potcar_t),intent(in)::potcars(:)
+    real(dp),intent(in)::encut,kspacing,symprec,sigma,atomic_reference,paw_atomic
+    integer,intent(in)::nbands
+    character(len=*),intent(in)::kpoints_path,xc,backend,solver
+    logical,intent(in)::full_mesh,use_uspp,have_paw_atomic
+    real(dp),intent(out)::free_energy
+    type(kpoint_set_t)::mesh
+    type(plane_wave_basis_t)::basis
+    type(paw_species_t),allocatable::paw(:)
+    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),occupation(:,:),charges(:)
+    real(dp)::eh,exc,exv,smin,smax,ps,as,gs,nelect,mu,band,entropy,ewald,local_g0,internal
+    integer::ik,it,iat,ion
+    if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),mesh)
+    else if(full_mesh)then;call gamma_centered_mesh(crystal,kspacing,mesh)
+    else;call gamma_centered_irreducible_mesh(crystal,kspacing,mesh,symprec,.true.);end if
+    allocate(eigenvalues(mesh%nk,nbands));eh=0;exc=0;exv=0
+    do ik=1,mesh%nk
+      call build_plane_wave_basis(crystal,rho%shape,encut,mesh%points(ik,:),basis)
+      if(nbands>basis%npw)call fail('requested bands exceed plane waves in displaced force evaluation')
+#ifdef HALF_CLI_CUDA
+      if(trim(backend)=='cuda')then
+        if(ik==1)then
+          call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax,ps,as,gs, &
+            solver,use_uspp,eh,exc,exv)
+        else
+          call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax,ps,as,gs,solver,use_uspp)
+        end if
+      else
+#endif
+#ifdef HALF_CLI_HAVE_MKL
+        call build_paw_operators(potcars,crystal,basis,paw)
+        if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv)
+        else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc,exv);end if
+        if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
+        call solve_dense_gamma(veff,basis,paw,values,smin,smax)
+#endif
+#ifdef HALF_CLI_CUDA
+      end if
+#endif
+      eigenvalues(ik,:)=values(:nbands)
+    end do
+    nelect=0;do it=1,size(potcars);nelect=nelect+potcars(it)%zval*real(crystal%counts(it),dp);end do
+    call compute_occupations(eigenvalues,mesh%weights,nelect,sigma,occupation,mu,band,entropy)
+    if(sigma>0.and.maxval(occupation(:,nbands))>1e-6_dp)call fail('highest force-evaluation band is occupied; increase --bands')
+    allocate(charges(crystal%nions));ion=0
+    do it=1,size(potcars);do iat=1,crystal%counts(it);ion=ion+1;charges(ion)=potcars(it)%zval;end do;end do
+    call ewald_energy(crystal,charges,ewald)
+    local_g0=0;do it=1,size(potcars)
+      if(allocated(potcars(it)%psp_local))local_g0=local_g0+potcars(it)%psp_local(1)*real(crystal%counts(it),dp)
+    end do;local_g0=local_g0*nelect/crystal%volume
+    internal=band-eh-exv+exc+ewald+local_g0+atomic_reference
+    if(have_paw_atomic)internal=internal+paw_atomic
+    free_energy=internal+entropy
+  end subroutine
+
   subroutine write_energy_json(unit,xc,backend,solver,set,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald, &
-      er,eg,es,eb,local_g0,atomic_reference,paw_atomic,have_paw_atomic,internal,free,smin,plane_waves,use_uspp)
+      er,eg,es,eb,local_g0,atomic_reference,paw_atomic,have_paw_atomic,internal,free,smin,plane_waves,use_uspp, &
+      forces,have_forces,force_step)
     integer,intent(in)::unit
     character(len=*),intent(in)::xc,backend,solver
     type(kpoint_set_t),intent(in)::set
     real(dp),intent(in)::nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald,er,eg,es,eb,local_g0
     real(dp),intent(in)::atomic_reference,paw_atomic,internal,free,smin
     integer(i64),intent(in)::plane_waves(:)
-    logical,intent(in)::have_paw_atomic,use_uspp
+    real(dp),intent(in)::forces(:,:),force_step
+    logical,intent(in)::have_paw_atomic,use_uspp,have_forces
+    integer::iat
     write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.4.0",'
     write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",';write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",'
     write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",';write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),','
@@ -794,7 +879,17 @@ contains
     if(have_paw_atomic)then;write(unit,'(A,ES24.16,A)')'  "paw_atomic_double_counting_eV": ',paw_atomic,','
     else;write(unit,'(A)')'  "paw_atomic_double_counting_eV": null,';end if
     write(unit,'(A,ES24.16,A)')'  "minimum_overlap_eigenvalue": ',smin,','
-    write(unit,'(A,ES24.16,A)')'  "internal_energy_eV": ',internal,',';write(unit,'(A,ES24.16)')'  "free_energy_eV": ',free
+    write(unit,'(A,ES24.16,A)')'  "internal_energy_eV": ',internal,',';write(unit,'(A,ES24.16,A)')'  "free_energy_eV": ',free,','
+    if(have_forces)then
+      write(unit,'(A,ES24.16,A)')'  "force_step_Angstrom": ',force_step,',';write(unit,'(A)')'  "forces_eV_per_Angstrom": ['
+      do iat=1,size(forces,1)
+        write(unit,'(A,3(ES24.16,:,A))',advance='no')'    [',forces(iat,1),', ',forces(iat,2),', ',forces(iat,3),']'
+        if(iat<size(forces,1))then;write(unit,'(A)')',';else;write(unit,'(A)')'';end if
+      end do
+      write(unit,'(A)')'  ]'
+    else
+      write(unit,'(A)')'  "forces_eV_per_Angstrom": null'
+    end if
     write(unit,'(A)')'}'
   end subroutine
 

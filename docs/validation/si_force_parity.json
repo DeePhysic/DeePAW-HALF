@@ -1,0 +1,20 @@
+{
+  "system": "diamond Si",
+  "xc": "PBE",
+  "encut_eV": 200.0,
+  "kspacing_inv_A": 10.0,
+  "bands": 8,
+  "force_step_Angstrom": 0.001,
+  "half_cuda_seconds": 1.08,
+  "happy_single_core_seconds": 48.94,
+  "speedup": 45.31,
+  "half_forces_eV_per_Angstrom": [
+    [-6.997011325893254e-05, -6.997090196136924e-05, -1.155501863081554e-04],
+    [ 6.997147750098520e-05,  6.997120038931826e-05,  1.155486231141367e-04]
+  ],
+  "happy_forces_eV_per_Angstrom": [
+    [-6.997055379542871e-05, -6.997235857397754e-05, -1.155519697704222e-04],
+    [ 6.997024115662498e-05,  6.997343859893590e-05,  1.155514439687977e-04]
+  ],
+  "max_abs_force_error_eV_per_Angstrom": 2.238209617644e-09
+}

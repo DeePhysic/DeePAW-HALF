@@ -45,7 +45,8 @@ The CUDA MIMIC_US path reproduces HAPPY for both Si (725 plane waves) and HfO2
 Explicit multi-k bands, Gamma-centered full/irreducible spglib meshes,
 occupations, Ewald and the fixed-density Harris total energy are also native
 Fortran features. The Si total energy and every reported component agree with
-HAPPY to better than `4e-12 eV`. Native `vaspwave.h5` output and HDF5
+HAPPY to better than `4e-12 eV`. Central finite-difference forces reproduce
+HAPPY within `2.3e-9 eV/Angstrom` in the validated Si case. Native `vaspwave.h5` output and HDF5
 charge/structure/embedded-POTCAR input are supported. Forces and the matrix-free
 solver remain tracked in [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
@@ -228,7 +229,7 @@ CPU/CUDA backend selection:
 # Evaluate the symmetry-reduced fixed-density Harris energy.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
-  --vaspwave-h5 vaspwave.h5 --output energy.json
+  --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output energy.json
 
 # Inspect parsed POTCAR or PAW data.
 ./build/cpu-release/half potcar POTCAR

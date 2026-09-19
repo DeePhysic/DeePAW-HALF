@@ -309,6 +309,9 @@ See [the API guide](docs/API.md), the
 [tested VASP 6.6.0 integration](docs/VASP_INTEGRATION.md), the standalone
 [C example](examples/api/half_c_example.c), and the original
 [VASP-side adapter module](examples/vasp/half_vasp_init.F).
+The full HfO2 HALF-versus-SAD SCF comparison at `KSPACING=0.35`,
+`LMAXPAW=-1`, and `ALGO=All` is documented in the
+[detailed validation report](docs/validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md).
 
 The private `vasp-6.6-half-integration` branch vendors the complete VASP 6.6.0
 source under `vendor/vasp-6.6.0`. On the Pro 6000 host, one command configures

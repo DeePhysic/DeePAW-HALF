@@ -152,6 +152,12 @@ HALF 项目自己的桥接代码，不包含或再分发 VASP 源码。
 实际为 NVHPC 26.5 自带的 13.2，不把仅存在文档的 `/usr/local/cuda-13.4` 误报为
 可用工具链。
 
+进一步的完整 SCF 对照采用 `KSPACING=0.35`、36 个不可约 k 点、
+`LMAXPAW=-1`、`ALGO=All`、`EDIFF=1E-4`，并让 `PREC=High` 自动选择 500 eV。
+HALF 用 4 个电子迭代收敛，SAD 需要 16 个；包含 HALF 36 个 k 点初始化的端到端
+wall time 分别为 193.44 s 和 266.96 s。详细参数、逐步收敛轨迹、校验和及限制见
+[`HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md`](validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md)。
+
 ## 后续必须通过的验证
 
 1. 消除任意能带相位后，与离线 HALF 结果逐列比较映射后的系数。

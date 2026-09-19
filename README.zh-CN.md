@@ -224,6 +224,9 @@ VASP adapter 还会把晶格、分数坐标、物种编号和致密电荷网格�
 [VASP 6.6.0 接入实测](docs/VASP_INTEGRATION.zh-CN.md)。独立调用示例见
 [C 示例](examples/api/half_c_example.c)，VASP 侧桥接模块见
 [`examples/vasp/half_vasp_init.F`](examples/vasp/half_vasp_init.F)。
+HfO₂ 在 `KSPACING=0.35`、`LMAXPAW=-1`、`ALGO=All` 下的 HALF/SAD 完整
+SCF 对照见
+[详细验证报告](docs/validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md)。
 
 在私有分支 `vasp-6.6-half-integration` 中，VASP 6.6.0 完整源码位于
 `vendor/vasp-6.6.0`，可在 Pro 6000 节点用一条命令完成 HALF、MKL FFTW wrapper

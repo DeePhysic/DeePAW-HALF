@@ -172,6 +172,14 @@ The build used the MKL FFTW3 wrapper from `/opt/intel/oneapi/mkl/2026.0`. The
 actual CUDA compile toolkit was NVHPC 26.5's bundled 13.2; a documentation-only
 `/usr/local/cuda-13.4` directory was not reported as a working toolkit.
 
+A full SCF comparison used `KSPACING=0.35` (36 irreducible k points),
+`LMAXPAW=-1`, `ALGO=All`, `EDIFF=1e-4`, and the 500 eV cutoff selected by
+`PREC=High`. HALF converged in 4 electronic iterations versus 16 for SAD;
+end-to-end wall times, including HALF initialization at all k points, were
+193.44 s and 266.96 s. The detailed Chinese report, complete convergence
+traces, checksums, and limitations are in
+[`HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md`](validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md).
+
 ## Remaining validation
 
 1. Compare the mapped coefficient block with an offline HALF result after

@@ -1,0 +1,81 @@
+{
+  "date": "2026-09-19",
+  "host": "hpc.icqms.group:2222",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+  "gpu_ecc": "disabled",
+  "driver": "595.84",
+  "cuda_runtime": "13.2",
+  "compiler": "NVHPC 26.5",
+  "vasp": "6.6.0 full-complex vasp_std",
+  "half_commit": "7c3929315827ba636c0c274e8dc3cfe0e0ff1392",
+  "system": {
+    "formula": "HfO2",
+    "nions": 12,
+    "ntypes": 2,
+    "nelect": 88.0,
+    "nbands": 60,
+    "fft_grid": [40, 40, 40],
+    "dense_charge_grid": [54, 54, 54]
+  },
+  "shared_incar": {
+    "ISPIN": 1,
+    "ISYM": 2,
+    "PREC": "High",
+    "KSPACING": 0.35,
+    "KGAMMA": true,
+    "NELM": 80,
+    "NELMDL": 0,
+    "EDIFF": 0.0001,
+    "LMAXPAW": -1,
+    "ALGO": "All",
+    "LREAL": false
+  },
+  "derived": {
+    "explicit_kpoints_file": false,
+    "full_kmesh": [4, 4, 4],
+    "irreducible_kpoints": 36,
+    "actual_encut_eV": 500.0,
+    "encut_source": "PREC=High: 1.25 times max POTCAR ENMAX of 400 eV",
+    "ialgo": 58,
+    "plane_wave_min": 3184,
+    "plane_wave_max": 3243
+  },
+  "checksums_sha256": {
+    "POSCAR": "9824f8a27d3908071c10427a1e376d90cb083ecd3243c84a87213bda7a21276d",
+    "POTCAR": "cc2e3ef4fe34f6ce782810bea297345f8bedd1ea5a55dc81b775427355a3c41e",
+    "CHGCAR": "4d66ae56633352553c8d59ae17797e22e8b325e0ee266b7a5ff109b664fe888b"
+  },
+  "half": {
+    "LHALF_INIT": true,
+    "ICHARG": 1,
+    "electronic_iterations": 4,
+    "wall_seconds": 193.44,
+    "toten_eV": -121.101882671,
+    "final_delta_eV": -0.000037680,
+    "final_rms": 0.0000227,
+    "run_directory": "/data/limusen/half-vasp-kspacing035-algoall-half"
+  },
+  "sad": {
+    "LHALF_INIT": false,
+    "ICHARG": 2,
+    "electronic_iterations": 16,
+    "wall_seconds": 266.96,
+    "toten_eV": -121.101878858,
+    "first_rms": 149.0,
+    "final_delta_eV": -0.000046926,
+    "final_rms": 0.0000287,
+    "run_directory": "/data/limusen/half-vasp-kspacing035-algoall-sad"
+  },
+  "comparison": {
+    "iteration_reduction_percent": 75.0,
+    "wall_speedup": 1.3800661704,
+    "wall_reduction_percent": 27.5397063230,
+    "absolute_toten_difference_eV": 0.000003813
+  },
+  "limitations": [
+    "Single timing sample per path.",
+    "The comparison changes the complete initialization workflow: DeepAW density plus HALF orbitals versus SAD density plus default orbitals.",
+    "The automatic PREC=High cutoff is 500 eV; this is not the explicit 520 eV HAPPY absolute-energy reference.",
+    "The current VASP adapter is limited to collinear ISPIN=1, full-complex storage, and KPAR=1."
+  ]
+}

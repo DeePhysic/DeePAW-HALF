@@ -1,0 +1,32 @@
+{
+  "host": "cmu006",
+  "gpu": "NVIDIA GeForce RTX 4090",
+  "driver": "595.84",
+  "ecc": "disabled",
+  "compiler": "NVHPC 25.9",
+  "cuda_toolkit": "13.0",
+  "ctest": {
+    "passed": 7,
+    "failed": 0
+  },
+  "si_energy": {
+    "encut_eV": 200.0,
+    "kpoints": 1,
+    "bands": 8,
+    "internal_energy_eV": -29.286647220573343,
+    "happy_internal_energy_eV": -29.286647220570103,
+    "abs_error_eV": 3.24e-12,
+    "warm_seconds": [0.31, 0.29]
+  },
+  "si_automatic_bands": {
+    "path": "GXWKGLUWLK,UX",
+    "kpoints": 12,
+    "bands": 4,
+    "elapsed_seconds": 0.46
+  },
+  "vaspwave_h5": {
+    "charge_shape": [1, 56, 56, 56],
+    "wave_shape": [8, 259, 2],
+    "smooth_electron_count": 8.00000005005451
+  }
+}

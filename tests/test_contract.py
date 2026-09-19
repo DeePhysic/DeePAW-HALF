@@ -170,6 +170,17 @@ def test_potcar_structure_order_is_validated():
     assert "call validate_potcar_structure" in cli
 
 
+def test_rtx4090_full_workflow_record():
+    import json
+
+    record = json.loads((ROOT / "docs/validation/rtx4090_full_workflow.json").read_text())
+    assert record["gpu"] == "NVIDIA GeForce RTX 4090"
+    assert record["ctest"]["failed"] == 0
+    assert record["si_energy"]["abs_error_eV"] < 1e-10
+    assert record["si_automatic_bands"]["path"] == "GXWKGLUWLK,UX"
+    assert record["vaspwave_h5"]["wave_shape"] == [8, 259, 2]
+
+
 def test_si_arbitrary_kpoint_parity_record():
     import json
 

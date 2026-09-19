@@ -15,15 +15,15 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | PAW projectors and overlap | `paw.py` | `half_paw.F90`, `half_cuda_assembly.cuf` | done on CPU/GPU; Si and HfO2 parity |
 | Potential-dependent MIMIC_US D | `uspp_dij.py` | `half_uspp.F90`, `half_cuda_uspp.cuf` | done on CPU/CUDA: periodic cubic B-spline sampling, QDEP multipoles and atom-dependent D |
 | Dense H/S parity solver | `reconstruct_bandstructure.py` | `half_dense_solver.F90`, `half_cuda_assembly.cuf`, `half_cuda_solver.cuf` | done at arbitrary k points; MKL CPU and device-resident CUDA/cuSOLVER, DION or MIMIC_US |
-| Matrix-free H/S application | `hamiltonian.py` | `half_operator.cuf` | planned |
-| Block iterative eigensolver | n/a | `half_lobpcg.cuf` | planned |
+| Matrix-free H/S application | `hamiltonian.py` | optional future `half_operator.cuf` | performance extension; all HAPPY observables currently use the parity-validated direct dense GPU assembly |
+| Block iterative eigensolver | n/a | optional future `half_lobpcg.cuf` | performance extension not present in HAPPY |
 | Arbitrary single k point | `basis.py`, `reconstruct_bandstructure.py` | `half_basis.F90`, `half_cli.F90` | done on CPU/CUDA; `--kpoint KX KY KZ` |
 | Band paths, k meshes and symmetry reduction | `kpoints.py`, ASE | `half_kpoints.F90`, `half_cli.F90` | done; explicit reciprocal KPOINTS, ASE-identical automatic SC/FCC/BCC paths, full Gamma meshes and spglib irreducible meshes |
 | Occupations, EIGENVAL, Ewald and energy | `occupations.py`, `ewald.py`, `total_energy.py` | `half_energy.F90`, `half_cli.F90` | done on CPU/CUDA; zero/finite-T occupations, reconstructed and reference-EIGENVAL paths; Si/HfO2 component parity |
-| Analytic forces | theory only | `half_forces.cuf` | planned |
+| Analytic forces | not present in HAPPY | optional future `half_forces.cuf` | performance extension; HAPPY-compatible finite-difference forces are done |
 | Finite-difference force oracle | `total_energy.py` | `half_cli.F90` | done on CPU/CUDA; Si parity within 2.3e-9 eV/Angstrom and 45x faster than HAPPY in the validated case |
 | `vaspwave.h5` output | `vaspwave.py` | `half_vaspwave.F90`, `half_hdf5_bridge.c` | done for EVD bands/energy; VASP FFT coefficient order, float32 complex packing and charge round trip validated |
-| MPI k-point distribution | n/a | `half_mpi.F90` | blocked on single-GPU parity |
+| MPI k-point distribution | n/a | optional future `half_mpi.F90` | scaling extension not present in HAPPY; single-GPU parity is complete |
 
 ## Ordered delivery gates
 
@@ -32,5 +32,5 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 3. Gamma-point H/S matrix and eigenvalue parity for Si.
 4. Arbitrary-k and high-symmetry band path parity.
 5. Uniform k-mesh energy parity and VASP wavefunction output.
-6. Matrix-free block solver parity.
-7. Multi-GPU and MPI scaling.
+6. Optional matrix-free block solver optimization for larger systems.
+7. Optional multi-GPU and MPI scaling.

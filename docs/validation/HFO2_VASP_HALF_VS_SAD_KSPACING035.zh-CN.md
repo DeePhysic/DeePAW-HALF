@@ -32,6 +32,23 @@ SAD 初始化的收敛速度。
 
 HALF 得到的采样带隙为 **4.576 eV**，Γ 点直接带隙为 **4.629 eV**。
 
+### 与 VASP（`LMAXMIX=-1`）的能带对比
+
+VASP 6.6.0 使用收敛后的固定电荷密度，并设置 `LMAXMIX=-1`。VASP 与
+独立 HALF 计算使用相同的 100 个 k 点和 60 条能带；两组能量分别以各自的
+VBM 对齐。
+
+![HfO2 的 HALF 与 VASP LMAXMIX=-1 能带对比](assets/hfo2_half_vasp_lmaxmix_minus1_comparison.png)
+
+| 指标 | DeePAW-HALF | VASP 6.6.0 | 差值 |
+|---|---:|---:|---:|
+| 采样带隙 | 4.576341 eV | 4.575784 eV | 0.557 meV |
+| Γ 点直接带隙 | 4.629091 eV | 4.631752 eV | 2.661 meV |
+
+对第 21–60 条能带进行逐 k 点比较时，VASP 与 HALF 的本征值 RMSE 为
+**1.135 meV**，最大绝对偏差为 **3.250 meV**。因此，HALF 在未进入 VASP
+流程的情况下复现了 VASP 的 HfO₂ 能带色散和带隙。
+
 ## 结论
 
 DeePAW-HALF 将 VASP 的电子迭代数从 16 次降低到 4–5 次，即减少

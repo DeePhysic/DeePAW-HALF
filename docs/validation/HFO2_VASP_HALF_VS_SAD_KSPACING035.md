@@ -34,6 +34,24 @@ referenced to the valence-band maximum (VBM).
 HALF gives a sampled band gap of **4.576 eV** and a direct Γ-point gap of
 **4.629 eV**.
 
+### Comparison with VASP (`LMAXMIX=-1`)
+
+VASP 6.6.0 used the converged fixed charge density with `LMAXMIX=-1`. VASP
+and standalone HALF used the same 100 k points and 60 bands. Each spectrum
+was aligned to its own VBM.
+
+![HfO2 band-structure comparison between HALF and VASP with LMAXMIX=-1](assets/hfo2_half_vasp_lmaxmix_minus1_comparison.png)
+
+| Metric | DeePAW-HALF | VASP 6.6.0 | Difference |
+|---|---:|---:|---:|
+| Sampled band gap | 4.576341 eV | 4.575784 eV | 0.557 meV |
+| Direct Γ-point gap | 4.629091 eV | 4.631752 eV | 2.661 meV |
+
+Across bands 21–60 and every sampled k point, the VASP–HALF eigenvalue RMSE
+is **1.135 meV**, with a maximum absolute difference of **3.250 meV**.
+Standalone HALF therefore reproduces the VASP HfO₂ band dispersion and band
+gap without entering the VASP workflow.
+
 ## Conclusion
 
 DeePAW-HALF reduced the VASP electronic iteration count from 16 to 4–5, a

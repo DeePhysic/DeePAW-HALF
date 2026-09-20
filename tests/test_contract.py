@@ -33,6 +33,7 @@ def test_expected_project_surface_exists():
         "src/half_cuda_uspp.cuf",
         "src/half_uspp.F90",
         "src/half_cuda_assembly.cuf",
+        "src/half_cuda_iterative_solver.cuf",
         "src/half_cpu.F90",
         "app/half_inspect.F90",
         "app/half_inspect_cpu.F90",
@@ -141,6 +142,25 @@ def test_full_cuda_gamma_pipeline_is_device_resident():
     assert "projector_kernel" in assembly
     assert "assemble_dense_gamma_cuda_full" in assembly
     assert "cusolverdnzhegvd" in solver
+
+
+def test_cuda_acc_path_is_matrix_free_and_vasp_selectable():
+    header = (ROOT / "include/half.h").read_text()
+    assembly = (ROOT / "src/half_cuda_assembly.cuf").read_text().lower()
+    iterative = (ROOT / "src/half_cuda_iterative_solver.cuf").read_text().lower()
+    adapter = (ROOT / "vendor/vasp-6.6.0/src/half_vasp_init.F").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "HALF_SOLVER_ACC = 4" in header
+    assert "apply_hs_operator_cuda" in assembly
+    assert "cufftexecz2z" in assembly
+    assert "solve_block_harris_cuda_full" in iterative
+    assert "residual_kernel" in iterative
+    assert "rayleigh_ritz" in iterative
+    assert "cusolverdnzhegvd" in iterative
+    assert "half_solver_acc=4" in adapter
+    assert "matrix_free" in adapter
+    assert "--acc-tol" in cli
+    assert "--acc-max-iter" in cli
 
 
 def test_cuda_mimic_us_pipeline_is_device_resident_and_cli_enabled():

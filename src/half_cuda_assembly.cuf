@@ -1,6 +1,7 @@
 module half_cuda_assembly
   use cudafor
   use cufft
+  use cublas
   use half_kinds, only: dp
   use half_constants,only:pi
   use half_types, only: plane_wave_basis_t,crystal_t,potcar_t
@@ -8,7 +9,19 @@ module half_cuda_assembly
   use half_cuda_uspp, only: build_uspp_dij_cuda_species
   implicit none
   private
+  type,public :: cuda_paw_block_t
+    integer :: natoms=0,nlm=0,nproj=0
+    complex(dp),device,allocatable :: projectors(:,:)
+    real(dp),device,allocatable :: dij(:,:,:),qij(:,:)
+  end type
+  type,public :: cuda_hs_operator_t
+    integer :: n=0,ngrid=0,shape(3)=0,fft_plan=0
+    real(dp),device,allocatable :: veff(:),kinetic(:)
+    integer(8),device,allocatable :: fft_index(:)
+    type(cuda_paw_block_t),allocatable :: paw(:)
+  end type
   public :: assemble_dense_gamma_cuda,assemble_dense_gamma_cuda_device,assemble_dense_gamma_cuda_full
+  public :: prepare_hs_operator_cuda,apply_hs_operator_cuda,destroy_hs_operator_cuda
 contains
   attributes(global) subroutine real_to_complex_kernel(input,output,n)
     real(dp),device,intent(in)::input(*)
@@ -131,6 +144,95 @@ contains
       phase=qx*positions(iat)+qy*positions(natoms+iat)+qz*positions(2*natoms+iat)
       index=(ig-1)*natoms*nlm+(ilm-1)*natoms+iat
       projectors(index)=pref*ilfac*rval*ylm*cmplx(cos(phase),-sin(phase),dp)
+    end if
+  end subroutine
+
+  attributes(global) subroutine projector_matrix_kernel(projectors,qvectors,positions,radial,m2,n,natoms,nlm,ilm,l,m,nrad,gmax,pref,ilfac)
+    complex(dp),device,intent(out)::projectors(*)
+    real(dp),device,intent(in)::qvectors(*),positions(*),radial(*),m2(*)
+    integer,value::n,natoms,nlm,ilm,l,m,nrad
+    real(dp),value::gmax,pref
+    complex(dp),value::ilfac
+    integer::linear,iat,ig,index
+    real(dp)::qx,qy,qz,qn,theta,phi,rval,ylm,phase
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=n*natoms)then
+      iat=mod(linear-1,natoms)+1;ig=(linear-1)/natoms+1
+      qx=qvectors(ig);qy=qvectors(n+ig);qz=qvectors(2*n+ig);qn=sqrt(qx*qx+qy*qy+qz*qz)
+      if(qn>1.0e-10_dp)then;theta=acos(max(-1.0_dp,min(1.0_dp,qz/qn)));phi=atan2(qy,qx)
+      else;theta=0;phi=0;end if
+      rval=spline_eval_projector_d(radial,m2,gmax,qn,nrad);if(qn>.99_dp*gmax)rval=0
+      ylm=real_ylm_d(l,m,theta,phi)
+      phase=qx*positions(iat)+qy*positions(natoms+iat)+qz*positions(2*natoms+iat)
+      index=ig+(ilm-1)*n+(iat-1)*n*nlm
+      projectors(index)=pref*ilfac*rval*ylm*cmplx(cos(phase),-sin(phase),dp)
+    end if
+  end subroutine
+
+  attributes(global) subroutine zero_complex_kernel(values,n)
+    complex(dp),device,intent(out)::values(*)
+    integer,value::n
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)values(i)=(0.0_dp,0.0_dp)
+  end subroutine
+
+  attributes(global) subroutine scatter_states_kernel(states,grid,fft_index,n,ngrid,nb)
+    complex(dp),device,intent(in)::states(*)
+    complex(dp),device,intent(inout)::grid(*)
+    integer(8),device,intent(in)::fft_index(*)
+    integer,value::n,ngrid,nb
+    integer::linear,ig,ib
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=n*nb)then
+      ig=mod(linear-1,n)+1;ib=(linear-1)/n+1
+      grid((ib-1)*ngrid+fft_index(ig))=states(linear)
+    end if
+  end subroutine
+
+  attributes(global) subroutine multiply_local_kernel(grid,veff,ngrid,nb)
+    complex(dp),device,intent(inout)::grid(*)
+    real(dp),device,intent(in)::veff(*)
+    integer,value::ngrid,nb
+    integer::linear,ir
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=ngrid*nb)then
+      ir=mod(linear-1,ngrid)+1
+      grid(linear)=grid(linear)*veff(ir)/real(ngrid,dp)
+    end if
+  end subroutine
+
+  attributes(global) subroutine gather_local_kinetic_kernel(states,grid,kinetic,fft_index,hstates,sstates,n,ngrid,nb)
+    complex(dp),device,intent(in)::states(*),grid(*)
+    real(dp),device,intent(in)::kinetic(*)
+    integer(8),device,intent(in)::fft_index(*)
+    complex(dp),device,intent(out)::hstates(*),sstates(*)
+    integer,value::n,ngrid,nb
+    integer::linear,ig,ib
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=n*nb)then
+      ig=mod(linear-1,n)+1;ib=(linear-1)/n+1
+      hstates(linear)=grid((ib-1)*ngrid+fft_index(ig))+kinetic(ig)*states(linear)
+      sstates(linear)=states(linear)
+    end if
+  end subroutine
+
+  attributes(global) subroutine mix_projector_coefficients_kernel(coeff,dcoeff,qcoeff,dij,qij,natoms,nlm,nb)
+    complex(dp),device,intent(in)::coeff(*)
+    complex(dp),device,intent(out)::dcoeff(*),qcoeff(*)
+    real(dp),device,intent(in)::dij(*),qij(*)
+    integer,value::natoms,nlm,nb
+    integer::linear,iat,a,b,ib,total,row
+    complex(dp)::zd,zq
+    total=natoms*nlm;linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=total*nb)then
+      row=mod(linear-1,total)+1;ib=(linear-1)/total+1
+      a=mod(row-1,nlm)+1;iat=(row-1)/nlm+1;zd=(0.0_dp,0.0_dp);zq=(0.0_dp,0.0_dp)
+      do b=1,nlm
+        zd=zd+dij(iat+(a-1)*natoms+(b-1)*natoms*nlm)*coeff((ib-1)*total+(iat-1)*nlm+b)
+        zq=zq+qij(a+(b-1)*nlm)*coeff((ib-1)*total+(iat-1)*nlm+b)
+      end do
+      dcoeff(linear)=zd;qcoeff(linear)=zq
     end if
   end subroutine
 
@@ -295,6 +397,143 @@ contains
     call hermitize_kernel<<<blocks,threads>>>(h,s,n)
     ierr=cudaGetLastError();if(ierr/=cudaSuccess)error stop 'HALF: full CUDA assembly kernel launch failed'
     ierr=cudaDeviceSynchronize();if(ierr/=cudaSuccess)error stop 'HALF: full CUDA matrix assembly failed'
+  end subroutine
+
+  subroutine prepare_hs_operator_cuda(dveff,basis,potcars,crystal,op,use_uspp)
+    real(dp),device,intent(in)::dveff(:)
+    type(plane_wave_basis_t),intent(in)::basis
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    type(cuda_hs_operator_t),intent(out)::op
+    logical,intent(in),optional::use_uspp
+    real(dp),device,allocatable::dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:)
+    real(dp),allocatable::positions(:,:),m2(:),dij(:,:),qij(:,:)
+    integer::status,it,iat,ich,jch,m,mj,l,ilm,jlm,nlm,nrad,ion0
+    logical::with_uspp
+    complex(dp)::ilfac
+    op%n=int(basis%npw);op%ngrid=size(dveff);op%shape=basis%shape
+    allocate(op%veff(op%ngrid),op%kinetic(op%n),op%fft_index(op%n),op%paw(size(potcars)))
+    op%veff=dveff;op%kinetic=basis%kinetic;op%fft_index=int(basis%fft_index,8)
+    status=cufftPlan3d(op%fft_plan,op%shape(1),op%shape(2),op%shape(3),CUFFT_Z2Z)
+    if(status/=CUFFT_SUCCESS)error stop 'HALF: matrix-free cuFFT plan creation failed'
+    allocate(dqvectors(op%n,3));dqvectors=basis%qvectors;ion0=0
+    with_uspp=.false.;if(present(use_uspp))with_uspp=use_uspp
+    do it=1,size(potcars)
+      nlm=0;do ich=1,potcars(it)%channels;nlm=nlm+2*potcars(it)%lps(ich)+1;end do
+      op%paw(it)%natoms=crystal%counts(it);op%paw(it)%nlm=nlm;op%paw(it)%nproj=crystal%counts(it)*nlm
+      allocate(op%paw(it)%projectors(op%n,op%paw(it)%nproj),op%paw(it)%qij(nlm,nlm))
+      allocate(dij(nlm,nlm),qij(nlm,nlm));dij=0;qij=0;ilm=0
+      do ich=1,potcars(it)%channels
+        l=potcars(it)%lps(ich)
+        do m=-l,l
+          ilm=ilm+1;jlm=0
+          do jch=1,potcars(it)%channels
+            do mj=-potcars(it)%lps(jch),potcars(it)%lps(jch)
+              jlm=jlm+1
+              if(l==potcars(it)%lps(jch).and.m==mj)then
+                dij(ilm,jlm)=potcars(it)%dion(ich,jch);qij(ilm,jlm)=potcars(it)%qpaw(ich,jch)
+              end if
+            end do
+          end do
+        end do
+      end do
+      op%paw(it)%qij=qij
+      if(with_uspp)then
+        call build_uspp_dij_cuda_species(dveff,basis%shape,potcars(it),crystal,it,op%paw(it)%dij)
+      else
+        allocate(op%paw(it)%dij(crystal%counts(it),nlm,nlm))
+        do iat=1,crystal%counts(it);op%paw(it)%dij(iat,:,:)=dij;end do
+      end if
+      allocate(positions(crystal%counts(it),3),dpositions(crystal%counts(it),3))
+      do iat=1,crystal%counts(it);positions(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do
+      dpositions=positions;ilm=0
+      do ich=1,potcars(it)%channels
+        l=potcars(it)%lps(ich);nrad=size(potcars(it)%pspnl,1);allocate(m2(nrad),dradial(nrad),dm2(nrad))
+        call spline_second_projector_host(potcars(it)%pspnl(:,ich),potcars(it)%pspnl_gmax,m2)
+        dradial=potcars(it)%pspnl(:,ich);dm2=m2;ilfac=(-cmplx(0.0_dp,1.0_dp,dp))**l
+        do m=-l,l
+          ilm=ilm+1
+          call projector_matrix_kernel<<<(op%n*crystal%counts(it)+255)/256,256>>>(op%paw(it)%projectors, &
+            dqvectors,dpositions,dradial,dm2,op%n,crystal%counts(it),nlm,ilm,l,m,nrad, &
+            potcars(it)%pspnl_gmax,1.0_dp/sqrt(crystal%volume),ilfac)
+        end do
+        deallocate(m2,dradial,dm2)
+      end do
+      deallocate(dij,qij,positions,dpositions);ion0=ion0+crystal%counts(it)
+    end do
+    deallocate(dqvectors)
+    status=cudaDeviceSynchronize();if(status/=cudaSuccess)error stop 'HALF: matrix-free operator preparation failed'
+  end subroutine
+
+  subroutine apply_hs_operator_cuda(op,states,hstates,sstates,block_size)
+    type(cuda_hs_operator_t),intent(in)::op
+    complex(dp),device,intent(in)::states(:,:)
+    complex(dp),device,intent(out)::hstates(:,:),sstates(:,:)
+    integer,intent(in),optional::block_size
+    complex(dp),device,allocatable::grid(:,:),coeff(:,:),dcoeff(:,:),qcoeff(:,:)
+    type(cublasHandle)::handle
+    complex(dp)::one,zero
+    integer::first,last,nb,chunk,ib,it,total,status
+    if(size(states,1)/=op%n.or.size(hstates,1)/=op%n.or.size(sstates,1)/=op%n.or. &
+       size(hstates,2)/=size(states,2).or.size(sstates,2)/=size(states,2)) &
+      error stop 'HALF: invalid matrix-free H/S block dimensions'
+    nb=size(states,2);chunk=16;if(present(block_size))chunk=max(1,block_size)
+    one=cmplx(1.0_dp,0.0_dp,dp);zero=cmplx(0.0_dp,0.0_dp,dp)
+    status=cublasCreate(handle);if(status/=0)error stop 'HALF: matrix-free cuBLAS create failed'
+    do first=1,nb,chunk
+      last=min(nb,first+chunk-1);allocate(grid(op%ngrid,last-first+1))
+      call zero_complex_kernel<<<(size(grid)+255)/256,256>>>(grid,size(grid))
+      call scatter_states_kernel<<<(op%n*(last-first+1)+255)/256,256>>>(states(:,first:last),grid, &
+        op%fft_index,op%n,op%ngrid,last-first+1)
+      do ib=1,last-first+1
+        status=cufftExecZ2Z(op%fft_plan,grid(:,ib),grid(:,ib),CUFFT_INVERSE)
+        if(status/=CUFFT_SUCCESS)error stop 'HALF: matrix-free inverse FFT failed'
+      end do
+      call multiply_local_kernel<<<(size(grid)+255)/256,256>>>(grid,op%veff,op%ngrid,last-first+1)
+      do ib=1,last-first+1
+        status=cufftExecZ2Z(op%fft_plan,grid(:,ib),grid(:,ib),CUFFT_FORWARD)
+        if(status/=CUFFT_SUCCESS)error stop 'HALF: matrix-free forward FFT failed'
+      end do
+      call gather_local_kinetic_kernel<<<(op%n*(last-first+1)+255)/256,256>>>(states(:,first:last),grid, &
+        op%kinetic,op%fft_index,hstates(:,first:last),sstates(:,first:last),op%n,op%ngrid,last-first+1)
+      do it=1,size(op%paw)
+        total=op%paw(it)%nproj
+        allocate(coeff(total,last-first+1),dcoeff(total,last-first+1),qcoeff(total,last-first+1))
+        status=cublasZgemm_v2(handle,CUBLAS_OP_C,CUBLAS_OP_N,total,last-first+1,op%n,one, &
+          op%paw(it)%projectors,op%n,states(:,first:last),op%n,zero,coeff,total)
+        if(status/=0)error stop 'HALF: projector contraction failed'
+        call mix_projector_coefficients_kernel<<<(size(coeff)+255)/256,256>>>(coeff,dcoeff,qcoeff, &
+          op%paw(it)%dij,op%paw(it)%qij,op%paw(it)%natoms,op%paw(it)%nlm,last-first+1)
+        status=cublasZgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_N,op%n,last-first+1,total,one, &
+          op%paw(it)%projectors,op%n,dcoeff,total,one,hstates(:,first:last),op%n)
+        if(status/=0)error stop 'HALF: nonlocal Hamiltonian application failed'
+        status=cublasZgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_N,op%n,last-first+1,total,one, &
+          op%paw(it)%projectors,op%n,qcoeff,total,one,sstates(:,first:last),op%n)
+        if(status/=0)error stop 'HALF: PAW overlap application failed'
+        deallocate(coeff,dcoeff,qcoeff)
+      end do
+      deallocate(grid)
+    end do
+    status=cublasDestroy(handle)
+    status=cudaDeviceSynchronize();if(status/=cudaSuccess)error stop 'HALF: matrix-free H/S application failed'
+  end subroutine
+
+  subroutine destroy_hs_operator_cuda(op)
+    type(cuda_hs_operator_t),intent(inout)::op
+    integer::status,it
+    if(op%fft_plan/=0)then;status=cufftDestroy(op%fft_plan);op%fft_plan=0;end if
+    if(allocated(op%paw))then
+      do it=1,size(op%paw)
+        if(allocated(op%paw(it)%projectors))deallocate(op%paw(it)%projectors)
+        if(allocated(op%paw(it)%dij))deallocate(op%paw(it)%dij)
+        if(allocated(op%paw(it)%qij))deallocate(op%paw(it)%qij)
+      end do
+      deallocate(op%paw)
+    end if
+    if(allocated(op%veff))deallocate(op%veff)
+    if(allocated(op%kinetic))deallocate(op%kinetic)
+    if(allocated(op%fft_index))deallocate(op%fft_index)
+    op%n=0;op%ngrid=0;op%shape=0
   end subroutine
 
   subroutine spline_second_projector_host(y,xmax,m2)

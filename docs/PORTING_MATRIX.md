@@ -15,8 +15,8 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | PAW projectors and overlap | `paw.py` | `half_paw.F90`, `half_cuda_assembly.cuf` | done on CPU/GPU; Si and HfO2 parity |
 | Potential-dependent MIMIC_US D | `uspp_dij.py` | `half_uspp.F90`, `half_cuda_uspp.cuf` | done on CPU/CUDA: periodic cubic B-spline sampling, QDEP multipoles and atom-dependent D |
 | Dense H/S parity solver | `reconstruct_bandstructure.py` | `half_dense_solver.F90`, `half_cuda_assembly.cuf`, `half_cuda_solver.cuf` | done at arbitrary k points; MKL CPU and device-resident CUDA/cuSOLVER, DION or MIMIC_US |
-| Matrix-free H/S application | `hamiltonian.py` | optional future `half_operator.cuf` | performance extension; all HAPPY observables currently use the parity-validated direct dense GPU assembly |
-| Block iterative eigensolver | n/a | optional future `half_lobpcg.cuf` | performance extension not present in HAPPY |
+| Matrix-free H/S application | `hamiltonian.py` | `half_cuda_assembly.cuf` | done; batched GPU H*Psi/S*Psi with cuFFT local potential, kinetic kernel and cuBLAS PAW contractions; no NPL-by-NPL matrices |
+| Block iterative eigensolver | n/a | `half_cuda_iterative_solver.cuf` | done; restarted all-band optimization, GPU residual/preconditioner/S-orthogonalization, NBANDS/2NBANDS cuSOLVER Rayleigh-Ritz and configurable early stop |
 | Arbitrary single k point | `basis.py`, `reconstruct_bandstructure.py` | `half_basis.F90`, `half_cli.F90` | done on CPU/CUDA; `--kpoint KX KY KZ` |
 | Band paths, k meshes and symmetry reduction | `kpoints.py`, ASE | `half_kpoints.F90`, `half_cli.F90` | done; explicit reciprocal KPOINTS, ASE-identical automatic SC/FCC/BCC paths, full Gamma meshes and spglib irreducible meshes |
 | Occupations, EIGENVAL, Ewald and energy | `occupations.py`, `ewald.py`, `total_energy.py` | `half_energy.F90`, `half_cli.F90` | done on CPU/CUDA; zero/finite-T occupations, reconstructed and reference-EIGENVAL paths; Si/HfO2 component parity |
@@ -34,6 +34,7 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 3. Gamma-point H/S matrix and eigenvalue parity for Si.
 4. Arbitrary-k and high-symmetry band path parity.
 5. Uniform k-mesh energy parity and VASP wavefunction output.
-6. Optional matrix-free block solver optimization for larger systems.
+6. Matrix-free block solver optimization for larger systems (completed as the
+   CUDA `acc` solver).
 7. Optional multi-GPU, band and FFT-domain scaling beyond the completed CPU
    MPI k-point layer.

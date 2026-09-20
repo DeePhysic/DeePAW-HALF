@@ -138,6 +138,7 @@ Choose the HALF eigensolver path independently:
 ```text
 HALF_MODE = TRADITIONAL # default: traditional full dense spectrum
 # HALF_MODE = VASP_LIKE # lowest NBANDS only, supplied by VASP over the ABI
+# HALF_MODE = ACC       # matrix-free block H*Psi, supplied NBANDS, early stop
 ```
 
 `HALF_MODE=VASP_LIKE` passes `WDES%NB_TOT` directly to
@@ -147,7 +148,11 @@ eigenpairs. It also skips the separate full eigendecomposition of the overlap
 matrix that is used only for diagnostics in traditional mode. Matrix assembly
 is still dense and remains entirely on the GPU; this mode is therefore a
 partial-spectrum optimization, not yet a matrix-free Davidson implementation.
-It currently requires the CUDA backend. `HALF_MODE=TRADITIONAL` preserves the
+It currently requires the CUDA backend. `HALF_MODE=ACC` replaces dense matrix
+assembly with block H*Psi/S*Psi and restarted all-band Rayleigh-Ritz. cuSOLVER
+then operates only on the `NBANDS`/`2*NBANDS` projected matrices. The default
+maximum residual is `1e-4 eV`, appropriate for generating VASP initial states;
+VASP performs the subsequent SCF refinement. `HALF_MODE=TRADITIONAL` preserves the
 previous full-spectrum path and overlap-range diagnostic. `DENSE` and `VASP`
 are accepted as short compatibility aliases.
 

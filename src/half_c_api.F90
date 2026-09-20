@@ -104,7 +104,7 @@ contains
     handle=0_c_int64_t;call clear_error(error,error_capacity)
     call import_string(endpoint_c,endpoint);call import_string(potential_c,potential)
     if(len(endpoint)==0.or.len(potential)==0.or..not.c_associated(geometry_c).or. &
-        (xc/=1.and.xc/=2).or.backend<0.or.backend>2.or.solver<1.or.solver>3.or. &
+        (xc/=1.and.xc/=2).or.backend<0.or.backend>2.or.solver<1.or.solver>4.or. &
         (normalization/=0.and.normalization/=1))then
       half_create_from_escn=HALF_INVALID_ARGUMENT
       call export_error('invalid eSCN URL, path, geometry, execution policy, or normalization',error,error_capacity);return
@@ -198,6 +198,7 @@ contains
     case(1);solver_name='evd'
     case(2);solver_name='evj'
     case(3);solver_name='evx'
+    case(4);solver_name='acc'
     end select
     call contexts(slot)%initialize_density(potential,real(encut,dp),xc_name,use_uspp/=0,geometry%nions,geometry%ntypes, &
       geometry%grid,lattice,species,positions,density_f,status,message,backend,solver_name)
@@ -251,7 +252,7 @@ contains
     integer::slot,status,i
     handle=0;call clear_error(error,error_capacity)
     call import_string(charge_c,charge);call import_string(potential_c,potential)
-    if(len(charge)==0.or.len(potential)==0.or.(xc/=1.and.xc/=2).or.backend<0.or.backend>2.or.solver<1.or.solver>3)then
+    if(len(charge)==0.or.len(potential)==0.or.(xc/=1.and.xc/=2).or.backend<0.or.backend>2.or.solver<1.or.solver>4)then
       half_create_from_files_backend=HALF_INVALID_ARGUMENT
       call export_error('invalid path, XC, backend, or solver selector',error,error_capacity);return
     end if
@@ -264,6 +265,7 @@ contains
     case(1);solver_name='evd'
     case(2);solver_name='evj'
     case(3);solver_name='evx'
+    case(4);solver_name='acc'
     end select
     call contexts(slot)%initialize_files(charge,potential,real(encut,dp),xc_name,use_uspp/=0,status,message,backend,solver_name)
     if(status/=LIB_SUCCESS)then

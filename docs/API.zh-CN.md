@@ -33,8 +33,9 @@ C 编译器链接。
 1. 用 `half_get_abi_version()`、`half_get_capabilities()` 检查 ABI 和能力。
 2. 用 `half_create_from_files_backend()` 创建文件 context，或用
    `half_create_from_escn()` 从 DeePAW-eSCN 获取密度；运行时可选 LDA/PBE、
-   CPU/CUDA/AUTO、EVD/EVJ/VASP、ENCUT 及 MIMIC_US QDEP。VASP selector 是
-   CUDA 区间求解路径，求解数量取调用方传入的 `NBANDS`。简化函数
+   CPU/CUDA/AUTO、EVD/EVJ/VASP/ACC、ENCUT 及 MIMIC_US QDEP。VASP selector 是
+   CUDA 区间求解路径，求解数量取调用方传入的 `NBANDS`。ACC 是无矩阵的分块
+   H*Psi 路径，同样使用调用方的 `NBANDS`。简化函数
    `half_create_from_files()` 等价于 AUTO + EVD，并保持 ABI 稳定。
 3. 宿主程序可用 `half_set_request_geometry()` 附加内存中已经解析好的晶格、
    分数坐标、从 1 开始的物种编号和三维实空间网格。
@@ -89,8 +90,10 @@ CUDA 构建中 AUTO 选择 CUDA；`half_solve_kpoint()` 的势构造、MIMIC_US/
 H/S 组装和广义本征求解全部在 GPU 上执行，只把请求的本征对传回。ABI v1 的
 主机 H/S 导出与 H/S 应用目前是 CPU 接口；CUDA context 对这两个调用返回
 `HALF_ERROR_UNAVAILABLE`。后续可在不改变已有符号的情况下增加 device-pointer
-扩展。CPU 构建中 AUTO 选择 oneMKL；EVJ 和 VASP 部分谱模式仅支持 CUDA，EVD
-同时支持两者。
+扩展。CPU 构建中 AUTO 选择 oneMKL；EVJ、VASP 部分谱模式和 ACC 仅支持 CUDA，
+EVD 同时支持两者。ACC 将波函数块、H*Psi/S*Psi、残差与投影代数保留在设备端；
+cuSOLVER 只处理 `NBANDS`/`2*NBANDS` Rayleigh-Ritz 小矩阵，而不是稠密
+`NPL x NPL` H/S。
 
 ## 接入 VASP 的方式
 
@@ -117,12 +120,17 @@ POTCAR）。远程构造器使用现有 VASP geometry descriptor 与 POTCAR，�
 LHALF_INIT = .TRUE.
 LHALF_API = .TRUE.
 HALF_MODE = VASP_LIKE
+# 或：HALF_MODE = ACC
 HALF_ESCN_URL = http://127.0.0.1:8265
 ```
 
 `HALF_MODE=TRADITIONAL` 是默认值。`HALF_MODE=VASP_LIKE` 选择 CUDA 部分谱求解器，
 并通过现有 mapped k-point ABI 传入 VASP 的 `NBANDS`，使 HALF 只返回所需的最低
 本征对。`DENSE` 和 `VASP` 是兼容简写。
+
+`HALF_MODE=ACC`（兼容别名为 `MATRIX_FREE`、`MATRIX-FREE`）选择无矩阵分块
+求解器，直接使用 VASP 的 `NBANDS`，并以面向初始波函数的默认最大残差
+`1e-4 eV` 提前停止，全程不分配稠密 H/S。
 
 `LHALF_API=.FALSE.` 为默认值，此时即使环境中存在 `HALF_ESCN_URL`，HALF 也
 继续使用 CHGCAR。启用 `LHALF_API` 后，INCAR 中的 URL 优先；只有 INCAR URL

@@ -148,7 +148,10 @@ contains
     write(unit,'(A)') '  --kpoint KX KY KZ          fractional reciprocal k point (default: Gamma)'
     write(unit,'(A)') '  --xc lda|pbe               exchange-correlation model (default: pbe)'
     write(unit,'(A)') '  --backend auto|cpu|cuda    compute backend (default: auto)'
-    write(unit,'(A)') '  --solver evd|evj           CUDA eigensolver: divide-and-conquer or Jacobi (default: evd)'
+    write(unit,'(A)') '  --solver evd|evj|evx|acc   CUDA eigensolver (acc: matrix-free block Harris)'
+    write(unit,'(A)') '  --acc-tol VALUE            ACC maximum residual tolerance in eV (default: 1e-4)'
+    write(unit,'(A)') '  --acc-max-iter N           ACC restart iterations (default: 40)'
+    write(unit,'(A)') '  --acc-block-size N         bands per H*Psi/S*Psi batch (default: 16)'
     write(unit,'(A)') '  --uspp-dij                 add potential-dependent MIMIC_US QDEP correction'
     write(unit,'(A)') '  --reference-eigenval FILE  compare against a VASP EIGENVAL file'
     write(unit,'(A)') '  --output FILE              JSON result (default: gamma_validation.json)'
@@ -162,9 +165,9 @@ contains
     type(potcar_t),allocatable::potcars(:)
     type(paw_species_t),allocatable::paw(:)
     real(dp),allocatable::veff(:),eigenvalues(:),reference(:)
-    real(dp)::eh,exc,smin,smax,encut,elapsed,potential_seconds,assembly_seconds,gpu_seconds,kpoint(3)
+    real(dp)::eh,exc,smin,smax,encut,elapsed,potential_seconds,assembly_seconds,gpu_seconds,kpoint(3),acc_tol,acc_residual
     logical::use_uspp
-    integer::nbands,i,narg,ios,tick0,tick1,rate,unit
+    integer::nbands,i,narg,ios,tick0,tick1,rate,unit,acc_max_iter,acc_block_size,acc_iterations
     character(len=1024)::charge_path,potential_path,arg,value,output_path,reference_path
     character(len=16)::xc,backend,actual_backend,solver,actual_solver
     narg=command_argument_count()
@@ -179,6 +182,7 @@ contains
     call get_command_argument(offset+1,charge_path)
     call get_command_argument(offset+2,potential_path)
     encut=400.0_dp; nbands=8; xc='pbe'; backend='auto'; solver='evd';use_uspp=.false.;kpoint=0.0_dp
+    acc_tol=1.0e-4_dp;acc_max_iter=40;acc_block_size=16;acc_iterations=0;acc_residual=0.0_dp
     output_path='gamma_validation.json'; reference_path=''
     i=offset+3
     do while(i<=narg)
@@ -207,7 +211,17 @@ contains
           call fail('--backend must be auto, cpu, or cuda')
       case('--solver')
         call option_value(i,narg,'--solver',solver); solver=lower(trim(solver))
-        if(trim(solver)/='evd'.and.trim(solver)/='evj')call fail('--solver must be evd or evj')
+        if(trim(solver)/='evd'.and.trim(solver)/='evj'.and.trim(solver)/='evx'.and.trim(solver)/='acc') &
+          call fail('--solver must be evd, evj, evx, or acc')
+      case('--acc-tol')
+        call option_value(i,narg,'--acc-tol',value);read(value,*,iostat=ios)acc_tol
+        if(ios/=0.or.acc_tol<=0)call fail('invalid --acc-tol value')
+      case('--acc-max-iter')
+        call option_value(i,narg,'--acc-max-iter',value);read(value,*,iostat=ios)acc_max_iter
+        if(ios/=0.or.acc_max_iter<1)call fail('invalid --acc-max-iter value')
+      case('--acc-block-size')
+        call option_value(i,narg,'--acc-block-size',value);read(value,*,iostat=ios)acc_block_size
+        if(ios/=0.or.acc_block_size<1)call fail('invalid --acc-block-size value')
       case('--output')
         call option_value(i,narg,'--output',output_path)
       case('--reference-eigenval')
@@ -233,7 +247,8 @@ contains
       actual_backend='cuda'
       actual_solver=solver
       call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',eigenvalues,smin,smax, &
-        potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
+        potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,target_bands=nbands,acc_tolerance=acc_tol, &
+        acc_max_iterations=acc_max_iter,acc_block_size=acc_block_size,iterations=acc_iterations,final_residual=acc_residual)
     else
       actual_backend='cpu'
       actual_solver='evd'
@@ -271,21 +286,24 @@ contains
       open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
       if(ios/=0)call fail('cannot write output: '//trim(output_path))
       call write_gamma_json(unit,charge_path,potential_path,xc,actual_backend,encut,basis%npw, &
-        eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp,kpoint)
+        eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp,kpoint, &
+        acc_iterations,acc_residual)
       close(unit)
     end if
     call write_gamma_json(6,charge_path,potential_path,xc,actual_backend,encut,basis%npw, &
-      eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp,kpoint)
+      eigenvalues(:nbands),reference,smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,actual_solver,use_uspp,kpoint, &
+      acc_iterations,acc_residual)
 #endif
   end subroutine
 
   subroutine write_gamma_json(unit,charge,potential,xc,backend,encut,npw,eigenvalues,reference, &
-      smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,kpoint)
-    integer,intent(in)::unit
+      smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,kpoint,acc_iterations,acc_residual)
+    integer,intent(in)::unit,acc_iterations
     integer(i64),intent(in)::npw
     character(len=*),intent(in)::charge,potential,xc,backend,solver
     logical,intent(in)::use_uspp
-    real(dp),intent(in)::encut,eigenvalues(:),reference(:),smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,kpoint(3)
+    real(dp),intent(in)::encut,eigenvalues(:),reference(:),smin,smax,elapsed,potential_seconds,assembly_seconds,gpu_seconds,kpoint(3), &
+      acc_residual
     real(dp),allocatable::errors(:)
     integer::n
     n=min(size(eigenvalues),size(reference)); allocate(errors(n))
@@ -317,7 +335,9 @@ contains
     write(unit,'(A,ES24.16,A)') '  "elapsed_seconds": ',elapsed,','
     write(unit,'(A,ES24.16,A)') '  "potential_seconds": ',potential_seconds,','
     write(unit,'(A,ES24.16,A)') '  "assembly_seconds": ',assembly_seconds,','
-    write(unit,'(A,ES24.16)') '  "gpu_solver_seconds": ',gpu_seconds
+    write(unit,'(A,ES24.16,A)') '  "gpu_solver_seconds": ',gpu_seconds,','
+    write(unit,'(A,I0,A)') '  "iterative_solver_iterations": ',acc_iterations,','
+    write(unit,'(A,ES24.16)') '  "iterative_solver_max_residual_eV": ',acc_residual
     write(unit,'(A)') '}'
   end subroutine
 
@@ -497,7 +517,8 @@ contains
       case('--backend');call option_value(i,narg,'--backend',backend);backend=lower(trim(backend))
         if(trim(backend)/='auto'.and.trim(backend)/='cpu'.and.trim(backend)/='cuda')call fail('--backend must be auto, cpu, or cuda')
       case('--solver');call option_value(i,narg,'--solver',solver);solver=lower(trim(solver))
-        if(trim(solver)/='evd'.and.trim(solver)/='evj')call fail('--solver must be evd or evj')
+        if(trim(solver)/='evd'.and.trim(solver)/='evj'.and.trim(solver)/='evx'.and.trim(solver)/='acc') &
+          call fail('--solver must be evd, evj, evx, or acc')
       case('--output');call option_value(i,narg,'--output',output_path);output_prefix=strip_json_suffix(output_path)
       case('--output-prefix');call option_value(i,narg,'--output-prefix',output_prefix);output_path=trim(output_prefix)//'.json'
       case('--vaspwave-h5');call option_value(i,narg,'--vaspwave-h5',hdf5_path)
@@ -520,8 +541,8 @@ contains
 #ifndef HALF_CLI_HAVE_MKL
     if(trim(actual_backend)=='cpu')call fail('the CPU bands backend requires oneMKL')
 #endif
-    if(trim(actual_backend)=='cpu'.and.trim(solver)/='evd')call fail('--solver evj is available only with CUDA')
-    if(len_trim(hdf5_path)>0.and.trim(solver)/='evd')call fail('vaspwave.h5 export requires --solver evd')
+    if(trim(actual_backend)=='cpu'.and.trim(solver)/='evd')call fail('the selected solver is available only with CUDA')
+    if(len_trim(hdf5_path)>0.and.trim(solver)=='evj')call fail('vaspwave.h5 export is unavailable with --solver evj')
     if(parallel_size()>1.and.trim(actual_backend)/='cpu')call fail('MPI k-point distribution is supported by the CPU backend only')
     if(parallel_size()>1.and.len_trim(hdf5_path)>0)call fail('vaspwave.h5 export currently requires one MPI rank')
 #ifndef HALF_CLI_HAVE_HDF5
@@ -540,10 +561,10 @@ contains
       if(trim(actual_backend)=='cuda')then
         if(len_trim(hdf5_path)>0)then
           call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
-            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors)
+            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands)
         else
           call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
-            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
+            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,target_bands=nbands)
         end if
       else
 #endif
@@ -607,7 +628,7 @@ contains
     write(unit,'(A)')'Usage: half bands CHARGE POTENTIAL [KPOINTS] [OPTIONS]'
     write(unit,'(A)')'       half-bands CHARGE POTENTIAL [KPOINTS] [OPTIONS]'
     write(unit,'(A)')'Options: --encut EV --bands N --npoints N --path LABELS --xc lda|pbe --backend auto|cpu|cuda'
-    write(unit,'(A)')'         --solver evd|evj --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
+    write(unit,'(A)')'         --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
     write(unit,'(A)')'KPOINTS is a VASP explicit reciprocal-coordinate file; omit it for an automatic cubic band path.'
   end subroutine
 
@@ -740,7 +761,8 @@ contains
       case('--backend');call option_value(i,narg,'--backend',backend);backend=lower(trim(backend))
         if(trim(backend)/='auto'.and.trim(backend)/='cpu'.and.trim(backend)/='cuda')call fail('--backend must be auto, cpu, or cuda')
       case('--solver');call option_value(i,narg,'--solver',solver);solver=lower(trim(solver))
-        if(trim(solver)/='evd'.and.trim(solver)/='evj')call fail('--solver must be evd or evj')
+        if(trim(solver)/='evd'.and.trim(solver)/='evj'.and.trim(solver)/='evx'.and.trim(solver)/='acc') &
+          call fail('--solver must be evd, evj, evx, or acc')
       case('--no-uspp-dij');use_uspp=.false.
       case('--forces');do_forces=.true.
       case('--force-step');call option_value(i,narg,'--force-step',value);read(value,*,iostat=ios)force_step
@@ -785,8 +807,8 @@ contains
 #ifndef HALF_CLI_HAVE_MKL
     if(trim(actual_backend)=='cpu')call fail('the CPU energy backend requires oneMKL')
 #endif
-    if(trim(actual_backend)=='cpu'.and.trim(solver)/='evd')call fail('--solver evj is available only with CUDA')
-    if(len_trim(hdf5_path)>0.and.trim(solver)/='evd')call fail('vaspwave.h5 export requires --solver evd')
+    if(trim(actual_backend)=='cpu'.and.trim(solver)/='evd')call fail('the selected solver is available only with CUDA')
+    if(len_trim(hdf5_path)>0.and.trim(solver)=='evj')call fail('vaspwave.h5 export is unavailable with --solver evj')
     if(parallel_size()>1.and.trim(actual_backend)/='cpu')call fail('MPI k-point distribution is supported by the CPU backend only')
     if(parallel_size()>1.and.len_trim(hdf5_path)>0)call fail('vaspwave.h5 export currently requires one MPI rank')
 #ifndef HALF_CLI_HAVE_HDF5
@@ -814,18 +836,18 @@ contains
         if(ik==1)then
           if(len_trim(hdf5_path)>0)then
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
-              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,vectors)
+              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,vectors,target_bands=nbands)
           else
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
-              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv)
+              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,target_bands=nbands)
           end if
         else
           if(len_trim(hdf5_path)>0)then
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
-              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors)
+              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands)
           else
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
-              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp)
+              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,target_bands=nbands)
           end if
         end if
       else
@@ -903,7 +925,7 @@ contains
     write(unit,'(A)')'Options: --encut EV --kspacing VALUE --kpoints-file FILE --no-kpoint-symmetry'
     write(unit,'(A)')'         --symprec VALUE --bands N --sigma EV --xc lda|pbe'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
-    write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj --no-uspp-dij --output FILE --output-prefix PREFIX'
+    write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
     write(unit,'(A)')'         --forces --force-step ANGSTROM'
     write(unit,'(A)')'         --atomic-reference-energy EV --paw-atomic-double-counting EV'
@@ -943,9 +965,10 @@ contains
       if(trim(backend)=='cuda')then
         if(ik==1)then
           call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax,ps,as,gs, &
-            solver,use_uspp,eh,exc,exv)
+            solver,use_uspp,eh,exc,exv,target_bands=nbands)
         else
-          call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax,ps,as,gs,solver,use_uspp)
+          call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax,ps,as,gs,solver,use_uspp, &
+            target_bands=nbands)
         end if
       else
 #endif

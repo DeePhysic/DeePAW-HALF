@@ -1,0 +1,20 @@
+{
+  "date": "2026-09-21",
+  "hardware": "NVIDIA GeForce RTX 4090",
+  "compiler": "NVHPC 25.9",
+  "precision": "complex128",
+  "system": "Si, 2 atoms, Gamma, PBE, DION",
+  "encut_eV": 400.0,
+  "plane_waves": 2973,
+  "bands": 64,
+  "acc_tolerance_eV": 0.001,
+  "acc_iterations": 17,
+  "acc_final_max_residual_eV": 0.0006382035723261345,
+  "acc_gpu_solver_seconds": 11.9065959,
+  "evx_gpu_solver_seconds": 13.6369421,
+  "acc_speedup_over_evx": 1.145328374459055,
+  "max_abs_eigenvalue_error_eV": 1.60056217168858e-08,
+  "rms_eigenvalue_error_eV": 2.684244639845252e-09,
+  "lowest_8_max_abs_eigenvalue_error_eV": 2.8776980798284058e-12,
+  "timing_scope": "device solver timers from one run; excludes process/CUDA startup"
+}

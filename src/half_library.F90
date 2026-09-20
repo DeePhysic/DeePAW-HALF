@@ -83,11 +83,11 @@ contains
     if(self%backend==HALF_BACKEND_CUDA)then;status=HALF_ERROR_UNAVAILABLE;message='CUDA API backend is not compiled';return;end if
 #endif
     self%solver='evd';if(present(solver))self%solver=solver
-    if(self%solver/='evd'.and.self%solver/='evj'.and.self%solver/='evx')then
-      status=HALF_ERROR_INVALID_ARGUMENT;message='solver must be evd, evj, or evx';return
+    if(self%solver/='evd'.and.self%solver/='evj'.and.self%solver/='evx'.and.self%solver/='acc')then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='solver must be evd, evj, evx, or acc';return
     end if
     if(self%backend==HALF_BACKEND_CPU.and.self%solver/='evd')then
-      status=HALF_ERROR_UNAVAILABLE;message='EVJ and VASP-like EVX are available only with CUDA';return
+      status=HALF_ERROR_UNAVAILABLE;message='EVJ, EVX, and ACC are available only with CUDA';return
     end if
     inquire(file=trim(charge_path),exist=exists)
     if(.not.exists)then;status=HALF_ERROR_IO;message='charge input does not exist';return;end if
@@ -161,11 +161,11 @@ contains
     if(self%backend==HALF_BACKEND_CUDA)then;status=HALF_ERROR_UNAVAILABLE;message='CUDA API backend is not compiled';return;end if
 #endif
     self%solver='evd';if(present(solver))self%solver=solver
-    if(self%solver/='evd'.and.self%solver/='evj')then
-      status=HALF_ERROR_INVALID_ARGUMENT;message='solver must be evd or evj';return
+    if(self%solver/='evd'.and.self%solver/='evj'.and.self%solver/='evx'.and.self%solver/='acc')then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='solver must be evd, evj, evx, or acc';return
     end if
     if(self%backend==HALF_BACKEND_CPU.and.self%solver/='evd')then
-      status=HALF_ERROR_UNAVAILABLE;message='EVJ is available only with CUDA';return
+      status=HALF_ERROR_UNAVAILABLE;message='EVJ, EVX, and ACC are available only with CUDA';return
     end if
 
     call read_potcar(trim(potential_path),self%potcars)

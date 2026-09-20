@@ -161,6 +161,12 @@ half gamma CHGCAR.smooth POTCAR \
   --encut 400 --bands 8 --backend cuda --uspp-dij \
   --kpoint 0.125 0.25 0.375 --output kpoint_validation.json
 
+# 无矩阵 Harris 初始波函数：分块 H*Psi/S*Psi、全带 Ritz 优化和残差提前停止
+half gamma CHGCAR.smooth POTCAR \
+  --encut 400 --bands 64 --backend cuda --solver acc --uspp-dij \
+  --acc-tol 1e-3 --acc-max-iter 40 --acc-block-size 16 \
+  --output gamma_acc.json
+
 # 显式使用 CPU 后端
 half gamma CHGCAR.smooth POTCAR \
   --encut 400 --bands 8 --xc pbe --backend cpu
@@ -187,6 +193,13 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
   CHGCAR.smooth POTCAR KPOINTS --backend cpu --bands 60 --output bands.json
 ```
+
+`--solver acc` 是大基组的主加速路径。它不构造 `NPL x NPL` 稠密 H/S：局域势
+FFT、动能、PAW 投影收缩、残差、预条件、S 正交化及块旋转均留在 GPU；cuSOLVER
+只求解 `NBANDS` 或 `2*NBANDS` 的 Rayleigh-Ritz 子空间问题。JSON 会记录迭代次数
+和最终最大残差。`--solver evx` 可作为稠密部分谱参考。VASP 中设置
+`HALF_MODE=ACC` 即选用相同路径并直接使用 VASP 的 `NBANDS`；默认残差阈值为
+`1e-4 eV`。
 
 MPI 作用于 CPU 的 `bands` 和 `energy` 路径。rank `r` 负责
 `r+1, r+1+nranks, ...` 这些 k 点，集合通信恢复原顺序的本征值与平面波计数，

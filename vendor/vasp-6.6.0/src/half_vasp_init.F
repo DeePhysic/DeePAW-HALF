@@ -8,7 +8,7 @@ MODULE half_vasp_init
   USE mpimy
   USE tutor, ONLY: vtutor
   IMPLICIT NONE
-  INTEGER(c_int),PARAMETER::HALF_SUCCESS=0,HALF_XC_PBE=2,HALF_BACKEND_AUTO=0,HALF_SOLVER_EVD=1,HALF_SOLVER_VASP=3, &
+  INTEGER(c_int),PARAMETER::HALF_SUCCESS=0,HALF_XC_PBE=2,HALF_BACKEND_AUTO=0,HALF_SOLVER_EVD=1,HALF_SOLVER_VASP=3,HALF_SOLVER_ACC=4, &
     HALF_DENSITY_NORMALIZE_VALENCE=1
   TYPE,BIND(C)::half_request_geometry_v1
     INTEGER(c_int32_t)::struct_size,flags,nions,ntypes,grid(3),reserved_i32
@@ -99,6 +99,8 @@ CONTAINS
     HALF_SOLVER=HALF_SOLVER_EVD
     IF (TRIM(HALF_MODE)=='vasp' .OR. TRIM(HALF_MODE)=='vasp_like' .OR. &
         TRIM(HALF_MODE)=='vasp-like') HALF_SOLVER=HALF_SOLVER_VASP
+    IF (TRIM(HALF_MODE)=='acc' .OR. TRIM(HALF_MODE)=='matrix_free' .OR. &
+        TRIM(HALF_MODE)=='matrix-free') HALF_SOLVER=HALF_SOLVER_ACC
 
     ROOT=WDES%COMM%IONODE
     HANDLE=0_c_int64_t
@@ -189,7 +191,10 @@ CONTAINS
       DO NB=1,WDES%NB_TOT
         CALL DIS_PW_BAND(WDES1,NB,VECTORS(:,NB),W%CPTWFP(1,1,NK,1))
       ENDDO
-      IF (IU0>=0 .AND. HALF_SOLVER==HALF_SOLVER_VASP) THEN
+      IF (IU0>=0 .AND. HALF_SOLVER==HALF_SOLVER_ACC) THEN
+        WRITE(IU0,'(A,I0,A,I0,A,I0,A)') 'HALF initialized k-point ',NK,' with ',NPL_TOT, &
+          ' plane waves; requested NBANDS=',WDES%NB_TOT,' (matrix-free block H*Psi)'
+      ELSE IF (IU0>=0 .AND. HALF_SOLVER==HALF_SOLVER_VASP) THEN
         WRITE(IU0,'(A,I0,A,I0,A,I0,A)') 'HALF initialized k-point ',NK,' with ',NPL_TOT, &
           ' plane waves; requested NBANDS=',WDES%NB_TOT,' (VASP-like partial spectrum)'
       ELSE IF (IU0>=0) THEN

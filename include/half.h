@@ -31,7 +31,10 @@ enum half_solver {
   /* CUDA generalized Hermitian index-range solve.  Only the lowest NBANDS
    * eigenpairs requested by half_solve_kpoint[_mapped] are computed and
    * returned. */
-  HALF_SOLVER_VASP = 3
+  HALF_SOLVER_VASP = 3,
+  /* Matrix-free block Harris solver. H*Psi and S*Psi remain on the GPU;
+   * cuSOLVER is used only for the small Rayleigh-Ritz subspace. */
+  HALF_SOLVER_ACC = 4
 };
 
 enum half_capability {

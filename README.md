@@ -240,6 +240,13 @@ CPU/CUDA backend selection:
   --encut 400 --bands 8 --backend cuda --uspp-dij \
   --kpoint 0.125 0.25 0.375 --output kpoint_validation.json
 
+# Matrix-free Harris initialization: block H*Psi/S*Psi, all-band Ritz solve,
+# and early stopping at an initial-wavefunction residual tolerance.
+./build/cuda13-cc89-release/half gamma CHGCAR.smooth POTCAR \
+  --encut 400 --bands 64 --backend cuda --solver acc --uspp-dij \
+  --acc-tol 1e-3 --acc-max-iter 40 --acc-block-size 16 \
+  --output gamma_acc.json
+
 # Reconstruct several k points from a VASP explicit reciprocal KPOINTS file.
 ./build/cuda12-cc89-release/half bands CHGCAR.smooth POTCAR KPOINTS \
   --encut 400 --bands 12 --backend cuda --uspp-dij --output bands.json
@@ -266,6 +273,15 @@ mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
 ./build/cpu-release/half potcar POTCAR
 ./build/cpu-release/half paw CHGCAR.smooth POTCAR --encut 400
 ```
+
+`--solver acc` is the production large-basis path. It never forms the
+`NPL x NPL` dense H/S matrices: local-potential FFTs, kinetic terms, PAW
+projector contractions, residuals, preconditioning, S-orthogonalization and
+block rotations remain on the GPU. cuSOLVER handles only the `NBANDS` and
+`2*NBANDS` Rayleigh-Ritz problems. The JSON report records the iteration count
+and final maximum residual. Use `--solver evx` as the dense partial-spectrum
+reference. For VASP, `HALF_MODE=ACC` selects the same path and uses VASP's
+`NBANDS`; its default residual tolerance is `1e-4 eV`.
 
 MPI is implemented for the CPU `bands` and `energy` paths. Rank `r` solves
 k points `r+1, r+1+nranks, ...`; collective reductions restore the ordered

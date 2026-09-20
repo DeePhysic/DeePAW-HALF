@@ -25,12 +25,19 @@ CHGCAR/HDF5   POTCAR/vaspout.h5
 2. cuFFT performs real/reciprocal transforms.
 3. CUDA Fortran kernels construct PAW projectors and dense DION/QPAW terms;
    cuBLAS contraction is reserved for larger multi-species workloads.
-4. cuSOLVER is used only by the small-system dense reference path.
-5. The production path applies H and S matrix-free and uses a block iterative
-   eigensolver.
-6. Optional CPU MPI distributes complete k-point solves cyclically across ranks;
+4. The `acc` production path applies H and S matrix-free in configurable band
+   blocks. It uses inverse/forward cuFFT for the local potential, a diagonal
+   kinetic kernel, and cuBLAS PAW projector contractions.
+5. Restarted all-band optimization forms only `NBANDS x NBANDS` or
+   `2*NBANDS x 2*NBANDS` Rayleigh-Ritz matrices. Residual construction,
+   preconditioning, S-orthogonalization, and Ritz rotations stay on the GPU;
+   cuSOLVER diagonalizes only these small projected matrices.
+6. A loose residual threshold can stop Harris initial-state generation before
+   final-SCF eigenstate accuracy. Dense `evd`, `evj`, and `evx` remain
+   reference/small-system paths.
+7. Optional CPU MPI distributes complete k-point solves cyclically across ranks;
    band and FFT-domain decomposition remain future scaling extensions.
-7. All reductions that affect regression results have a deterministic mode.
+8. All reductions that affect regression results have a deterministic mode.
 
 ## Build variants
 
@@ -55,6 +62,7 @@ Fortran sources so version comparisons do not mix in algorithm changes.
 | `half_cuda_potential` | GPU Hartree, ionic, NLCC, LDA and PBE pipeline |
 | `half_paw` | `happy/paw.py`, `happy/uspp_dij.py` |
 | `half_cuda_assembly` | GPU projector and device-resident H/S construction |
+| `half_cuda_iterative_solver` | matrix-free block H/S application and restarted all-band Rayleigh-Ritz |
 | `half_operator` | `happy/hamiltonian.py` |
 | `half_solver` | SciPy generalized `eigh` call sites |
 | `half_energy` | `happy/total_energy.py`, `happy/ewald.py` |

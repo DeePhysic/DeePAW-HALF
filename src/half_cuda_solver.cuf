@@ -8,6 +8,7 @@ module half_cuda_solver
   use half_paw,only:paw_species_t
   use half_cuda_assembly,only:assemble_dense_gamma_cuda,assemble_dense_gamma_cuda_full
   use half_cuda_potential,only:build_veff_cuda
+  use half_cuda_iterative_solver,only:solve_block_harris_cuda_full
   implicit none
   private
   public::solve_dense_gamma_cuda,solve_dense_gamma_cuda_full
@@ -44,7 +45,8 @@ contains
   end subroutine
 
   subroutine solve_dense_gamma_cuda_full(charge,potcars,crystal,basis,use_pbe,eigenvalues,overlap_min,overlap_max, &
-      potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,e_hartree,e_xc,e_xc_potential,eigenvectors,target_bands)
+      potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,e_hartree,e_xc,e_xc_potential,eigenvectors,target_bands, &
+      acc_tolerance,acc_max_iterations,acc_block_size,iterations,final_residual)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
@@ -58,10 +60,24 @@ contains
     real(dp),intent(out),optional::e_hartree,e_xc,e_xc_potential
     complex(dp),allocatable,intent(out),optional::eigenvectors(:,:)
     integer,intent(in),optional::target_bands
+    real(dp),intent(in),optional::acc_tolerance
+    integer,intent(in),optional::acc_max_iterations,acc_block_size
+    integer,intent(out),optional::iterations
+    real(dp),intent(out),optional::final_residual
     real(dp),device,allocatable::dveff(:)
     complex(dp),device,allocatable::dh(:,:),ds(:,:)
     real(dp)::eh,exc,exv
     integer(8)::tick0,tick1,rate
+    if(present(solver))then
+      if(trim(solver)=='acc')then
+        call solve_block_harris_cuda_full(charge,potcars,crystal,basis,use_pbe,eigenvalues,overlap_min,overlap_max, &
+          potential_seconds,assembly_seconds,gpu_seconds,use_uspp,e_hartree,e_xc,e_xc_potential,eigenvectors,target_bands, &
+          acc_tolerance,acc_max_iterations,acc_block_size,iterations,final_residual)
+        return
+      end if
+    end if
+    if(present(iterations))iterations=0
+    if(present(final_residual))final_residual=0.0_dp
     call system_clock(tick0,rate)
     if(present(e_hartree).or.present(e_xc).or.present(e_xc_potential))then
       call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.true.,exv)

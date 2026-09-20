@@ -1,0 +1,291 @@
+module half_cuda_iterative_solver
+  use cudafor
+  use cublas
+  use cusolverdn
+  use half_kinds,only:dp
+  use half_types,only:plane_wave_basis_t,crystal_t,charge_grid_t,potcar_t
+  use half_cuda_potential,only:build_veff_cuda
+  use half_cuda_assembly,only:cuda_hs_operator_t,prepare_hs_operator_cuda,apply_hs_operator_cuda,destroy_hs_operator_cuda
+  implicit none
+  private
+  public::solve_block_harris_cuda_full
+contains
+  attributes(global) subroutine initialize_states_kernel(states,indices,n,nb)
+    complex(dp),device,intent(out)::states(*)
+    integer,device,intent(in)::indices(*)
+    integer,value::n,nb
+    integer::linear,ig,ib
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=n*nb)then
+      ig=mod(linear-1,n)+1;ib=(linear-1)/n+1
+      if(ig==indices(ib))then
+        states(linear)=cmplx(1.0_dp,0.0_dp,dp)
+      else
+        states(linear)=cmplx(0.0_dp,0.0_dp,dp)
+      end if
+    end if
+  end subroutine
+
+  attributes(global) subroutine residual_kernel(hx,sx,eigenvalues,residual,n,nb)
+    complex(dp),device,intent(in)::hx(*),sx(*)
+    real(dp),device,intent(in)::eigenvalues(*)
+    complex(dp),device,intent(out)::residual(*)
+    integer,value::n,nb
+    integer::linear,ib
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=n*nb)then
+      ib=(linear-1)/n+1
+      residual(linear)=hx(linear)-eigenvalues(ib)*sx(linear)
+    end if
+  end subroutine
+
+  attributes(global) subroutine precondition_kernel(residual,kinetic,eigenvalues,seeds,direction,n,nb)
+    complex(dp),device,intent(in)::residual(*)
+    real(dp),device,intent(in)::kinetic(*),eigenvalues(*)
+    integer,device,intent(in)::seeds(*)
+    complex(dp),device,intent(out)::direction(*)
+    integer,value::n,nb
+    integer::linear,ig,ib
+    real(dp)::denominator
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=n*nb)then
+      ig=mod(linear-1,n)+1;ib=(linear-1)/n+1
+      if(seeds(ib)>0)then
+        if(ig==seeds(ib))then
+          direction(linear)=cmplx(1.0_dp,0.0_dp,dp)
+        else
+          direction(linear)=cmplx(0.0_dp,0.0_dp,dp)
+        end if
+      else
+        denominator=abs(kinetic(ig)-eigenvalues(ib))+1.0_dp
+        direction(linear)=-residual(linear)/denominator
+      end if
+    end if
+  end subroutine
+
+  attributes(global) subroutine scale_eigenvectors_kernel(vectors,eigenvalues,n,floor_value)
+    complex(dp),device,intent(inout)::vectors(*)
+    real(dp),device,intent(in)::eigenvalues(*)
+    integer,value::n
+    real(dp),value::floor_value
+    integer::linear,column
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=n*n)then
+      column=(linear-1)/n+1
+      vectors(linear)=vectors(linear)/sqrt(max(eigenvalues(column),floor_value))
+    end if
+  end subroutine
+
+  subroutine solve_block_harris_cuda_full(charge,potcars,crystal,basis,use_pbe,eigenvalues,overlap_min,overlap_max, &
+      potential_seconds,operator_seconds,solver_seconds,use_uspp,e_hartree,e_xc,e_xc_potential,eigenvectors, &
+      target_bands,tolerance,max_iterations,block_size,iterations,final_residual)
+    type(charge_grid_t),intent(in)::charge
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    type(plane_wave_basis_t),intent(in)::basis
+    logical,intent(in)::use_pbe
+    logical,intent(in),optional::use_uspp
+    real(dp),allocatable,intent(out)::eigenvalues(:)
+    real(dp),intent(out)::overlap_min,overlap_max
+    real(dp),intent(out),optional::potential_seconds,operator_seconds,solver_seconds
+    real(dp),intent(out),optional::e_hartree,e_xc,e_xc_potential,final_residual
+    complex(dp),allocatable,intent(out),optional::eigenvectors(:,:)
+    integer,intent(in),optional::target_bands,max_iterations,block_size
+    real(dp),intent(in),optional::tolerance
+    integer,intent(out),optional::iterations
+    type(cuda_hs_operator_t)::op
+    type(cublasHandle)::blas
+    complex(dp),device,allocatable::x(:,:),hx(:,:),sx(:,:),r(:,:),p(:,:),hp(:,:),sp(:,:),z(:,:),hz(:,:),sz(:,:), &
+      hsub(:,:),ssub(:,:),metric(:,:),transform(:,:),tmp(:,:),cross(:,:)
+    real(dp),device,allocatable::dw(:)
+    real(dp),device,allocatable::dkinetic(:)
+    real(dp),device,allocatable::dmetric_eigenvalues(:)
+    real(dp),device,allocatable::dveff(:)
+    integer,device,allocatable::dindices(:),dseeds(:)
+    real(dp),allocatable::gram_host(:,:)
+    integer,allocatable::indices(:),seeds(:)
+    real(dp)::eh,exc,exv,tol,max_residual
+    complex(dp)::one,zero,minus_one
+    integer::n,m,subdim,maxiter,chunk,iter,status,j
+    integer(8)::tick0,tick1,rate
+    logical::with_uspp,converged
+
+    n=int(basis%npw);m=min(8,n);if(present(target_bands))m=target_bands
+    if(m<1.or.m>n)error stop 'HALF: invalid ACC target band count'
+    if(2*m>n)error stop 'HALF: ACC solver requires NBANDS <= NPL/2'
+    tol=1.0e-4_dp;if(present(tolerance))tol=tolerance
+    maxiter=40;if(present(max_iterations))maxiter=max_iterations
+    chunk=16;if(present(block_size))chunk=block_size
+    if(tol<=0.0_dp.or.maxiter<1.or.chunk<1)error stop 'HALF: invalid ACC solver controls'
+    with_uspp=.false.;if(present(use_uspp))with_uspp=use_uspp
+    one=cmplx(1.0_dp,0.0_dp,dp);zero=cmplx(0.0_dp,0.0_dp,dp);minus_one=cmplx(-1.0_dp,0.0_dp,dp)
+
+    call system_clock(tick0,rate)
+    if(present(e_hartree).or.present(e_xc).or.present(e_xc_potential))then
+      call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.true.,exv)
+      if(present(e_hartree))e_hartree=eh
+      if(present(e_xc))e_xc=exc
+      if(present(e_xc_potential))e_xc_potential=exv
+    else
+      call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.false.)
+    end if
+    call system_clock(tick1);if(present(potential_seconds))potential_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
+    call prepare_hs_operator_cuda(dveff,basis,potcars,crystal,op,with_uspp)
+    call system_clock(tick1);if(present(operator_seconds))operator_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
+
+    allocate(indices(n));call kinetic_order(basis%kinetic,indices)
+    allocate(dindices(m),dseeds(m));dindices=indices(:m);deallocate(indices)
+    allocate(x(n,m),hx(n,m),sx(n,m),r(n,m),p(n,m),hp(n,m),sp(n,m),tmp(n,m),cross(m,m),dw(2*m),dkinetic(n))
+    dkinetic=basis%kinetic
+    call initialize_states_kernel<<<(n*m+255)/256,256>>>(x,dindices,n,m)
+    status=cublasCreate(blas);if(status/=0)error stop 'HALF: ACC cuBLAS create failed'
+    call apply_hs_operator_cuda(op,x,hx,sx,chunk)
+    call rayleigh_ritz(blas,x,hx,sx,m,dw)
+    allocate(gram_host(m,m),seeds(m));converged=.false.;max_residual=huge(1.0_dp)
+
+    do iter=1,maxiter
+      call residual_kernel<<<(n*m+255)/256,256>>>(hx,sx,dw,r,n,m)
+      status=cublasZgemm_v2(blas,CUBLAS_OP_C,CUBLAS_OP_N,m,m,n,one,r,n,r,n,zero,cross,m)
+      if(status/=0)error stop 'HALF: ACC residual norm GEMM failed'
+      gram_host=cross;max_residual=0.0_dp;seeds=0
+      do j=1,m
+        max_residual=max(max_residual,sqrt(max(0.0_dp,real(gram_host(j,j),dp))))
+        if(sqrt(max(0.0_dp,real(gram_host(j,j),dp)))<max(tol*1.0e-2_dp,1.0e-12_dp)) &
+          seeds(j)=mod(m+j-1,n)+1
+      end do
+      if(max_residual<=tol)then;converged=.true.;exit;end if
+
+      dseeds=seeds
+      call precondition_kernel<<<(n*m+255)/256,256>>>(r,dkinetic,dw,dseeds,p,n,m)
+      call apply_hs_operator_cuda(op,p,hp,sp,chunk)
+
+      ! S-orthogonalize the correction block against the current Ritz vectors.
+      status=cublasZgemm_v2(blas,CUBLAS_OP_C,CUBLAS_OP_N,m,m,n,one,x,n,sp,n,zero,cross,m)
+      if(status/=0)error stop 'HALF: ACC cross-metric GEMM failed'
+      status=cublasZgemm_v2(blas,CUBLAS_OP_N,CUBLAS_OP_N,n,m,m,minus_one,x,n,cross,m,one,p,n)
+      if(status/=0)error stop 'HALF: ACC direction orthogonalization failed'
+      status=cublasZgemm_v2(blas,CUBLAS_OP_N,CUBLAS_OP_N,n,m,m,minus_one,hx,n,cross,m,one,hp,n)
+      if(status/=0)error stop 'HALF: ACC H-direction orthogonalization failed'
+      status=cublasZgemm_v2(blas,CUBLAS_OP_N,CUBLAS_OP_N,n,m,m,minus_one,sx,n,cross,m,one,sp,n)
+      if(status/=0)error stop 'HALF: ACC S-direction orthogonalization failed'
+
+      ! Normalize the correction block in the PAW S metric on the device.
+      allocate(metric(m,m),transform(m,m),dmetric_eigenvalues(m))
+      status=cublasZgemm_v2(blas,CUBLAS_OP_C,CUBLAS_OP_N,m,m,n,one,p,n,sp,n,zero,metric,m)
+      if(status/=0)error stop 'HALF: ACC correction metric GEMM failed'
+      transform=metric
+      call solve_small_hermitian(transform,dmetric_eigenvalues,m)
+      call scale_eigenvectors_kernel<<<(m*m+255)/256,256>>>(transform,dmetric_eigenvalues,m,1.0e-14_dp)
+      call rotate_block(blas,p,transform,tmp,n,m,m);p=tmp
+      call rotate_block(blas,hp,transform,tmp,n,m,m);hp=tmp
+      call rotate_block(blas,sp,transform,tmp,n,m,m);sp=tmp
+      deallocate(metric,transform,dmetric_eigenvalues)
+
+      subdim=2*m
+      allocate(z(n,subdim),hz(n,subdim),sz(n,subdim),hsub(subdim,subdim),ssub(subdim,subdim))
+      z(:,:m)=x;z(:,m+1:)=p;hz(:,:m)=hx;hz(:,m+1:)=hp;sz(:,:m)=sx;sz(:,m+1:)=sp
+      status=cublasZgemm_v2(blas,CUBLAS_OP_C,CUBLAS_OP_N,subdim,subdim,n,one,z,n,hz,n,zero,hsub,subdim)
+      if(status/=0)error stop 'HALF: ACC projected Hamiltonian GEMM failed'
+      status=cublasZgemm_v2(blas,CUBLAS_OP_C,CUBLAS_OP_N,subdim,subdim,n,one,z,n,sz,n,zero,ssub,subdim)
+      if(status/=0)error stop 'HALF: ACC projected overlap GEMM failed'
+      call solve_small_generalized(hsub,ssub,dw,subdim)
+      call rotate_block(blas,z,hsub(:,1:m),tmp,n,subdim,m);x=tmp
+      call rotate_block(blas,hz,hsub(:,1:m),tmp,n,subdim,m);hx=tmp
+      call rotate_block(blas,sz,hsub(:,1:m),tmp,n,subdim,m);sx=tmp
+      deallocate(z,hz,sz,hsub,ssub)
+    end do
+
+    allocate(eigenvalues(m));eigenvalues=dw(:m)
+    if(present(eigenvectors))then;allocate(eigenvectors(n,m));eigenvectors=x;end if
+    overlap_min=-1.0_dp;overlap_max=-1.0_dp
+    if(present(iterations))iterations=min(iter,maxiter)
+    if(present(final_residual))final_residual=max_residual
+    call system_clock(tick1);if(present(solver_seconds))solver_seconds=real(tick1-tick0,dp)/real(rate,dp)
+    status=cublasDestroy(blas);call destroy_hs_operator_cuda(op)
+    if(.not.converged.and.max_residual>max(100.0_dp*tol,1.0e-2_dp)) &
+      write(0,'(A,I0,A,ES12.4)')'HALF ACC warning: stopped after ',maxiter,' iterations; max residual=',max_residual
+  end subroutine
+
+  subroutine rayleigh_ritz(blas,x,hx,sx,m,eigenvalues)
+    type(cublasHandle),intent(in)::blas
+    complex(dp),device,intent(inout)::x(:,:),hx(:,:),sx(:,:)
+    integer,intent(in)::m
+    real(dp),device,intent(inout)::eigenvalues(:)
+    complex(dp),device,allocatable::hsub(:,:),ssub(:,:),tmp(:,:)
+    complex(dp)::one,zero
+    integer::n,status
+    n=size(x,1);one=cmplx(1.0_dp,0.0_dp,dp);zero=cmplx(0.0_dp,0.0_dp,dp)
+    allocate(hsub(m,m),ssub(m,m),tmp(n,m))
+    status=cublasZgemm_v2(blas,CUBLAS_OP_C,CUBLAS_OP_N,m,m,n,one,x,n,hx,n,zero,hsub,m)
+    if(status/=0)error stop 'HALF: ACC initial projected Hamiltonian failed'
+    status=cublasZgemm_v2(blas,CUBLAS_OP_C,CUBLAS_OP_N,m,m,n,one,x,n,sx,n,zero,ssub,m)
+    if(status/=0)error stop 'HALF: ACC initial projected overlap failed'
+    call solve_small_generalized(hsub,ssub,eigenvalues,m)
+    call rotate_block(blas,x,hsub,tmp,n,m,m);x=tmp
+    call rotate_block(blas,hx,hsub,tmp,n,m,m);hx=tmp
+    call rotate_block(blas,sx,hsub,tmp,n,m,m);sx=tmp
+    deallocate(hsub,ssub,tmp)
+  end subroutine
+
+  subroutine rotate_block(blas,input,rotation,output,n,k,m)
+    type(cublasHandle),intent(in)::blas
+    complex(dp),device,intent(in)::input(:,:),rotation(:,:)
+    complex(dp),device,intent(out)::output(:,:)
+    integer,intent(in)::n,k,m
+    complex(dp)::one,zero
+    integer::status
+    one=cmplx(1.0_dp,0.0_dp,dp);zero=cmplx(0.0_dp,0.0_dp,dp)
+    status=cublasZgemm_v2(blas,CUBLAS_OP_N,CUBLAS_OP_N,n,m,k,one,input,n,rotation,k,zero,output,n)
+    if(status/=0)error stop 'HALF: ACC Ritz-vector rotation failed'
+  end subroutine
+
+  subroutine solve_small_generalized(h,s,w,n)
+    complex(dp),device,intent(inout)::h(:,:),s(:,:)
+    real(dp),device,intent(inout)::w(:)
+    integer,intent(in)::n
+    complex(dp),device,allocatable::work(:)
+    integer,device::dinfo
+    type(cusolverDnHandle)::handle
+    integer::status,lwork,infohost
+    status=cusolverDnCreate(handle);if(status/=0)error stop 'HALF: ACC cuSolver create failed'
+    status=cusolverDnZhegvd_bufferSize(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_VECTOR, &
+      CUBLAS_FILL_MODE_UPPER,n,h,n,s,n,w,lwork)
+    if(status/=0)error stop 'HALF: ACC small Zhegvd workspace query failed'
+    allocate(work(lwork))
+    status=cusolverDnZhegvd(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_VECTOR,CUBLAS_FILL_MODE_UPPER, &
+      n,h,n,s,n,w,work,lwork,dinfo)
+    infohost=dinfo;if(status/=0.or.infohost/=0)error stop 'HALF: ACC small generalized eigensolve failed'
+    deallocate(work);status=cusolverDnDestroy(handle)
+  end subroutine
+
+  subroutine solve_small_hermitian(a,w,n)
+    complex(dp),device,intent(inout)::a(:,:)
+    real(dp),device,intent(out)::w(:)
+    integer,intent(in)::n
+    complex(dp),device,allocatable::work(:)
+    integer,device::dinfo
+    type(cusolverDnHandle)::handle
+    integer::status,lwork,infohost
+    status=cusolverDnCreate(handle);if(status/=0)error stop 'HALF: ACC metric cuSolver create failed'
+    status=cusolverDnZheevd_bufferSize(handle,CUSOLVER_EIG_MODE_VECTOR,CUBLAS_FILL_MODE_UPPER,n,a,n,w,lwork)
+    if(status/=0)error stop 'HALF: ACC metric Zheevd workspace query failed'
+    allocate(work(lwork));status=cusolverDnZheevd(handle,CUSOLVER_EIG_MODE_VECTOR,CUBLAS_FILL_MODE_UPPER,n,a,n,w,work,lwork,dinfo)
+    infohost=dinfo;if(status/=0.or.infohost/=0)error stop 'HALF: ACC correction metric eigensolve failed'
+    deallocate(work);status=cusolverDnDestroy(handle)
+  end subroutine
+
+  subroutine kinetic_order(kinetic,indices)
+    real(dp),intent(in)::kinetic(:)
+    integer,intent(out)::indices(:)
+    integer::i,j,key
+    do i=1,size(indices);indices(i)=i;end do
+    do i=2,size(indices)
+      key=indices(i);j=i-1
+      do while(j>=1)
+        if(kinetic(indices(j))<=kinetic(key))exit
+        indices(j+1)=indices(j);j=j-1
+      end do
+      indices(j+1)=key
+    end do
+  end subroutine
+end module half_cuda_iterative_solver

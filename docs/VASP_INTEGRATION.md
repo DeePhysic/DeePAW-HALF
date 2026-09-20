@@ -59,6 +59,14 @@ one-based species indices, and uses the dense charge grid `GRIDC%NGPTAR` as
 DeepAW API call and intentionally do not alter the current file-backed solve.
 `half_get_request_geometry()` provides an auditable query/copy path.
 
+This retained-only behavior has a known correctness edge case when a DeepAW
+CHGCAR header rounds the lattice more aggressively than VASP's POSCAR. At a
+cutoff boundary, HALF can then generate a different `NWAVE` even though both
+codes use the same kinetic-energy formula. See
+[`HFO2_NWAVE_BOUNDARY_MISMATCH.md`](validation/HFO2_NWAVE_BOUNDARY_MISMATCH.md)
+for the 520 eV reproducer, the 521 eV diagnostic workaround, and the required
+host-geometry fix.
+
 Wavefunction transfer uses the additive ABI-v1 function:
 
 ```c

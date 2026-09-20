@@ -49,6 +49,12 @@ adapter 把 `LATT_CUR%A` 打包为逐晶格矢量的行主序，把 `T_INFO%POSI
 求解，为下一步直接调用 DeepAW API 准备。`half_get_request_geometry()` 提供可审计
 的查询/复制路径。
 
+这种“只保存、不参与求解”的行为存在一个已确认的正确性边界问题：如果 DeepAW
+CHGCAR 头部晶格的精度低于 VASP POSCAR，在截断球边界上 HALF 可能得到不同的
+`NWAVE`，即使两边使用相同的动能公式。520 eV HfO2 复现、521 eV 临时规避及正式
+修复要求见
+[`HFO2_NWAVE_BOUNDARY_MISMATCH.zh-CN.md`](validation/HFO2_NWAVE_BOUNDARY_MISMATCH.zh-CN.md)。
+
 波函数传递使用 ABI v1 的兼容扩展：
 
 ```c

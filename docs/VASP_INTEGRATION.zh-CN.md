@@ -112,6 +112,19 @@ INIWAV     = 1
 新标签只能阻止 `WFINIT`，不能阻止 `CHGCAR` 读取，也不能跳过后续的 `PROALL` 和
 `ORTHCH`。
 
+如需让 HALF 直接从 DeePAW-eSCN 获取重构密度，在启动环境中设置：
+
+```bash
+export HALF_ESCN_URL=http://127.0.0.1:8265
+```
+
+adapter 会把现有的晶格、分数坐标、从 1 开始的物种编号和致密网格传给
+`half_create_from_escn()`。原子序数由匹配的 POTCAR 自动确定，因此无需修改
+VASP-to-HALF descriptor。HALF 只请求密度，将 API 的 C-order 网格转换为内部
+顺序，并显式归一到 POTCAR 价电子总数。未设置该变量时继续使用原 CHGCAR 构造器。
+该开关目前只改变 HALF 的重构密度；在另行实现 VASP host charge-grid 内存注入前，
+VASP 自己的 `ICHARG=1` 密度仍会读取 CHGCAR。
+
 可复制进合法 VASP 源码树的独立 adapter 位于
 [`examples/vasp/half_vasp_init.F`](../examples/vasp/half_vasp_init.F)。它只包含
 HALF 项目自己的桥接代码，不包含或再分发 VASP 源码。

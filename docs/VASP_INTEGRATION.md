@@ -128,6 +128,22 @@ INIWAV     = 1
 The new flag must suppress only `WFINIT`; it must not suppress the `CHGCAR`
 read or the later `PROALL` and `ORTHCH` calls.
 
+To let HALF obtain its reconstruction density directly from DeePAW-eSCN, set
+the endpoint in the launch environment:
+
+```bash
+export HALF_ESCN_URL=http://127.0.0.1:8265
+```
+
+The adapter then passes its existing lattice, fractional positions, one-based
+type indices, and dense grid to `half_create_from_escn()`. Atomic numbers come
+from the matching POTCAR, so the VASP-to-HALF descriptor does not change. HALF
+requests density only, converts the API's C-order grid, and explicitly
+normalizes it to the POTCAR valence-electron total. If the variable is unset,
+the established CHGCAR constructor remains in use. This switch changes HALF's
+reconstruction density only. VASP still loads CHGCAR for its own `ICHARG=1`
+density until a separate host charge-grid injection is implemented.
+
 The standalone adapter that can be copied into a licensed VASP source tree is
 [`examples/vasp/half_vasp_init.F`](../examples/vasp/half_vasp_init.F). It is
 original HALF bridge code and does not contain or redistribute VASP sources.

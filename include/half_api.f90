@@ -6,11 +6,27 @@ module half_api
   integer(c_int),parameter::HALF_XC_LDA=1,HALF_XC_PBE=2
   integer(c_int),parameter::HALF_BACKEND_AUTO=0,HALF_BACKEND_CPU=1,HALF_BACKEND_CUDA=2
   integer(c_int),parameter::HALF_SOLVER_EVD=1,HALF_SOLVER_EVJ=2
-  integer(c_int),parameter::HALF_CAP_CPU=1,HALF_CAP_CUDA=2,HALF_CAP_MPI=4,HALF_CAP_HDF5=8,HALF_CAP_SPGLIB=16
+  integer(c_int),parameter::HALF_CAP_CPU=1,HALF_CAP_CUDA=2,HALF_CAP_MPI=4,HALF_CAP_HDF5=8,HALF_CAP_SPGLIB=16, &
+    HALF_CAP_ESCN_API=32
+  integer(c_int32_t),parameter::HALF_ESCN_INCLUDE_UNCERTAINTY=1_c_int32_t
+  integer(c_int),parameter::HALF_DENSITY_RAW=0,HALF_DENSITY_NORMALIZE_VALENCE=1
   type,bind(C)::half_request_geometry_v1
     integer(c_int32_t)::struct_size=0,flags=0,nions=0,ntypes=0,grid(3)=0,reserved_i32=0
     real(c_double)::lattice(9)=0.0_c_double
     type(c_ptr)::species=c_null_ptr,positions_fractional=c_null_ptr
+    integer(c_int64_t)::reserved(8)=0_c_int64_t
+  end type
+  type,bind(C)::half_escn_request_v1
+    integer(c_int32_t)::struct_size=0,flags=0,nions=0,grid(3)=0,reserved_i32=0
+    real(c_double)::cell(9)=0.0_c_double
+    type(c_ptr)::atomic_numbers=c_null_ptr,positions_cartesian=c_null_ptr
+    integer(c_int64_t)::reserved(8)=0_c_int64_t
+  end type
+  type,bind(C)::half_escn_result_v1
+    integer(c_int32_t)::struct_size=0,flags=0,grid(3)=0,reserved_i32=0
+    integer(c_int64_t)::capacity=0_c_int64_t
+    type(c_ptr)::density=c_null_ptr,nu=c_null_ptr,alpha=c_null_ptr,beta=c_null_ptr,risk=c_null_ptr
+    real(c_double)::elapsed_seconds=0.0_c_double
     integer(c_int64_t)::reserved(8)=0_c_int64_t
   end type
   interface
@@ -30,6 +46,29 @@ module half_api
     end function
     integer(c_int) function half_get_capabilities()bind(C)
       import::c_int
+    end function
+    integer(c_int) function half_escn_health(base_url,timeout,error,error_capacity)bind(C)
+      import::c_char,c_int
+      character(c_char),intent(in)::base_url(*)
+      integer(c_int),value::timeout,error_capacity
+      character(c_char),intent(out)::error(*)
+    end function
+    integer(c_int) function half_escn_predict(base_url,request,result,timeout,error,error_capacity)bind(C)
+      import::c_char,c_int,c_ptr
+      character(c_char),intent(in)::base_url(*)
+      type(c_ptr),value::request,result
+      integer(c_int),value::timeout,error_capacity
+      character(c_char),intent(out)::error(*)
+    end function
+    integer(c_int) function half_create_from_escn(base_url,potential,geometry,encut,xc,use_uspp,backend,solver, &
+        normalization,timeout,handle,error,error_capacity)bind(C)
+      import::c_char,c_double,c_int,c_int64_t,c_ptr
+      character(c_char),intent(in)::base_url(*),potential(*)
+      type(c_ptr),value::geometry
+      real(c_double),value::encut
+      integer(c_int),value::xc,use_uspp,backend,solver,normalization,timeout,error_capacity
+      integer(c_int64_t),intent(out)::handle
+      character(c_char),intent(out)::error(*)
     end function
     integer(c_int) function half_create_from_files(charge,potential,encut,xc,use_uspp,handle,error,error_capacity)bind(C)
       import::c_char,c_double,c_int,c_int64_t

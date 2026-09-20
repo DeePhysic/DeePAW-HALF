@@ -50,7 +50,7 @@ program half_cli
   case ('help', '--help', '-h')
     if(parallel_root())call print_help(6)
   case ('version', '--version', '-V')
-    if(parallel_root())write(*,'(A)') 'DeePAW-HALF 0.5.0'
+    if(parallel_root())write(*,'(A)') 'DeePAW-HALF 0.6.0'
   case ('gamma', 'validate-gamma')
     if(parallel_root())call command_gamma(argument_offset)
   case ('inspect')
@@ -291,7 +291,7 @@ contains
     n=min(size(eigenvalues),size(reference)); allocate(errors(n))
     if(n>0)errors=eigenvalues(:n)-reference(:n)
     write(unit,'(A)') '{'
-    write(unit,'(A)') '  "implementation": "DeePAW-HALF 0.5.0",'
+    write(unit,'(A)') '  "implementation": "DeePAW-HALF 0.6.0",'
     write(unit,'(A,A,A)') '  "charge": "',trim(charge),'",'
     write(unit,'(A,A,A)') '  "potential": "',trim(potential),'",'
     write(unit,'(A,A,A)') '  "xc": "',trim(xc),'",'
@@ -621,7 +621,7 @@ contains
     logical,intent(in)::use_uspp
     integer,intent(in)::nocc
     integer::ik,ib
-    write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.5.0",'
+    write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.6.0",'
     write(unit,'(A,A,A)')'  "charge": "',trim(charge),'",';write(unit,'(A,A,A)')'  "potential": "',trim(potential),'",'
     write(unit,'(A,A,A)')'  "kpoints_source": "',trim(kfile),'",';write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",'
     write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",';write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",'
@@ -986,7 +986,7 @@ contains
     real(dp),intent(in)::forces(:,:),force_step
     logical,intent(in)::have_paw_atomic,use_uspp,have_forces
     integer::iat
-    write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.5.0",'
+    write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.6.0",'
     write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",';write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",'
     write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",';write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),','
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
@@ -1027,7 +1027,7 @@ contains
 
   subroutine unavailable(name,reason)
     character(len=*),intent(in)::name,reason
-    call fail(trim(name)//' is not available in HALF 0.5.0: '//trim(reason))
+    call fail(trim(name)//' is not available in HALF 0.6.0: '//trim(reason))
   end subroutine
 
   subroutine fail(message)

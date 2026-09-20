@@ -19,6 +19,27 @@ The existing Si case is the first gate. HfO2 is required before declaring
 multi-species support. DeepAW-predicted densities are tested only after the
 reconstructor matches HAPPY on converged VASP densities.
 
+## Si eSCN-to-HALF SCF convergence
+
+A real VASP 6.6.0 SCF comparison on two-atom Si used `EDIFF=1E-4`,
+`LMAXMIX=-1`, `ENCUT=400 eV`, `KSPACING=0.50`, and eight irreducible k
+points. Against the prior 12-iteration CPU SAD baseline, the eSCN-to-HALF path
+converged in 4 electronic iterations, a 66.67% reduction and 3.0x iteration
+speedup. A same-machine SAD rerun took 11 iterations; its final `TOTEN`
+differed from the 4-step eSCN-to-HALF run by `2.42e-6 eV/cell`.
+
+Timing is compared only with VASP's internal `LOOP+` real time, not end-to-end
+wall time. In the same-machine rerun, the 4-step eSCN-to-HALF path used
+0.9251 s of `LOOP+` real time versus 2.4036 s for the 11-step SAD rerun, a
+2.60x SCF-loop speedup. The eSCN smooth grid lacks VASP PAW augmentation data,
+so VASP constructed its initial host charge from the HALF-generated
+wavefunctions. This validates the real
+eSCN-density-to-HALF-orbitals-to-VASP-SCF path, not direct eSCN charge-mixer
+injection. See the
+[`Chinese report`](validation/SI_ESCN_HALF_VS_SAD_EDIFF1E4_LMAXMIXM1.zh-CN.md)
+and
+[`machine-readable record`](validation/si_escn_half_vs_sad_ediff1e4_lmaxmixm1.json).
+
 ## CPU MPI k-point scaling
 
 The optional MPI build was compiled with NVHPC 25.9 and HPC-X Open MPI 4.1.9a1

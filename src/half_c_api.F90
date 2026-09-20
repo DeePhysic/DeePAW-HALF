@@ -1,8 +1,9 @@
 module half_c_api
-  use iso_c_binding,only:c_int,c_int32_t,c_int64_t,c_double,c_double_complex,c_char,c_null_char,c_ptr,c_loc, &
-    c_f_pointer,c_associated,c_sizeof
+  use iso_c_binding,only:c_int,c_int32_t,c_int64_t,c_float,c_double,c_double_complex,c_char,c_null_char,c_ptr,c_loc, &
+    c_f_pointer,c_associated,c_sizeof,c_null_ptr
   use half_kinds,only:dp
-  use half_types,only:plane_wave_basis_t
+  use half_types,only:plane_wave_basis_t,potcar_t
+  use half_potcar,only:read_potcar
   use half_library,only:half_context_t,LIB_SUCCESS=>HALF_SUCCESS,LIB_INVALID=>HALF_ERROR_INVALID_ARGUMENT, &
     HALF_BACKEND_AUTO
   implicit none
@@ -13,13 +14,36 @@ module half_c_api
   type(half_context_t),save::contexts(MAX_CONTEXTS)
   logical,save::used(MAX_CONTEXTS)=.false.
   integer(c_int64_t),save::generation(MAX_CONTEXTS)=0_c_int64_t
-  character(c_char),target,save::version(6)=[character(c_char)::'0','.', '5','.', '0',c_null_char]
+  character(c_char),target,save::version(6)=[character(c_char)::'0','.', '6','.', '0',c_null_char]
   type,bind(C)::half_request_geometry_v1_c
     integer(c_int32_t)::struct_size,flags,nions,ntypes,grid(3),reserved_i32
     real(c_double)::lattice(9)
     type(c_ptr)::species,positions_fractional
     integer(c_int64_t)::reserved(8)
   end type
+  type,bind(C)::half_escn_request_v1_c
+    integer(c_int32_t)::struct_size,flags,nions,grid(3),reserved_i32
+    real(c_double)::cell(9)
+    type(c_ptr)::atomic_numbers,positions_cartesian
+    integer(c_int64_t)::reserved(8)
+  end type
+  type,bind(C)::half_escn_result_v1_c
+    integer(c_int32_t)::struct_size,flags,grid(3),reserved_i32
+    integer(c_int64_t)::capacity
+    type(c_ptr)::density,nu,alpha,beta,risk
+    real(c_double)::elapsed_seconds
+    integer(c_int64_t)::reserved(8)
+  end type
+  interface
+    integer(c_int) function half_escn_predict_c(base_url,request,result,timeout,error,error_capacity) &
+        bind(C,name='half_escn_predict')
+      import::c_char,c_int,c_ptr
+      character(c_char),intent(in)::base_url(*)
+      type(c_ptr),value::request,result
+      integer(c_int),value::timeout,error_capacity
+      character(c_char),intent(out)::error(*)
+    end function
+  end interface
 contains
   integer(c_int) function half_get_abi_version()bind(C,name='half_get_abi_version')
     half_get_abi_version=1
@@ -46,7 +70,139 @@ contains
 #ifdef HALF_HAVE_SPGLIB
     half_get_capabilities=ior(half_get_capabilities,16)
 #endif
+#ifdef HALF_HAVE_ESCN_API
+    half_get_capabilities=ior(half_get_capabilities,32)
+#endif
   end function
+
+  integer(c_int) function half_create_from_escn(endpoint_c,potential_c,geometry_c,encut,xc,use_uspp,backend,solver, &
+      normalization,timeout,handle,error,error_capacity)bind(C,name='half_create_from_escn')
+    character(c_char),intent(in)::endpoint_c(*),potential_c(*)
+    type(c_ptr),value::geometry_c
+    real(c_double),value::encut
+    integer(c_int),value::xc,use_uspp,backend,solver,normalization,timeout,error_capacity
+    integer(c_int64_t),intent(out)::handle
+    character(c_char),intent(out)::error(*)
+    type(half_request_geometry_v1_c),pointer::geometry
+    type(half_request_geometry_v1_c)::geometry_layout
+    type(half_escn_request_v1_c),target::api_request
+    type(half_escn_result_v1_c),target::api_result
+    integer(c_int32_t),pointer::species_c(:)
+    real(c_double),pointer::positions_c(:)
+    integer(c_int32_t),allocatable,target::atomic_numbers(:),species(:)
+    real(c_double),allocatable,target::positions_cartesian(:)
+    real(c_float),allocatable,target::api_density(:)
+    real(dp),allocatable::positions(:,:),density_c(:),density_f(:)
+    type(potcar_t),allocatable::potcars(:)
+    real(dp)::lattice(3,3),target_electrons,model_electrons,scale
+    character(len=:),allocatable::endpoint,potential
+    character(len=512)::message
+    character(len=3)::xc_name,solver_name
+    integer(c_int)::remote_status
+    integer(c_int64_t)::npoints64
+    integer::slot,status,i,j,i1,i2,i3,source,destination,npoints,z
+    handle=0_c_int64_t;call clear_error(error,error_capacity)
+    call import_string(endpoint_c,endpoint);call import_string(potential_c,potential)
+    if(len(endpoint)==0.or.len(potential)==0.or..not.c_associated(geometry_c).or. &
+        (xc/=1.and.xc/=2).or.backend<0.or.backend>2.or.solver<1.or.solver>2.or. &
+        (normalization/=0.and.normalization/=1))then
+      half_create_from_escn=HALF_INVALID_ARGUMENT
+      call export_error('invalid eSCN URL, path, geometry, execution policy, or normalization',error,error_capacity);return
+    end if
+    call c_f_pointer(geometry_c,geometry)
+    if(geometry%struct_size<int(c_sizeof(geometry_layout),c_int32_t).or.geometry%flags/=0.or.geometry%nions<1.or. &
+        geometry%nions>10000.or. &
+        geometry%ntypes<1.or.any(geometry%grid<1).or..not.c_associated(geometry%species).or. &
+        .not.c_associated(geometry%positions_fractional))then
+      half_create_from_escn=HALF_INVALID_ARGUMENT
+      call export_error('invalid request geometry structure',error,error_capacity);return
+    end if
+    npoints64=int(geometry%grid(1),c_int64_t)*int(geometry%grid(2),c_int64_t)*int(geometry%grid(3),c_int64_t)
+    if(npoints64<1_c_int64_t.or.npoints64>2000000_c_int64_t)then
+      half_create_from_escn=HALF_INVALID_ARGUMENT
+      call export_error('eSCN grid must contain at most 2000000 points',error,error_capacity);return
+    end if
+    npoints=int(npoints64)
+    slot=0
+    do i=1,MAX_CONTEXTS;if(.not.used(i))then;slot=i;exit;end if;end do
+    if(slot==0)then
+      half_create_from_escn=HALF_INTERNAL;call export_error('HALF context registry is full',error,error_capacity);return
+    end if
+    call c_f_pointer(geometry%species,species_c,[int(geometry%nions)])
+    call c_f_pointer(geometry%positions_fractional,positions_c,[3*int(geometry%nions)])
+    allocate(species(geometry%nions),positions(geometry%nions,3),atomic_numbers(geometry%nions), &
+      positions_cartesian(3*geometry%nions),api_density(npoints),density_c(npoints),density_f(npoints))
+    species=species_c
+    do i=1,geometry%nions
+      do j=1,3;positions(i,j)=positions_c(3*(i-1)+j);end do
+    end do
+    do i=1,3
+      do j=1,3;lattice(i,j)=geometry%lattice(3*(i-1)+j);end do
+    end do
+    if(any(species<1).or.any(species>geometry%ntypes))then
+      half_create_from_escn=HALF_INVALID_ARGUMENT
+      call export_error('request species indices are outside the POTCAR type range',error,error_capacity);return
+    end if
+    call read_potcar(potential,potcars)
+    if(size(potcars)/=geometry%ntypes)then
+      half_create_from_escn=HALF_INVALID_ARGUMENT
+      call export_error('POTCAR dataset count does not match request type count',error,error_capacity);return
+    end if
+    do i=1,geometry%nions
+      z=element_atomic_number(potcars(species(i))%element)
+      if(z==0)then
+        half_create_from_escn=HALF_INVALID_ARGUMENT
+        call export_error('cannot map a POTCAR element to an atomic number',error,error_capacity);return
+      end if
+      atomic_numbers(i)=z
+      do j=1,3
+        positions_cartesian(3*(i-1)+j)=dot_product(positions(i,:),lattice(:,j))
+      end do
+    end do
+    api_request%struct_size=int(c_sizeof(api_request),c_int32_t);api_request%flags=0_c_int32_t
+    api_request%nions=geometry%nions;api_request%grid=geometry%grid;api_request%reserved_i32=0_c_int32_t
+    do i=1,3
+      do j=1,3;api_request%cell(3*(i-1)+j)=lattice(i,j);end do
+    end do
+    api_request%atomic_numbers=c_loc(atomic_numbers);api_request%positions_cartesian=c_loc(positions_cartesian)
+    api_request%reserved=0_c_int64_t
+    api_result%struct_size=int(c_sizeof(api_result),c_int32_t);api_result%flags=0_c_int32_t
+    api_result%grid=0_c_int32_t;api_result%reserved_i32=0_c_int32_t;api_result%capacity=int(npoints,c_int64_t)
+    api_result%density=c_loc(api_density);api_result%nu=c_null_ptr;api_result%alpha=c_null_ptr
+    api_result%beta=c_null_ptr;api_result%risk=c_null_ptr;api_result%elapsed_seconds=0.0_c_double
+    api_result%reserved=0_c_int64_t
+    remote_status=half_escn_predict_c(endpoint_c,c_loc(api_request),c_loc(api_result),timeout,error,error_capacity)
+    if(remote_status/=HALF_SUCCESS)then;half_create_from_escn=remote_status;return;end if
+    density_c=real(api_density,dp)
+    if(normalization==1)then
+      target_electrons=0.0_dp
+      do i=1,geometry%nions;target_electrons=target_electrons+potcars(species(i))%zval;end do
+      model_electrons=sum(density_c)/real(npoints,dp)
+      if(abs(model_electrons)<=tiny(1.0_dp))then
+        half_create_from_escn=HALF_INVALID_ARGUMENT
+        call export_error('cannot valence-normalize an eSCN density with zero integral',error,error_capacity);return
+      end if
+      scale=target_electrons/model_electrons;density_c=density_c*scale
+    end if
+    do i1=0,geometry%grid(1)-1
+      do i2=0,geometry%grid(2)-1
+        do i3=0,geometry%grid(3)-1
+          source=i1*geometry%grid(2)*geometry%grid(3)+i2*geometry%grid(3)+i3+1
+          destination=i1+geometry%grid(1)*(i2+geometry%grid(2)*i3)+1
+          density_f(destination)=density_c(source)
+        end do
+      end do
+    end do
+    xc_name=merge('pbe','lda',xc==2);solver_name=merge('evj','evd',solver==2)
+    call contexts(slot)%initialize_density(potential,real(encut,dp),xc_name,use_uspp/=0,geometry%nions,geometry%ntypes, &
+      geometry%grid,lattice,species,positions,density_f,status,message,backend,solver_name)
+    if(status/=LIB_SUCCESS)then
+      half_create_from_escn=int(status,c_int);call export_error(trim(message),error,error_capacity);return
+    end if
+    used(slot)=.true.;generation(slot)=generation(slot)+1
+    handle=generation(slot)*int(MAX_CONTEXTS,c_int64_t)+int(slot,c_int64_t)
+    half_create_from_escn=HALF_SUCCESS
+  end function half_create_from_escn
 
   integer(c_int) function half_create_from_files(charge_c,potential_c,encut,xc,use_uspp,handle,error,error_capacity) &
       bind(C,name='half_create_from_files')
@@ -427,6 +583,34 @@ contains
       int(gz,c_int64_t)*83492791_c_int64_t
     position=int(modulo(value,int(table_size,c_int64_t)))+1
   end function
+
+  integer function element_atomic_number(element)result(number)
+    character(len=*),intent(in)::element
+    character(len=3),parameter::symbols(118)=[character(len=3):: &
+      'H','He','Li','Be','B','C','N','O','F','Ne','Na','Mg','Al','Si','P','S','Cl','Ar','K','Ca', &
+      'Sc','Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn','Ga','Ge','As','Se','Br','Kr','Rb','Sr','Y','Zr', &
+      'Nb','Mo','Tc','Ru','Rh','Pd','Ag','Cd','In','Sn','Sb','Te','I','Xe','Cs','Ba','La','Ce','Pr','Nd', &
+      'Pm','Sm','Eu','Gd','Tb','Dy','Ho','Er','Tm','Yb','Lu','Hf','Ta','W','Re','Os','Ir','Pt','Au','Hg', &
+      'Tl','Pb','Bi','Po','At','Rn','Fr','Ra','Ac','Th','Pa','U','Np','Pu','Am','Cm','Bk','Cf','Es','Fm', &
+      'Md','No','Lr','Rf','Db','Sg','Bh','Hs','Mt','Ds','Rg','Cn','Nh','Fl','Mc','Lv','Ts','Og']
+    character(len=16)::wanted
+    integer::i
+    wanted=lower_ascii(adjustl(trim(element)));number=0
+    do i=1,size(symbols)
+      if(trim(wanted)==trim(lower_ascii(symbols(i))))then;number=i;return;end if
+    end do
+  end function element_atomic_number
+
+  pure function lower_ascii(input)result(output)
+    character(len=*),intent(in)::input
+    character(len=len(input))::output
+    integer::i,code
+    output=input
+    do i=1,len(input)
+      code=iachar(input(i:i))
+      if(code>=iachar('A').and.code<=iachar('Z'))output(i:i)=achar(code+32)
+    end do
+  end function lower_ascii
 
   integer function context_slot(handle)result(slot)
     integer(c_int64_t),intent(in)::handle

@@ -18,6 +18,9 @@ def test_expected_project_surface_exists():
         "src/half_parallel.F90",
         "src/half_library.F90",
         "src/half_c_api.F90",
+        "src/half_escn_client.c",
+        "src/half_escn_socket.c",
+        "examples/api/half_escn_example.c",
         "src/half_artifacts.c",
         "include/half.h",
         "include/half_api.f90",
@@ -58,6 +61,9 @@ def test_stable_library_api_and_cli_artifacts_are_exposed():
     assert "half_request_geometry_v1" in header
     assert "half_set_request_geometry" in header
     assert "half_get_request_geometry" in header
+    assert "half_escn_predict" in header
+    assert "half_create_from_escn" in header
+    assert "HALF_CAP_ESCN_API" in header
     assert "EXPORT_NAME half" in cmake
     assert "HALFConfig.cmake" in cmake
     assert "write_bands_artifacts" in cli
@@ -80,6 +86,8 @@ def test_private_vasp_one_click_build_is_wired():
     vasp_main = (ROOT / "vendor" / "vasp-6.6.0" / "src" / "main.F").read_text()
     assert "half_set_request_geometry" in adapter_source
     assert "T_INFO%POSION" in adapter_source
+    assert "HALF_ESCN_URL" in adapter_source
+    assert "half_create_from_escn" in adapter_source
     assert "GRIDC%NGPTAR" in vasp_main
 
 

@@ -17,7 +17,7 @@ cmake --install build --prefix "$HOME/.local"
 Downstream CMake projects use the exported target:
 
 ```cmake
-find_package(HALF 0.5 CONFIG REQUIRED)
+find_package(HALF 0.6 CONFIG REQUIRED)
 target_link_libraries(mycode PRIVATE HALF::half)
 ```
 
@@ -33,7 +33,8 @@ automatically.  CPU-only `libhalf` can be linked by an ordinary C compiler.
 ## Lifecycle and operations
 
 1. Check `half_get_abi_version()` and `half_get_capabilities()`.
-2. Create a context with `half_create_from_files_backend()`.  Select LDA/PBE,
+2. Create a context with `half_create_from_files_backend()` or obtain its
+   density from DeePAW-eSCN with `half_create_from_escn()`. Select LDA/PBE,
    CPU/CUDA/AUTO, EVD/EVJ, ENCUT, and MIMIC_US QDEP at runtime.  The shorter
    `half_create_from_files()` is ABI-compatible shorthand for AUTO + EVD.
 3. A host may attach its already parsed structure with
@@ -55,9 +56,47 @@ Each routine returns a status code and fills a caller-owned error buffer.
 deep-copies every array before returning; the caller may immediately release
 its buffers. `lattice` is row-major as `[lattice_vector][Cartesian_component]`,
 and `positions_fractional` is atom-major. `half_get_request_geometry()` can
-query or copy the retained values. ABI v1 retains this host request metadata
-for the next in-memory DeepAW integration step but deliberately does not use it
-in the present file-backed Hamiltonian path.
+query or copy the retained values. The file-backed path retains this metadata
+for host-side auditing. The eSCN constructor consumes the same structure
+directly.
+
+## DeePAW-eSCN remote density
+
+Version 0.6 adds two levels of remote inference support:
+
+- `half_escn_health()` and `half_escn_predict()` expose the HTTP service
+  directly. The caller supplies atomic numbers, Cartesian positions in
+  Angstrom, row-major cell vectors, and `[nx,ny,nz]`. The result contains the
+  server's C-order float32 density and optionally `nu`, `alpha`, `beta`, and
+  `risk`.
+- `half_create_from_escn()` accepts the existing
+  `half_request_geometry_v1`, derives atomic numbers and valence charge from
+  the matching POTCAR, calls `/v1/predict`, converts C-order data to HALF's
+  CHGCAR-compatible internal order, and creates a normal reusable context.
+
+Use `HALF_DENSITY_NORMALIZE_VALENCE` for the numerical HALF path. It rescales
+the returned grid so its mean equals the sum of POTCAR ZVAL values. Use
+`HALF_DENSITY_RAW` only when the model output is already in the exact
+normalization expected downstream. Neither mode clips negative predictions.
+
+The API capability is reported as `HALF_CAP_ESCN_API`. CMake uses libcurl when
+available; otherwise Unix builds use a dependency-free HTTP transport. The
+built-in transport supports `http://`, which is the expected scheme behind the
+SSH tunnel. HTTPS requires libcurl. Build-time disablement is available through
+`-DHALF_ENABLE_ESCN_API=OFF`.
+
+For the documented server, establish the tunnel first and then run:
+
+```bash
+ssh -N -L 8265:127.0.0.1:8265 cmu-pro6000
+./build/cpu-release/half-escn-example http://127.0.0.1:8265
+```
+
+`half_escn_predict()` enforces the server's 2,000,000-point and 2 MiB request
+limits. The high-level constructor deliberately requests density only because
+uncertainty is not consumed by the Hamiltonian. Applications that need NIG
+fields should call the lower-level function and set
+`HALF_ESCN_INCLUDE_UNCERTAINTY`.
 
 In a CUDA build, AUTO selects CUDA.  `half_solve_kpoint()` runs potential
 construction, MIMIC_US/QDEP, dense H/S assembly, and the generalized
@@ -88,7 +127,12 @@ structure, POTCAR, ENCUT, XC, or backend changes.  MPI processes should own
 separate contexts; k-point distribution remains the caller's responsibility.
 Do not invoke two mutating operations concurrently on the same context.
 
-The current file constructor consumes CHGCAR/vaspwave.h5 plus POTCAR (or the
-POTCAR embedded in vaspwave.h5).  This keeps the first VASP adapter small and
-auditable.  New constructors can be added without changing existing symbols;
-the reserved opaque context and ABI-version query are the extension boundary.
+The file constructor consumes CHGCAR/vaspwave.h5 plus POTCAR (or the POTCAR
+embedded in vaspwave.h5). The remote constructor consumes the existing VASP
+geometry descriptor plus POTCAR; no `vasp2half` structure change is required.
+The VASP adapter selects it when `HALF_ESCN_URL` is set, for example
+`HALF_ESCN_URL=http://127.0.0.1:8265`. Without that environment variable it
+keeps the established CHGCAR path. In the current VASP integration this selects
+the density used inside HALF to reconstruct the initial waves; VASP still reads
+CHGCAR for its own `ICHARG=1` host density. Replacing that second copy requires
+a separate VASP charge-grid injection and is not hidden in this constructor.

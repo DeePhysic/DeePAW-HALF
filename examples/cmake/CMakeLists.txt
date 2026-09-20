@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(HALFDownstreamExample LANGUAGES C Fortran)
 
-find_package(HALF 0.5 CONFIG REQUIRED)
+find_package(HALF 0.6 CONFIG REQUIRED)
 add_executable(half-downstream ../api/half_c_example.c)
 target_link_libraries(half-downstream PRIVATE HALF::half)
 if(HALF_WITH_CUDA)

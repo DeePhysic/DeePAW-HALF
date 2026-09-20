@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(HALF VERSION 0.5.0 LANGUAGES Fortran C)
+project(HALF VERSION 0.6.0 LANGUAGES Fortran C)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -12,6 +12,7 @@ option(HALF_ENABLE_MPI "Distribute CPU k points across MPI ranks" OFF)
 option(HALF_BUILD_SHARED_LIBRARY "Build the reusable libhalf shared library" ON)
 option(HALF_BUILD_EXAMPLES "Build libhalf API examples" ON)
 option(HALF_BUILD_VASP "Build the bundled private VASP 6.6.0 integration" OFF)
+option(HALF_ENABLE_ESCN_API "Enable the DeePAW-eSCN HTTP inference client" ON)
 set(HALF_GPU_CC "86" CACHE STRING "NVIDIA GPU compute capability, without the decimal point")
 set(HALF_CUDA_VERSION "12.4" CACHE STRING "CUDA toolkit selected by NVHPC")
 
@@ -59,6 +60,12 @@ set(HALF_CORE_SOURCES
   src/half_c_api.F90
   src/half_cpu.F90
 )
+if(HALF_HAVE_ESCN_SOCKET)
+  list(APPEND HALF_CORE_SOURCES src/half_escn_socket.c)
+else()
+  # libcurl implementation when available; otherwise ABI-compatible stubs.
+  list(APPEND HALF_CORE_SOURCES src/half_escn_client.c)
+endif()
 if(HALF_HAVE_MKL)
   list(APPEND HALF_CORE_SOURCES
     src/half_fft.F90 src/half_uspp.F90 src/half_xc.F90
@@ -97,6 +104,13 @@ set_target_properties(half_core PROPERTIES
 target_include_directories(half_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+if(HALF_HAVE_CURL)
+  target_compile_definitions(half_core PRIVATE HALF_HAVE_ESCN_API=1)
+  target_compile_definitions(half_core PRIVATE HALF_HAVE_CURL=1)
+  target_link_libraries(half_core PUBLIC CURL::libcurl)
+elseif(HALF_HAVE_ESCN_SOCKET)
+  target_compile_definitions(half_core PRIVATE HALF_HAVE_ESCN_API=1 HALF_HAVE_ESCN_SOCKET=1)
+endif()
 if(HALF_HAVE_MPI)
   target_compile_definitions(half_core PRIVATE HALF_HAVE_MPI=1)
   # Conda HDF5 prefixes can also contain an mpi_f08.mod built by another
@@ -281,17 +295,34 @@ if(BUILD_TESTING)
     target_link_options(half-c-api-check PRIVATE -Mnomain -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC})
   endif()
   add_test(NAME half_c_api COMMAND half-c-api-check)
+  if(HALF_HAVE_ESCN_API AND UNIX)
+    add_executable(half-escn-api-check tests/test_escn_client.c)
+    target_link_libraries(half-escn-api-check PRIVATE half_core)
+    if(HALF_ENABLE_CUDA)
+      set_target_properties(half-escn-api-check PROPERTIES LINKER_LANGUAGE Fortran)
+      target_link_options(half-escn-api-check PRIVATE -Mnomain -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC})
+    endif()
+    add_test(NAME half_escn_api COMMAND half-escn-api-check)
+  endif()
 endif()
 if(HALF_BUILD_EXAMPLES)
   add_executable(half-c-example examples/api/half_c_example.c)
   target_link_libraries(half-c-example PRIVATE half_core)
   add_executable(half-mapped-example examples/api/half_mapped_example.c)
   target_link_libraries(half-mapped-example PRIVATE half_core)
+  if(HALF_HAVE_ESCN_API)
+    add_executable(half-escn-example examples/api/half_escn_example.c)
+    target_link_libraries(half-escn-example PRIVATE half_core)
+  endif()
   if(HALF_ENABLE_CUDA)
     set_target_properties(half-c-example PROPERTIES LINKER_LANGUAGE Fortran)
     target_link_options(half-c-example PRIVATE -Mnomain -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC})
     set_target_properties(half-mapped-example PROPERTIES LINKER_LANGUAGE Fortran)
     target_link_options(half-mapped-example PRIVATE -Mnomain -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC})
+    if(TARGET half-escn-example)
+      set_target_properties(half-escn-example PROPERTIES LINKER_LANGUAGE Fortran)
+      target_link_options(half-escn-example PRIVATE -Mnomain -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC})
+    endif()
   endif()
 endif()
 

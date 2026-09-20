@@ -10,7 +10,7 @@ extern "C" {
 
 #define HALF_ABI_VERSION 1
 #define HALF_VERSION_MAJOR 0
-#define HALF_VERSION_MINOR 5
+#define HALF_VERSION_MINOR 6
 #define HALF_VERSION_PATCH 0
 
 enum half_status {
@@ -32,14 +32,21 @@ enum half_capability {
   HALF_CAP_CUDA = 1 << 1,
   HALF_CAP_MPI = 1 << 2,
   HALF_CAP_HDF5 = 1 << 3,
-  HALF_CAP_SPGLIB = 1 << 4
+  HALF_CAP_SPGLIB = 1 << 4,
+  HALF_CAP_ESCN_API = 1 << 5
+};
+
+enum half_escn_flag { HALF_ESCN_INCLUDE_UNCERTAINTY = 1 << 0 };
+enum half_density_normalization {
+  HALF_DENSITY_RAW = 0,
+  HALF_DENSITY_NORMALIZE_VALENCE = 1
 };
 
 typedef int64_t half_handle;
 
-/* VASP-to-HALF request metadata.  ABI v1 stores a deep copy in the context;
- * the current numerical path intentionally continues to use the file input.
- * lattice is row-major, positions_fractional is atom-major [nions][3], and
+/* VASP-to-HALF request metadata. ABI v1 stores a deep copy in the context and
+ * is also the input geometry for half_create_from_escn(). lattice is
+ * row-major, positions_fractional is atom-major [nions][3], and
  * species contains one-based type indices. Set struct_size to sizeof this
  * structure, set flags to zero, and zero every reserved field. */
 typedef struct half_request_geometry_v1 {
@@ -55,9 +62,50 @@ typedef struct half_request_geometry_v1 {
   uint64_t reserved[8];
 } half_request_geometry_v1;
 
+/* Direct DeePAW-eSCN wire request. Cell vectors and Cartesian positions are
+ * in angstrom and stored row-major/atom-major. The API is three-dimensionally
+ * periodic, so pbc is intentionally not configurable here. */
+typedef struct half_escn_request_v1 {
+  uint32_t struct_size;
+  uint32_t flags;
+  int32_t nions;
+  int32_t grid[3];
+  int32_t reserved_i32;
+  double cell[9];
+  const int32_t *atomic_numbers;
+  const double *positions_cartesian;
+  uint64_t reserved[8];
+} half_escn_request_v1;
+
+/* Caller-owned output buffers. capacity is measured in float elements and
+ * must be at least grid[0]*grid[1]*grid[2]. Uncertainty pointers may be null
+ * unless HALF_ESCN_INCLUDE_UNCERTAINTY was requested. Returned arrays retain
+ * the server's C-order [nx,ny,nz] layout. */
+typedef struct half_escn_result_v1 {
+  uint32_t struct_size;
+  uint32_t flags;
+  int32_t grid[3];
+  int32_t reserved_i32;
+  int64_t capacity;
+  float *density;
+  float *nu;
+  float *alpha;
+  float *beta;
+  float *risk;
+  double elapsed_seconds;
+  uint64_t reserved[8];
+} half_escn_result_v1;
+
 int half_get_abi_version(void);
 const char *half_get_version_string(void);
 int half_get_capabilities(void);
+
+int half_escn_health(const char *base_url, int timeout_seconds,
+                     char *error, int error_capacity);
+int half_escn_predict(const char *base_url,
+                      const half_escn_request_v1 *request,
+                      half_escn_result_v1 *result, int timeout_seconds,
+                      char *error, int error_capacity);
 
 int half_create_from_files(const char *charge_path, const char *potential_path,
                            double encut_eV, int xc, int use_uspp_dij,
@@ -69,6 +117,16 @@ int half_create_from_files_backend(const char *charge_path,
                                    double encut_eV, int xc, int use_uspp_dij,
                                    int backend, int solver, half_handle *handle,
                                    char *error, int error_capacity);
+/* Obtain the smooth density from DeePAW-eSCN and create a normal HALF context.
+ * geometry uses fractional positions and one-based POTCAR type indices. RAW
+ * preserves the model output; NORMALIZE_VALENCE rescales its mean to the sum
+ * of POTCAR ZVAL values. Negative values are never clipped. */
+int half_create_from_escn(const char *base_url, const char *potential_path,
+                          const half_request_geometry_v1 *geometry,
+                          double encut_eV, int xc, int use_uspp_dij,
+                          int backend, int solver, int normalization,
+                          int timeout_seconds, half_handle *handle,
+                          char *error, int error_capacity);
 int half_destroy(half_handle handle, char *error, int error_capacity);
 
 int half_set_request_geometry(half_handle handle,

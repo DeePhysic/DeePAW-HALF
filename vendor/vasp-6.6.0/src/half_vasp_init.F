@@ -8,7 +8,8 @@ MODULE half_vasp_init
   USE mpimy
   USE tutor, ONLY: vtutor
   IMPLICIT NONE
-  INTEGER(c_int),PARAMETER::HALF_SUCCESS=0,HALF_XC_PBE=2,HALF_BACKEND_AUTO=0,HALF_SOLVER_EVD=1
+  INTEGER(c_int),PARAMETER::HALF_SUCCESS=0,HALF_XC_PBE=2,HALF_BACKEND_AUTO=0,HALF_SOLVER_EVD=1, &
+    HALF_DENSITY_NORMALIZE_VALENCE=1
   TYPE,BIND(C)::half_request_geometry_v1
     INTEGER(c_int32_t)::struct_size,flags,nions,ntypes,grid(3),reserved_i32
     REAL(c_double)::lattice(9)
@@ -22,6 +23,16 @@ MODULE half_vasp_init
       CHARACTER(c_char),INTENT(IN)::charge(*),potential(*)
       REAL(c_double),VALUE::encut
       INTEGER(c_int),VALUE::xc,use_uspp,backend,solver,error_capacity
+      INTEGER(c_int64_t),INTENT(OUT)::handle
+      CHARACTER(c_char),INTENT(OUT)::error(*)
+    END FUNCTION
+    INTEGER(c_int) FUNCTION half_create_from_escn(endpoint,potential,geometry,encut,xc,use_uspp,backend,solver,normalization,timeout, &
+        handle,error,error_capacity) BIND(C,NAME='half_create_from_escn')
+      IMPORT::c_char,c_double,c_int,c_int64_t,c_ptr
+      CHARACTER(c_char),INTENT(IN)::endpoint(*),potential(*)
+      TYPE(c_ptr),VALUE::geometry
+      REAL(c_double),VALUE::encut
+      INTEGER(c_int),VALUE::xc,use_uspp,backend,solver,normalization,timeout,error_capacity
       INTEGER(c_int64_t),INTENT(OUT)::handle
       CHARACTER(c_char),INTENT(OUT)::error(*)
     END FUNCTION
@@ -64,7 +75,7 @@ CONTAINS
     TYPE(wavedes1)::WDES1
     INTEGER(c_int64_t)::HANDLE
     INTEGER(c_int)::STATUS
-    INTEGER::NK,NB,I,J,NC,IND,SERIAL,NPL_TOT,ROOT
+    INTEGER::NK,NB,I,J,NC,IND,SERIAL,NPL_TOT,ROOT,ENDPOINT_LENGTH,ENV_STATUS
     INTEGER,ALLOCATABLE::GVEC_WORK(:)
     INTEGER(c_int32_t),ALLOCATABLE,TARGET::HOST_GVEC(:)
     INTEGER(c_int32_t),ALLOCATABLE,TARGET::REQUEST_SPECIES(:)
@@ -73,8 +84,9 @@ CONTAINS
     COMPLEX(c_double_complex),ALLOCATABLE,TARGET::VECTORS(:,:)
     REAL(c_double)::KPOINT(3),SMIN,SMAX
     TYPE(half_request_geometry_v1),TARGET::REQUEST
-    CHARACTER(c_char),ALLOCATABLE::CHARGE_C(:),POTENTIAL_C(:)
+    CHARACTER(c_char),ALLOCATABLE::CHARGE_C(:),POTENTIAL_C(:),ENDPOINT_C(:)
     CHARACTER(c_char)::ERROR_C(512)
+    CHARACTER(LEN=1024)::ENDPOINT
 
     IF (WDES%ISPIN/=1 .OR. WDES%NRSPINORS/=1 .OR. WDES%LNONCOLLINEAR .OR. WDES%LSORBIT) &
       CALL vtutor%error("LHALF_INIT currently supports only collinear ISPIN=1 without SOC")
@@ -86,31 +98,40 @@ CONTAINS
     ERROR_C=c_null_char
     CALL MAKE_C_STRING(TRIM(CHARGE_PATH),CHARGE_C)
     CALL MAKE_C_STRING(TRIM(POTENTIAL_PATH),POTENTIAL_C)
+    ENDPOINT=' ';ENDPOINT_LENGTH=0;ENV_STATUS=0
+    CALL GET_ENVIRONMENT_VARIABLE('HALF_ESCN_URL',ENDPOINT,LENGTH=ENDPOINT_LENGTH,STATUS=ENV_STATUS)
+    IF (ENV_STATUS==-1) CALL vtutor%error("HALF_ESCN_URL exceeds 1024 characters")
     STATUS=HALF_SUCCESS
     IF (WDES%COMM%NODE_ME==ROOT) THEN
-      STATUS=half_create_from_files_backend(CHARGE_C,POTENTIAL_C,REAL(ENCUT,c_double),HALF_XC_PBE,1_c_int, &
-        HALF_BACKEND_AUTO,HALF_SOLVER_EVD,HANDLE,ERROR_C,INT(SIZE(ERROR_C),c_int))
-      IF (STATUS/=HALF_SUCCESS .AND. IU0>=0) WRITE(IU0,'(A)') 'HALF: '//TRIM(C_ERROR_STRING(ERROR_C))
-      IF (STATUS==HALF_SUCCESS) THEN
-        ALLOCATE(REQUEST_SPECIES(T_INFO%NIONS),REQUEST_POSITIONS(3*T_INFO%NIONS))
-        REQUEST%struct_size=INT(c_sizeof(REQUEST),c_int32_t);REQUEST%flags=0_c_int32_t
-        REQUEST%nions=INT(T_INFO%NIONS,c_int32_t);REQUEST%ntypes=INT(T_INFO%NTYP,c_int32_t)
-        REQUEST%grid=INT(NGRID,c_int32_t);REQUEST%reserved_i32=0_c_int32_t
-        REQUEST%lattice=0.0_c_double;REQUEST%reserved=0_c_int64_t
-        DO I=1,3
-          DO J=1,3;REQUEST%lattice(3*(I-1)+J)=REAL(LATT_CUR%A(J,I),c_double);ENDDO
-        ENDDO
-        DO I=1,T_INFO%NIONS
-          REQUEST_SPECIES(I)=INT(T_INFO%ITYP(I),c_int32_t)
-          DO J=1,3;REQUEST_POSITIONS(3*(I-1)+J)=REAL(T_INFO%POSION(J,I),c_double);ENDDO
-        ENDDO
-        REQUEST%species=c_loc(REQUEST_SPECIES);REQUEST%positions_fractional=c_loc(REQUEST_POSITIONS)
+      ALLOCATE(REQUEST_SPECIES(T_INFO%NIONS),REQUEST_POSITIONS(3*T_INFO%NIONS))
+      REQUEST%struct_size=INT(c_sizeof(REQUEST),c_int32_t);REQUEST%flags=0_c_int32_t
+      REQUEST%nions=INT(T_INFO%NIONS,c_int32_t);REQUEST%ntypes=INT(T_INFO%NTYP,c_int32_t)
+      REQUEST%grid=INT(NGRID,c_int32_t);REQUEST%reserved_i32=0_c_int32_t
+      REQUEST%lattice=0.0_c_double;REQUEST%reserved=0_c_int64_t
+      DO I=1,3
+        DO J=1,3;REQUEST%lattice(3*(I-1)+J)=REAL(LATT_CUR%A(J,I),c_double);ENDDO
+      ENDDO
+      DO I=1,T_INFO%NIONS
+        REQUEST_SPECIES(I)=INT(T_INFO%ITYP(I),c_int32_t)
+        DO J=1,3;REQUEST_POSITIONS(3*(I-1)+J)=REAL(T_INFO%POSION(J,I),c_double);ENDDO
+      ENDDO
+      REQUEST%species=c_loc(REQUEST_SPECIES);REQUEST%positions_fractional=c_loc(REQUEST_POSITIONS)
+      IF (ENV_STATUS==0 .AND. ENDPOINT_LENGTH>0) THEN
+        CALL MAKE_C_STRING(ENDPOINT(:ENDPOINT_LENGTH),ENDPOINT_C)
+        STATUS=half_create_from_escn(ENDPOINT_C,POTENTIAL_C,c_loc(REQUEST),REAL(ENCUT,c_double),HALF_XC_PBE,1_c_int, &
+          HALF_BACKEND_AUTO,HALF_SOLVER_EVD,HALF_DENSITY_NORMALIZE_VALENCE,600_c_int,HANDLE,ERROR_C,INT(SIZE(ERROR_C),c_int))
+        IF (STATUS==HALF_SUCCESS .AND. IU0>=0) WRITE(IU0,'(A,A)') 'HALF density source: DeePAW-eSCN ',TRIM(ENDPOINT(:ENDPOINT_LENGTH))
+        DEALLOCATE(ENDPOINT_C)
+      ELSE
+        STATUS=half_create_from_files_backend(CHARGE_C,POTENTIAL_C,REAL(ENCUT,c_double),HALF_XC_PBE,1_c_int, &
+          HALF_BACKEND_AUTO,HALF_SOLVER_EVD,HANDLE,ERROR_C,INT(SIZE(ERROR_C),c_int))
+        IF (STATUS==HALF_SUCCESS) &
         STATUS=half_set_request_geometry(HANDLE,c_loc(REQUEST),ERROR_C,INT(SIZE(ERROR_C),c_int))
-        IF (STATUS==HALF_SUCCESS .AND. IU0>=0) WRITE(IU0,'(A,I0,A,I0,A,3(I0,1X))') &
-          'HALF retained VASP host system: ',T_INFO%NIONS,' ions, ',T_INFO%NTYP,' types, grid ',NGRID
-        IF (STATUS/=HALF_SUCCESS .AND. IU0>=0) WRITE(IU0,'(A)') 'HALF: '//TRIM(C_ERROR_STRING(ERROR_C))
-        DEALLOCATE(REQUEST_POSITIONS,REQUEST_SPECIES)
       ENDIF
+      IF (STATUS==HALF_SUCCESS .AND. IU0>=0) WRITE(IU0,'(A,I0,A,I0,A,3(I0,1X))') &
+        'HALF retained VASP host system: ',T_INFO%NIONS,' ions, ',T_INFO%NTYP,' types, grid ',NGRID
+      IF (STATUS/=HALF_SUCCESS .AND. IU0>=0) WRITE(IU0,'(A)') 'HALF: '//TRIM(C_ERROR_STRING(ERROR_C))
+      DEALLOCATE(REQUEST_POSITIONS,REQUEST_SPECIES)
     ENDIF
     CALLMPI(M_bcast_i(WDES%COMM,STATUS,1))
     IF (STATUS/=HALF_SUCCESS) CALL vtutor%error("DeePAW-HALF context creation failed on the root rank")

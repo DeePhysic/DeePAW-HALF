@@ -17,7 +17,7 @@ the port is developed.
 
 ## Current milestone
 
-Version 0.5 provides a numerically closed fixed-density path plus a reusable
+Version 0.6 provides a numerically closed fixed-density path plus a reusable
 library interface:
 
 - VASP CHGCAR structure and smooth-grid reader that stops after exactly
@@ -302,8 +302,10 @@ EVD/EVJ are selected when the context is created.
 
 The VASP adapter also transfers its lattice, fractional positions, species
 indices, and dense charge-grid dimensions directly into HALF memory. HALF
-deep-copies and retains this request metadata; the current solver does not yet
-consume it, leaving a stable handoff point for the next direct DeepAW API step.
+deep-copies this request metadata. It can now use the same descriptor to call a
+DeePAW-eSCN endpoint, translate its C-order float32 grid, apply explicit POTCAR
+valence normalization, and construct the HALF context without changing the
+VASP-to-HALF structure ABI. Set `HALF_ESCN_URL` to select this path.
 
 See [the API guide](docs/API.md), the
 [tested VASP 6.6.0 integration](docs/VASP_INTEGRATION.md), the standalone

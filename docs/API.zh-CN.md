@@ -15,7 +15,7 @@ cmake --install build --prefix "$HOME/.local"
 下游 CMake 工程直接使用导出目标：
 
 ```cmake
-find_package(HALF 0.5 CONFIG REQUIRED)
+find_package(HALF 0.6 CONFIG REQUIRED)
 target_link_libraries(mycode PRIVATE HALF::half)
 ```
 
@@ -31,7 +31,8 @@ C 编译器链接。
 ## 生命周期和三层接口
 
 1. 用 `half_get_abi_version()`、`half_get_capabilities()` 检查 ABI 和能力。
-2. 用 `half_create_from_files_backend()` 创建 context；运行时可选 LDA/PBE、
+2. 用 `half_create_from_files_backend()` 创建文件 context，或用
+   `half_create_from_escn()` 从 DeePAW-eSCN 获取密度；运行时可选 LDA/PBE、
    CPU/CUDA/AUTO、EVD/EVJ、ENCUT 及 MIMIC_US QDEP。简化函数
    `half_create_from_files()` 等价于 AUTO + EVD，并保持 ABI 稳定。
 3. 宿主程序可用 `half_set_request_geometry()` 附加内存中已经解析好的晶格、
@@ -49,9 +50,39 @@ C 编译器链接。
 `half_set_request_geometry()` 接收 `half_request_geometry_v1` 描述符，并在返回前
 深拷贝所有数组，调用方随后即可释放原缓冲区。`lattice` 采用“晶格矢量、笛卡尔
 分量”的行主序，`positions_fractional` 采用逐原子布局。调用
-`half_get_request_geometry()` 可查询或复制保存的值。ABI v1 先保存这份宿主请求
-元数据，为下一步 HALF 直接调用 DeepAW 内存 API 做准备；目前文件输入的数值路径
-故意不使用这些值。
+`half_get_request_geometry()` 可查询或复制保存的值。文件路径会保留这份元数据用于
+审计；eSCN 构造器则直接使用同一个结构。
+
+## DeePAW-eSCN 远程密度
+
+0.6 版提供两层远程推理接口：
+
+- `half_escn_health()` 和 `half_escn_predict()` 直接封装 HTTP 服务。调用方传入
+  原子序数、Å 单位笛卡尔坐标、行主序晶胞和 `[nx,ny,nz]`；返回服务器原始 C-order
+  float32 密度，并可选返回 `nu`、`alpha`、`beta`、`risk`。
+- `half_create_from_escn()` 接收现有 `half_request_geometry_v1`，从匹配 POTCAR
+  自动得到原子序数和价电子数，调用 `/v1/predict`，把 C-order 网格转换成 HALF
+  内部兼容 CHGCAR 的顺序，并创建可直接求解的普通 context。
+
+HALF 数值路径应选择 `HALF_DENSITY_NORMALIZE_VALENCE`，它把预测网格均值显式
+归一到 POTCAR ZVAL 总和。只有模型输出已经满足下游约定时才使用
+`HALF_DENSITY_RAW`。两种模式都不会截断负密度。
+
+`HALF_CAP_ESCN_API` 表示该能力可用。CMake 优先使用 libcurl；Unix 环境没有
+libcurl 开发包时，会自动采用无外部依赖的 HTTP transport。内置 transport 支持
+SSH 隧道所需的 `http://`，HTTPS 需要 libcurl。可用
+`-DHALF_ENABLE_ESCN_API=OFF` 显式关闭。
+
+按服务文档建立隧道后可直接验证：
+
+```bash
+ssh -N -L 8265:127.0.0.1:8265 cmu-pro6000
+./build/cpu-release/half-escn-example http://127.0.0.1:8265
+```
+
+`half_escn_predict()` 会检查 2,000,000 网格点和 2 MiB 请求限制。高层构造器只
+请求密度，因为 HALF Hamiltonian 当前不消费不确定性；需要 NIG 数组的程序应调用
+低层函数并设置 `HALF_ESCN_INCLUDE_UNCERTAINTY`。
 
 CUDA 构建中 AUTO 选择 CUDA；`half_solve_kpoint()` 的势构造、MIMIC_US/QDEP、
 H/S 组装和广义本征求解全部在 GPU 上执行，只把请求的本征对传回。ABI v1 的
@@ -76,6 +107,10 @@ HALF。对每个 VASP k 点，先查询 `npw` 与 G 向量映射，只做一次�
 销毁并重建。每个 MPI 进程使用独立 context，k 点分发仍由调用软件负责；同一个
 context 不应被两个线程并发执行可变操作。
 
-当前文件构造器读取 CHGCAR/vaspwave.h5 与 POTCAR（也可用 vaspwave.h5 内嵌的
-POTCAR），因此首个 VASP adapter 很小且易审计。后续可增加内存构造器而不改变
-已有符号；不透明 context 与 ABI 查询就是扩展边界。
+文件构造器读取 CHGCAR/vaspwave.h5 与 POTCAR（也可用 vaspwave.h5 内嵌的
+POTCAR）。远程构造器使用现有 VASP geometry descriptor 与 POTCAR，不需要修改
+`vasp2half` 结构。VASP adapter 在设置 `HALF_ESCN_URL` 时使用远程路径，例如
+`HALF_ESCN_URL=http://127.0.0.1:8265`；未设置时继续使用原 CHGCAR 路径。当前
+VASP 集成中，这只切换 HALF 内部用于重构初始波函数的密度；VASP 自己的
+`ICHARG=1` host density 仍从 CHGCAR 读取。后者若也要取消文件输入，需要另做
+VASP charge-grid 内存注入，不能隐含在此构造器中。

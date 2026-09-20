@@ -1,0 +1,95 @@
+{
+  "date": "2026-09-20",
+  "host": "hpc.icqms.group:2222 (BH000)",
+  "gpu": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+  "driver": "595.84",
+  "vasp": "6.6.0 full-complex vasp_std",
+  "system": {
+    "formula": "Si",
+    "nions": 2,
+    "nelect": 8.0,
+    "nbands": 8,
+    "fft_grid": [28, 28, 28],
+    "dense_charge_grid": [56, 56, 56]
+  },
+  "shared_incar": {
+    "ENCUT": 400,
+    "PREC": "Accurate",
+    "ISPIN": 1,
+    "ISYM": 2,
+    "KSPACING": 0.5,
+    "KGAMMA": true,
+    "ALGO": "All",
+    "EDIFF": 0.0001,
+    "LMAXMIX": -1,
+    "NELM": 80,
+    "NELMDL": 0,
+    "LREAL": false,
+    "NSW": 0,
+    "IBRION": -1,
+    "ISTART": 0,
+    "INIWAV": 1
+  },
+  "derived": {
+    "irreducible_kpoints": 8,
+    "plane_wave_min": 724,
+    "plane_wave_max": 754
+  },
+  "checksums_sha256": {
+    "POSCAR": "6620406c7cdc003d66b84f015218c772b4f5fe8a89a04169ce7106a44055c34f",
+    "POTCAR": "2a6df1c19701e5d97aaa59e5470b14653ddbd76935b76dacdd8792eb2eba252c",
+    "ESCN_CHGCAR": "27a3aaf96942230b84be66f5c471dad226be785c4248c29f6c6ba248e8e87eb8"
+  },
+  "escn_density": {
+    "endpoint": "http://127.0.0.1:8265",
+    "grid": [56, 56, 56],
+    "raw_mean": 0.19823028986845967,
+    "normalization_scale": 40.357101860208076,
+    "normalized_electron_count": 8.0,
+    "minimum": -7.4365247599,
+    "maximum": 23.322736898,
+    "generation_seconds": 9.1035
+  },
+  "escn_half": {
+    "LHALF_INIT": true,
+    "ICHARG": 1,
+    "electronic_iterations": 4,
+    "loop_plus_cpu_seconds": 34.5697,
+    "loop_plus_real_seconds": 0.9251,
+    "toten_eV": -10.66016883,
+    "last_electronic_energy_eV": -10.6601688274,
+    "last_delta_eV": -0.000018209,
+    "last_rms": 0.00000771
+  },
+  "sad": {
+    "LHALF_INIT": false,
+    "ICHARG": 2,
+    "electronic_iterations": 11,
+    "loop_plus_cpu_seconds": 171.0201,
+    "loop_plus_real_seconds": 2.4036,
+    "toten_eV": -10.66017125,
+    "last_electronic_energy_eV": -10.6601712519,
+    "last_delta_eV": -0.000014656,
+    "last_rms": 0.00000252
+  },
+  "comparison": {
+    "headline_cpu_sad_iterations": 12,
+    "headline_escn_half_iterations": 4,
+    "headline_iteration_reduction_percent": 66.6666666667,
+    "headline_iteration_speedup": 3.0,
+    "current_rerun_sad_iterations": 11,
+    "current_rerun_iteration_reduction_percent": 63.6363636364,
+    "current_rerun_iteration_speedup": 2.75,
+    "current_rerun_loop_plus_real_speedup": 2.5982055994,
+    "current_rerun_loop_plus_real_reduction_percent": 61.5118988184,
+    "absolute_toten_difference_eV": 0.00000242,
+    "absolute_last_electronic_energy_difference_eV": 0.0000024245
+  },
+  "limitations": [
+    "The headline 12-to-4 iteration comparison uses the prior CPU SAD baseline requested by the user; the same-machine SAD rerun recorded in this file took 11 iterations.",
+    "There is one timing sample per path.",
+    "The eSCN smooth density has no VASP PAW augmentation block. VASP reports an incomplete CHGCAR and constructs its initial host charge from the HALF-generated wavefunctions.",
+    "This test validates real SCF convergence from eSCN-to-HALF orbitals; it does not validate direct injection of the eSCN grid into VASP's charge mixer.",
+    "Timing comparisons use VASP LOOP+ real time only; endpoint-to-endpoint wall time is intentionally not compared because it is device and workflow dependent."
+  ]
+}

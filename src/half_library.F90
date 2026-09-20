@@ -1,4 +1,5 @@
 module half_library
+  use, intrinsic::ieee_arithmetic,only:ieee_is_finite
   use half_kinds,only:dp,i32
   use half_types,only:crystal_t,charge_grid_t,plane_wave_basis_t,potcar_t
   use half_chgcar,only:read_chgcar
@@ -38,6 +39,7 @@ module half_library
     logical::use_pbe=.true.,use_uspp=.true.,ready=.false.
   contains
     procedure::initialize_files=>context_initialize_files
+    procedure::initialize_density=>context_initialize_density
     procedure::clear=>context_clear
     procedure::make_basis=>context_make_basis
     procedure::set_request_geometry=>context_set_request_geometry
@@ -106,6 +108,105 @@ contains
     end if
     self%ready=.true.
   end subroutine
+
+  subroutine context_initialize_density(self,potential_path,encut,xc,use_uspp,nions,ntypes,grid,lattice, &
+      species,positions,density,status,message,backend,solver)
+    class(half_context_t),intent(inout)::self
+    character(len=*),intent(in)::potential_path,xc
+    character(len=*),intent(in),optional::solver
+    real(dp),intent(in)::encut,lattice(3,3),positions(:,:),density(:)
+    integer(i32),intent(in)::nions,ntypes,grid(3),species(:)
+    logical,intent(in)::use_uspp
+    integer,intent(out)::status
+    integer,intent(in),optional::backend
+    character(len=*),intent(out)::message
+    logical::exists
+    integer::it,ion,next
+    call self%clear();status=HALF_SUCCESS;message=''
+    if(encut<=0.0_dp.or..not.ieee_is_finite(encut))then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='ENCUT must be positive and finite';return
+    end if
+    if(trim(xc)/='lda'.and.trim(xc)/='pbe')then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='XC must be lda or pbe';return
+    end if
+    if(nions<1.or.ntypes<1.or.any(grid<1).or.size(species)/=nions.or.size(positions,1)/=nions.or. &
+        size(positions,2)/=3.or.size(density)/=product(grid))then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='invalid in-memory density dimensions';return
+    end if
+    if(any(species<1).or.any(species>ntypes).or.any(.not.ieee_is_finite(lattice)).or. &
+        any(.not.ieee_is_finite(positions)).or.any(.not.ieee_is_finite(density)))then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='invalid in-memory geometry or density values';return
+    end if
+    if(abs(determinant3(lattice))<1.0e-12_dp)then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='density lattice is singular';return
+    end if
+    inquire(file=trim(potential_path),exist=exists)
+    if(.not.exists)then;status=HALF_ERROR_IO;message='potential input does not exist';return;end if
+
+    self%backend=HALF_BACKEND_AUTO;if(present(backend))self%backend=backend
+    if(self%backend==HALF_BACKEND_AUTO)then
+#ifdef HALF_HAVE_CUDA
+      self%backend=HALF_BACKEND_CUDA
+#else
+      self%backend=HALF_BACKEND_CPU
+#endif
+    end if
+    if(self%backend/=HALF_BACKEND_CPU.and.self%backend/=HALF_BACKEND_CUDA)then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='backend must be AUTO, CPU, or CUDA';return
+    end if
+#ifndef HALF_HAVE_MKL
+    if(self%backend==HALF_BACKEND_CPU)then;status=HALF_ERROR_UNAVAILABLE;message='CPU API backend requires oneMKL';return;end if
+#endif
+#ifndef HALF_HAVE_CUDA
+    if(self%backend==HALF_BACKEND_CUDA)then;status=HALF_ERROR_UNAVAILABLE;message='CUDA API backend is not compiled';return;end if
+#endif
+    self%solver='evd';if(present(solver))self%solver=solver
+    if(self%solver/='evd'.and.self%solver/='evj')then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='solver must be evd or evj';return
+    end if
+    if(self%backend==HALF_BACKEND_CPU.and.self%solver/='evd')then
+      status=HALF_ERROR_UNAVAILABLE;message='EVJ is available only with CUDA';return
+    end if
+
+    call read_potcar(trim(potential_path),self%potcars)
+    if(size(self%potcars)/=ntypes)then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='POTCAR dataset count does not match request type count';call self%clear();return
+    end if
+    self%crystal%system_name='DeePAW-eSCN remote density'
+    self%crystal%nions=nions;self%crystal%ntypes=ntypes;self%crystal%lattice=lattice
+    allocate(self%crystal%species(ntypes),self%crystal%counts(ntypes),self%crystal%positions(nions,3))
+    self%crystal%counts=0
+    do it=1,ntypes
+      self%crystal%species(it)=self%potcars(it)%element
+      self%crystal%counts(it)=count(species==it)
+      if(self%crystal%counts(it)==0)then
+        status=HALF_ERROR_INVALID_ARGUMENT;message='each request type must be used by at least one atom';call self%clear();return
+      end if
+    end do
+    next=0
+    do it=1,ntypes
+      do ion=1,nions
+        if(species(ion)==it)then;next=next+1;self%crystal%positions(next,:)=positions(ion,:);end if
+      end do
+    end do
+    call self%crystal%update_geometry()
+    call validate_potcar_structure(self%potcars,self%crystal)
+    self%charge%shape=grid;self%charge%values=density
+    self%encut=encut;self%use_pbe=trim(xc)=='pbe';self%use_uspp=use_uspp
+    self%request_nions=nions;self%request_ntypes=ntypes;self%request_grid=grid
+    self%request_lattice=lattice;self%request_species=species;self%request_positions=positions
+    self%has_request_geometry=.true.
+    if(self%backend==HALF_BACKEND_CPU)then
+#ifdef HALF_HAVE_MKL
+      if(self%use_pbe)then
+        call build_veff_pbe(self%charge,self%potcars,self%crystal,self%veff,self%e_hartree,self%e_xc,self%e_xc_potential)
+      else
+        call build_veff_lda(self%charge,self%potcars,self%crystal,self%veff,self%e_hartree,self%e_xc,self%e_xc_potential)
+      end if
+#endif
+    end if
+    self%ready=.true.
+  end subroutine context_initialize_density
 
   subroutine context_clear(self)
     class(half_context_t),intent(inout)::self

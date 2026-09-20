@@ -22,6 +22,18 @@ DeePAW-HALF initialization was compared with native VASP SAD initialization.
 | End-to-end wall time | **145.76 s** | 262.70 s | **1.80× speedup; 44.51% less time** |
 | Final energy | -121.04035930 eV | -121.04037650 eV | Difference: 1.7194×10⁻⁵ eV/cell |
 
+## Standalone HALF band structure of HfO₂
+
+The band structure below was computed entirely by DeePAW-HALF, without
+starting or entering a VASP workflow. The calculation used PBE, a 500 eV
+cutoff, MIMIC_US, 60 bands, and 100 high-symmetry-path samples. Energies are
+referenced to the valence-band maximum (VBM).
+
+![HfO2 band structure computed directly by DeePAW-HALF](assets/hfo2_half_direct_bs.png)
+
+HALF gives a sampled band gap of **4.576 eV** and a direct Γ-point gap of
+**4.629 eV**.
+
 ## Conclusion
 
 DeePAW-HALF reduced the VASP electronic iteration count from 16 to 4–5, a

@@ -128,19 +128,24 @@ INIWAV     = 1
 The new flag must suppress only `WFINIT`; it must not suppress the `CHGCAR`
 read or the later `PROALL` and `ORTHCH` calls.
 
-To let HALF obtain its reconstruction density directly from DeePAW-eSCN, set
-the endpoint in the launch environment:
+To let HALF obtain its reconstruction density directly from DeePAW-eSCN,
+select the source explicitly in INCAR:
 
-```bash
-export HALF_ESCN_URL=http://127.0.0.1:8265
+```text
+LHALF_INIT = .TRUE.
+LHALF_API = .TRUE.
+HALF_ESCN_URL = http://127.0.0.1:8265
 ```
 
 The adapter then passes its existing lattice, fractional positions, one-based
 type indices, and dense grid to `half_create_from_escn()`. Atomic numbers come
 from the matching POTCAR, so the VASP-to-HALF descriptor does not change. HALF
 requests density only, converts the API's C-order grid, and explicitly
-normalizes it to the POTCAR valence-electron total. If the variable is unset,
-the established CHGCAR constructor remains in use. This switch changes HALF's
+normalizes it to the POTCAR valence-electron total. `LHALF_API=.FALSE.` is the
+default and always selects the CHGCAR constructor. When API mode is enabled,
+the INCAR URL takes precedence; the environment variable of the same name is
+used only as a compatibility fallback for an empty INCAR URL. Missing CHGCAR
+does not silently enable the network path. This switch changes HALF's
 reconstruction density only. VASP still loads CHGCAR for its own `ICHARG=1`
 density until a separate host charge-grid injection is implemented.
 

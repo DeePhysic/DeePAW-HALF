@@ -85,6 +85,8 @@
 ! electronic relaxation
         INTEGER ISTART               !< how to start up
         LOGICAL LHALF_INIT           !< initialize orbitals through DeePAW-HALF
+        LOGICAL LHALF_API            !< obtain the HALF density from DeePAW-eSCN
+        CHARACTER(255) HALF_ESCN_URL !< DeePAW-eSCN endpoint selected in INCAR
         INTEGER ICHARG               !< initial charge density
         INTEGER INIWAV               !< how to initialize wavefunctions
         INTEGER INICHG               !< how to initialize charge

@@ -109,8 +109,17 @@ context 不应被两个线程并发执行可变操作。
 
 文件构造器读取 CHGCAR/vaspwave.h5 与 POTCAR（也可用 vaspwave.h5 内嵌的
 POTCAR）。远程构造器使用现有 VASP geometry descriptor 与 POTCAR，不需要修改
-`vasp2half` 结构。VASP adapter 在设置 `HALF_ESCN_URL` 时使用远程路径，例如
-`HALF_ESCN_URL=http://127.0.0.1:8265`；未设置时继续使用原 CHGCAR 路径。当前
-VASP 集成中，这只切换 HALF 内部用于重构初始波函数的密度；VASP 自己的
-`ICHARG=1` host density 仍从 CHGCAR 读取。后者若也要取消文件输入，需要另做
-VASP charge-grid 内存注入，不能隐含在此构造器中。
+`vasp2half` 结构。VASP adapter 通过 INCAR 显式选择远程路径：
+
+```text
+LHALF_INIT = .TRUE.
+LHALF_API = .TRUE.
+HALF_ESCN_URL = http://127.0.0.1:8265
+```
+
+`LHALF_API=.FALSE.` 为默认值，此时即使环境中存在 `HALF_ESCN_URL`，HALF 也
+继续使用 CHGCAR。启用 `LHALF_API` 后，INCAR 中的 URL 优先；只有 INCAR URL
+为空时才把同名环境变量作为兼容回退。两处都没有地址会直接报错，CHGCAR 缺失
+不会隐式触发联网。当前 VASP 集成中，这只切换 HALF 内部用于重构初始波函数的
+密度；VASP 自己的 `ICHARG=1` host density 仍从 CHGCAR 读取。后者若也要取消
+文件输入，需要另做 VASP charge-grid 内存注入，不能隐含在此构造器中。

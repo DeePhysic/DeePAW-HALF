@@ -130,9 +130,20 @@ Do not invoke two mutating operations concurrently on the same context.
 The file constructor consumes CHGCAR/vaspwave.h5 plus POTCAR (or the POTCAR
 embedded in vaspwave.h5). The remote constructor consumes the existing VASP
 geometry descriptor plus POTCAR; no `vasp2half` structure change is required.
-The VASP adapter selects it when `HALF_ESCN_URL` is set, for example
-`HALF_ESCN_URL=http://127.0.0.1:8265`. Without that environment variable it
-keeps the established CHGCAR path. In the current VASP integration this selects
-the density used inside HALF to reconstruct the initial waves; VASP still reads
-CHGCAR for its own `ICHARG=1` host density. Replacing that second copy requires
-a separate VASP charge-grid injection and is not hidden in this constructor.
+The VASP adapter selects it explicitly through INCAR:
+
+```text
+LHALF_INIT = .TRUE.
+LHALF_API = .TRUE.
+HALF_ESCN_URL = http://127.0.0.1:8265
+```
+
+With `LHALF_API=.FALSE.` (the default), HALF uses the established CHGCAR path
+even if a `HALF_ESCN_URL` environment variable exists. When `LHALF_API=.TRUE.`,
+the INCAR URL takes precedence; the environment variable is accepted only as a
+backward-compatible fallback when the INCAR URL is empty. A missing endpoint is
+an error, and a missing CHGCAR never silently enables network access. In the
+current VASP integration this selects the density used inside HALF to
+reconstruct the initial waves; VASP still reads CHGCAR for its own `ICHARG=1`
+host density. Replacing that second copy requires a separate VASP charge-grid
+injection and is not hidden in this constructor.

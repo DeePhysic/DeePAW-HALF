@@ -84,10 +84,19 @@ def test_private_vasp_one_click_build_is_wired():
     assert adapter.is_file()
     adapter_source = adapter.read_text()
     vasp_main = (ROOT / "vendor" / "vasp-6.6.0" / "src" / "main.F").read_text()
+    vasp_reader = (ROOT / "vendor" / "vasp-6.6.0" / "src" / "reader.F").read_text()
+    vasp_base = (ROOT / "vendor" / "vasp-6.6.0" / "src" / "base.F").read_text()
     assert "half_set_request_geometry" in adapter_source
     assert "T_INFO%POSION" in adapter_source
     assert "HALF_ESCN_URL" in adapter_source
+    assert "USE_ESCN_API" in adapter_source
     assert "half_create_from_escn" in adapter_source
+    assert "INFO%LHALF_API" in vasp_main
+    assert "INFO%HALF_ESCN_URL" in vasp_main
+    assert "'LHALF_API'" in vasp_reader
+    assert "'HALF_ESCN_URL'" in vasp_reader
+    assert "LOGICAL LHALF_API" in vasp_base
+    assert "CHARACTER(255) HALF_ESCN_URL" in vasp_base
     assert "GRIDC%NGPTAR" in vasp_main
 
 

@@ -305,7 +305,8 @@ indices, and dense charge-grid dimensions directly into HALF memory. HALF
 deep-copies this request metadata. It can now use the same descriptor to call a
 DeePAW-eSCN endpoint, translate its C-order float32 grid, apply explicit POTCAR
 valence normalization, and construct the HALF context without changing the
-VASP-to-HALF structure ABI. Set `HALF_ESCN_URL` to select this path.
+VASP-to-HALF structure ABI. Select this path explicitly in INCAR with
+`LHALF_API=.TRUE.` and `HALF_ESCN_URL=http://127.0.0.1:8265`.
 
 See [the API guide](docs/API.md), the
 [tested VASP 6.6.0 integration](docs/VASP_INTEGRATION.md), the standalone

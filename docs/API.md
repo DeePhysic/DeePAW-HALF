@@ -35,7 +35,9 @@ automatically.  CPU-only `libhalf` can be linked by an ordinary C compiler.
 1. Check `half_get_abi_version()` and `half_get_capabilities()`.
 2. Create a context with `half_create_from_files_backend()` or obtain its
    density from DeePAW-eSCN with `half_create_from_escn()`. Select LDA/PBE,
-   CPU/CUDA/AUTO, EVD/EVJ, ENCUT, and MIMIC_US QDEP at runtime.  The shorter
+   CPU/CUDA/AUTO, EVD/EVJ/VASP, ENCUT, and MIMIC_US QDEP at runtime. The VASP
+   selector is the CUDA index-range solve for the `NBANDS` requested by the
+   solve call. The shorter
    `half_create_from_files()` is ABI-compatible shorthand for AUTO + EVD.
 3. A host may attach its already parsed structure with
    `half_set_request_geometry()`: lattice vectors, fractional positions,
@@ -104,7 +106,8 @@ eigensolution on the GPU, copying back only the requested eigenpairs.  ABI v1
 host H/S export and H/S application are CPU interfaces; CUDA contexts return
 `HALF_ERROR_UNAVAILABLE` for those two calls.  A future device-pointer extension
 can add them without changing existing symbols.  In a CPU build, AUTO selects
-oneMKL.  EVJ is CUDA-only, while EVD is available on both.
+oneMKL. EVJ and VASP partial-spectrum mode are CUDA-only, while EVD is
+available on both.
 
 ## VASP adapter pattern
 
@@ -135,8 +138,14 @@ The VASP adapter selects it explicitly through INCAR:
 ```text
 LHALF_INIT = .TRUE.
 LHALF_API = .TRUE.
+HALF_MODE = VASP_LIKE
 HALF_ESCN_URL = http://127.0.0.1:8265
 ```
+
+`HALF_MODE=TRADITIONAL` is the default. `HALF_MODE=VASP_LIKE` selects the
+CUDA partial-spectrum solver and forwards VASP's `NBANDS` through the existing
+mapped k-point ABI, so HALF returns only the requested lowest eigenpairs.
+`DENSE` and `VASP` are accepted as shorter aliases.
 
 With `LHALF_API=.FALSE.` (the default), HALF uses the established CHGCAR path
 even if a `HALF_ESCN_URL` environment variable exists. When `LHALF_API=.TRUE.`,

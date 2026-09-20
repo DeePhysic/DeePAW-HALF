@@ -115,6 +115,21 @@ ICHARG     = 1
 INIWAV     = 1
 ```
 
+HALF 的本征求解路径可独立选择：
+
+```text
+HALF_MODE = TRADITIONAL # 默认：传统稠密全谱求解
+# HALF_MODE = VASP_LIKE # 只求最低 NBANDS；NBANDS 由 VASP 通过 ABI 传入
+```
+
+`HALF_MODE=VASP_LIKE` 将 `WDES%NB_TOT` 直接传给
+`half_solve_kpoint_mapped()`，并调用 cuSOLVER 广义 Hermitian 区间求解器
+`Zhegvdx`，只计算并返回最低的 `NBANDS` 个本征对。它还跳过传统模式中仅为诊断
+重叠矩阵范围而执行的一次完整本征分解。矩阵组装仍为稠密形式且全部在 GPU 上；
+因此这是部分谱加速，而还不是无矩阵 Davidson。该模式目前要求 CUDA 后端。
+`HALF_MODE=TRADITIONAL` 保留原有全谱路径和 overlap-range 诊断；`DENSE` 和
+`VASP` 作为简写兼容值继续接受。
+
 新标签只能阻止 `WFINIT`，不能阻止 `CHGCAR` 读取，也不能跳过后续的 `PROALL` 和
 `ORTHCH`。
 

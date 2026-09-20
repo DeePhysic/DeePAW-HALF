@@ -83,11 +83,11 @@ contains
     if(self%backend==HALF_BACKEND_CUDA)then;status=HALF_ERROR_UNAVAILABLE;message='CUDA API backend is not compiled';return;end if
 #endif
     self%solver='evd';if(present(solver))self%solver=solver
-    if(self%solver/='evd'.and.self%solver/='evj')then
-      status=HALF_ERROR_INVALID_ARGUMENT;message='solver must be evd or evj';return
+    if(self%solver/='evd'.and.self%solver/='evj'.and.self%solver/='evx')then
+      status=HALF_ERROR_INVALID_ARGUMENT;message='solver must be evd, evj, or evx';return
     end if
     if(self%backend==HALF_BACKEND_CPU.and.self%solver/='evd')then
-      status=HALF_ERROR_UNAVAILABLE;message='EVJ is available only with CUDA';return
+      status=HALF_ERROR_UNAVAILABLE;message='EVJ and VASP-like EVX are available only with CUDA';return
     end if
     inquire(file=trim(charge_path),exist=exists)
     if(.not.exists)then;status=HALF_ERROR_IO;message='charge input does not exist';return;end if
@@ -348,13 +348,22 @@ contains
       end if
       if(present(eigenvectors))then
         call solve_dense_gamma_cuda_full(self%charge,self%potcars,self%crystal,basis,self%use_pbe,all_values, &
-          overlap_min,overlap_max,solver=self%solver,use_uspp=self%use_uspp,eigenvectors=all_vectors)
-        eigenvectors=all_vectors(:,:nbands)
+          overlap_min,overlap_max,solver=self%solver,use_uspp=self%use_uspp,eigenvectors=all_vectors,target_bands=nbands)
+        if(self%solver=='evx')then
+          eigenvectors=all_vectors
+        else
+          eigenvectors=all_vectors(:,:nbands)
+        end if
       else
         call solve_dense_gamma_cuda_full(self%charge,self%potcars,self%crystal,basis,self%use_pbe,all_values, &
-          overlap_min,overlap_max,solver=self%solver,use_uspp=self%use_uspp)
+          overlap_min,overlap_max,solver=self%solver,use_uspp=self%use_uspp,target_bands=nbands)
       end if
-      eigenvalues=all_values(:nbands);if(present(basis_out))basis_out=basis
+      if(self%solver=='evx')then
+        eigenvalues=all_values
+      else
+        eigenvalues=all_values(:nbands)
+      end if
+      if(present(basis_out))basis_out=basis
       status=HALF_SUCCESS;message='';return
 #else
       status=HALF_ERROR_UNAVAILABLE;message='CUDA backend is not compiled';return

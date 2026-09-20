@@ -92,12 +92,29 @@ def test_private_vasp_one_click_build_is_wired():
     assert "USE_ESCN_API" in adapter_source
     assert "half_create_from_escn" in adapter_source
     assert "INFO%LHALF_API" in vasp_main
+    assert "INFO%HALF_MODE" in vasp_main
     assert "INFO%HALF_ESCN_URL" in vasp_main
     assert "'LHALF_API'" in vasp_reader
+    assert "'HALF_MODE'" in vasp_reader
     assert "'HALF_ESCN_URL'" in vasp_reader
     assert "LOGICAL LHALF_API" in vasp_base
+    assert "CHARACTER(12) HALF_MODE" in vasp_base
     assert "CHARACTER(255) HALF_ESCN_URL" in vasp_base
     assert "GRIDC%NGPTAR" in vasp_main
+    assert "INT(WDES%NB_TOT,c_int)" in adapter_source
+    assert "HALF_SOLVER_VASP" in adapter_source
+
+
+def test_cuda_vasp_mode_uses_abi_nbands_for_partial_spectrum():
+    header = (ROOT / "include" / "half.h").read_text()
+    fortran_api = (ROOT / "include" / "half_api.f90").read_text()
+    solver = (ROOT / "src" / "half_cuda_solver.cuf").read_text()
+    library = (ROOT / "src" / "half_library.F90").read_text()
+    assert "HALF_SOLVER_VASP = 3" in header
+    assert "HALF_SOLVER_VASP=3" in fortran_api
+    assert "CUSOLVER_EIG_RANGE_I" in solver
+    assert "cusolverDnZhegvdx" in solver
+    assert "target_bands=nbands" in library
 
 
 def test_build_rejects_non_nvhpc_compilers():

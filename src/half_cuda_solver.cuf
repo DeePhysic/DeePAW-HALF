@@ -44,7 +44,7 @@ contains
   end subroutine
 
   subroutine solve_dense_gamma_cuda_full(charge,potcars,crystal,basis,use_pbe,eigenvalues,overlap_min,overlap_max, &
-      potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,e_hartree,e_xc,e_xc_potential,eigenvectors)
+      potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,e_hartree,e_xc,e_xc_potential,eigenvectors,target_bands)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
@@ -57,6 +57,7 @@ contains
     character(len=*),intent(in),optional::solver
     real(dp),intent(out),optional::e_hartree,e_xc,e_xc_potential
     complex(dp),allocatable,intent(out),optional::eigenvectors(:,:)
+    integer,intent(in),optional::target_bands
     real(dp),device,allocatable::dveff(:)
     complex(dp),device,allocatable::dh(:,:),ds(:,:)
     real(dp)::eh,exc,exv
@@ -73,28 +74,59 @@ contains
     call system_clock(tick1);if(present(potential_seconds))potential_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
     call assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,dh,ds,use_uspp)
     call system_clock(tick1);if(present(assembly_seconds))assembly_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
-    call solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max,solver,eigenvectors)
+    call solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max,solver,eigenvectors,target_bands)
     call system_clock(tick1);if(present(gpu_seconds))gpu_seconds=real(tick1-tick0,dp)/real(rate,dp)
   end subroutine
 
-  subroutine solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max,solver,eigenvectors)
+  subroutine solve_device_matrices(dh,ds,eigenvalues,overlap_min,overlap_max,solver,eigenvectors,target_bands)
     complex(dp),device,intent(inout)::dh(:,:),ds(:,:)
     real(dp),allocatable,intent(out)::eigenvalues(:)
     real(dp),intent(out)::overlap_min,overlap_max
     character(len=*),intent(in),optional::solver
     complex(dp),allocatable,intent(out),optional::eigenvectors(:,:)
+    integer,intent(in),optional::target_bands
     complex(dp),device,allocatable::ds_original(:,:),dwork(:)
     real(dp),device,allocatable::dw(:)
     integer,device::dinfo
     type(cusolverDnHandle)::handle
-    integer::n,lwork,status,infohost
+    integer::n,lwork,status,infohost,meig,requested
     integer(c_int)::jacobi_sweeps
     real(c_double)::jacobi_residual
-    logical::use_jacobi
+    logical::use_jacobi,use_index_range
     n=size(dh,1)
     use_jacobi=.false.; if(present(solver))use_jacobi=trim(solver)=='evj'
-    allocate(ds_original(n,n),dw(n),eigenvalues(n)); ds_original=ds
+    use_index_range=.false.;if(present(solver))use_index_range=trim(solver)=='evx'
+    requested=n;if(present(target_bands))requested=target_bands
+    if(requested<1.or.requested>n)error stop 'HALF: invalid target band count'
+    allocate(dw(n))
     status=cusolverDnCreate(handle); if(status/=0)error stop 'HALF: cusolver create failed'
+    if(use_index_range)then
+      ! VASP-like mode asks cuSOLVER for only the lowest NBANDS generalized
+      ! eigenpairs.  The overlap-only full eigensolve is intentionally skipped.
+      overlap_min=-1.0_dp;overlap_max=-1.0_dp;meig=0
+      if(present(eigenvectors))then
+        status=cusolverDnZhegvdx_bufferSize(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_VECTOR, &
+          CUSOLVER_EIG_RANGE_I,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,0.0_dp,0.0_dp,1,requested,meig,dw,lwork)
+      else
+        status=cusolverDnZhegvdx_bufferSize(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR, &
+          CUSOLVER_EIG_RANGE_I,CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,0.0_dp,0.0_dp,1,requested,meig,dw,lwork)
+      end if
+      if(status/=0)error stop 'HALF: cuSolver Zhegvdx buffer query failed'
+      allocate(dwork(lwork))
+      if(present(eigenvectors))then
+        status=cusolverDnZhegvdx(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_VECTOR,CUSOLVER_EIG_RANGE_I, &
+          CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,0.0_dp,0.0_dp,1,requested,meig,dw,dwork,lwork,dinfo)
+      else
+        status=cusolverDnZhegvdx(handle,CUSOLVER_EIG_TYPE_1,CUSOLVER_EIG_MODE_NOVECTOR,CUSOLVER_EIG_RANGE_I, &
+          CUBLAS_FILL_MODE_UPPER,n,dh,n,ds,n,0.0_dp,0.0_dp,1,requested,meig,dw,dwork,lwork,dinfo)
+      end if
+      infohost=dinfo
+      if(status/=0.or.infohost/=0.or.meig/=requested)error stop 'HALF: cuSolver VASP-like generalized eigensolve failed'
+      allocate(eigenvalues(meig));eigenvalues=dw(:meig)
+      if(present(eigenvectors))then;allocate(eigenvectors(n,meig));eigenvectors=dh(:,:meig);end if
+      deallocate(dwork);status=cusolverDnDestroy(handle);return
+    end if
+    allocate(ds_original(n,n),eigenvalues(n)); ds_original=ds
     status=cusolverDnZheevd_bufferSize(handle,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,ds,n,dw,lwork)
     if(status/=0)error stop 'HALF: cusolver Zheevd buffer query failed'
     allocate(dwork(lwork)); status=cusolverDnZheevd(handle,CUSOLVER_EIG_MODE_NOVECTOR,CUBLAS_FILL_MODE_UPPER,n,ds,n,dw,dwork,lwork,dinfo)

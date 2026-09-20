@@ -25,7 +25,14 @@ enum half_status {
 
 enum half_xc { HALF_XC_LDA = 1, HALF_XC_PBE = 2 };
 enum half_backend { HALF_BACKEND_AUTO = 0, HALF_BACKEND_CPU = 1, HALF_BACKEND_CUDA = 2 };
-enum half_solver { HALF_SOLVER_EVD = 1, HALF_SOLVER_EVJ = 2 };
+enum half_solver {
+  HALF_SOLVER_EVD = 1,
+  HALF_SOLVER_EVJ = 2,
+  /* CUDA generalized Hermitian index-range solve.  Only the lowest NBANDS
+   * eigenpairs requested by half_solve_kpoint[_mapped] are computed and
+   * returned. */
+  HALF_SOLVER_VASP = 3
+};
 
 enum half_capability {
   HALF_CAP_CPU = 1 << 0,

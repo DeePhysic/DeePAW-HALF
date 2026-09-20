@@ -133,6 +133,24 @@ ICHARG     = 1
 INIWAV     = 1
 ```
 
+Choose the HALF eigensolver path independently:
+
+```text
+HALF_MODE = TRADITIONAL # default: traditional full dense spectrum
+# HALF_MODE = VASP_LIKE # lowest NBANDS only, supplied by VASP over the ABI
+```
+
+`HALF_MODE=VASP_LIKE` passes `WDES%NB_TOT` directly to
+`half_solve_kpoint_mapped()` and uses the cuSOLVER generalized-Hermitian
+index-range driver (`Zhegvdx`) to compute and return only those lowest
+eigenpairs. It also skips the separate full eigendecomposition of the overlap
+matrix that is used only for diagnostics in traditional mode. Matrix assembly
+is still dense and remains entirely on the GPU; this mode is therefore a
+partial-spectrum optimization, not yet a matrix-free Davidson implementation.
+It currently requires the CUDA backend. `HALF_MODE=TRADITIONAL` preserves the
+previous full-spectrum path and overlap-range diagnostic. `DENSE` and `VASP`
+are accepted as short compatibility aliases.
+
 The new flag must suppress only `WFINIT`; it must not suppress the `CHGCAR`
 read or the later `PROALL` and `ORTHCH` calls.
 

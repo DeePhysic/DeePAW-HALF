@@ -6921,7 +6921,6 @@
   },
   "vasp": {
     "implementation": "VASP 6.6.0",
-    "lmaxmix": -1,
     "sampled_band_gap_eV": 4.575783999999999,
     "gamma_direct_gap_eV": 4.631751999999999,
     "vbm_eV": 3.813515,

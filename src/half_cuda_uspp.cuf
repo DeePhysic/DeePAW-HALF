@@ -121,6 +121,86 @@ contains
     do k=1,naug;v=v+multipole((k-1)*pairs+ip)*radial_v((iat-1)*naug+k);end do
     dij_atom((b-1)*natoms*nlm+(a-1)*natoms+iat)=v
   end subroutine
+
+#ifdef HALF_QDEP_DIRECT_GRID
+  attributes(device) real(dp) function sph_bessel_d(l,x) result(v)
+    integer,value::l;real(dp),value::x
+    real(dp)::jm,j,jn,den,x2,term;integer::n,i,k
+    if(abs(x)<real(l+2,dp))then
+      den=1.0_dp;do i=1,l;den=den*real(2*i+1,dp);end do;x2=x*x;term=x**l/den;v=term
+      do k=0,30;term=-term*x2/(2.0_dp*real(k+1,dp)*real(2*l+2*k+3,dp));v=v+term
+        if(abs(term)<1.0e-16_dp*max(1.0_dp,abs(v)))exit
+      end do;return
+    end if
+    jm=sin(x)/x;if(l==0)then;v=jm;return;end if;j=sin(x)/(x*x)-cos(x)/x
+    if(l==1)then;v=j;return;end if
+    do n=1,l-1;jn=real(2*n+1,dp)*j/x-jm;jm=j;j=jn;end do;v=j
+  end function
+
+  attributes(device) real(dp) function fact_d(n) result(v)
+    integer,value::n;integer::i;v=1.0_dp;do i=2,n;v=v*real(i,dp);end do
+  end function
+
+  attributes(device) real(dp) function leg_d(l,m,x) result(p)
+    integer,value::l,m;real(dp),value::x
+    real(dp)::p0,p1,p2,f;integer::i,n
+    p0=1.0_dp;f=1.0_dp;do i=1,m;p0=-p0*f*sqrt(max(0.0_dp,1.0_dp-x*x));f=f+2.0_dp;end do
+    if(l==m)then;p=p0;return;end if;p1=x*real(2*m+1,dp)*p0
+    if(l==m+1)then;p=p1;return;end if
+    do n=m+2,l;p2=(real(2*n-1,dp)*x*p1-real(n+m-1,dp)*p0)/real(n-m,dp);p0=p1;p1=p2;end do;p=p1
+  end function
+
+  attributes(device) real(dp) function ylm_d(l,m,x,phi) result(y)
+    integer,value::l,m;real(dp),value::x,phi
+    real(dp)::p,norm;integer::am
+    am=abs(m);p=leg_d(l,am,x);norm=sqrt(real(2*l+1,dp)/(4.0_dp*pi)*fact_d(l-am)/fact_d(l+am))
+    if(m>0)then;y=sqrt(2.0_dp)*(-1.0_dp)**m*norm*p*cos(real(am,dp)*phi)
+    else if(m<0)then;y=sqrt(2.0_dp)*(-1.0_dp)**m*norm*p*sin(real(am,dp)*phi)
+    else;y=norm*p;end if
+  end function
+
+  attributes(global) subroutine direct_grid_vlm_kernel(radial_v,veff,positions,lattice,laug,maug,root1,root2,c1,c2, &
+      rc,volume,n1,n2,n3,naug,natoms)
+    real(dp),device,intent(out)::radial_v(*)
+    real(dp),device,intent(in)::veff(*),positions(*),lattice(*),root1(*),root2(*),c1(*),c2(*)
+    integer,device,intent(in)::laug(*),maug(*)
+    real(dp),value::rc,volume
+    integer,value::n1,n2,n3,naug,natoms
+    real(dp),shared::partial(256)
+    integer::pair,iat,k,l,m,idx,t,i1,i2,i3,a,b,stride
+    real(dp)::df(3),cart(3),r,x,phi,g,value,scale
+    pair=blockIdx%x;if(pair>natoms*naug)return
+    k=mod(pair-1,naug)+1;iat=(pair-1)/naug+1;l=laug(k);m=maug(k);value=0.0_dp
+    stride=blockDim%x;idx=threadIdx%x
+    do while(idx<=n1*n2*n3)
+      t=idx-1;i3=mod(t,n3);t=t/n3;i2=mod(t,n2);i1=t/n2
+      df(1)=real(i1,dp)/real(n1,dp)-positions(iat)
+      df(2)=real(i2,dp)/real(n2,dp)-positions(iat+natoms)
+      df(3)=real(i3,dp)/real(n3,dp)-positions(iat+2*natoms)
+      df=df-anint(df)
+      do a=1,3;cart(a)=0.0_dp;do b=1,3;cart(a)=cart(a)+df(b)*lattice(b+(a-1)*3);end do;end do
+      r=sqrt(sum(cart*cart))
+      if(r<=rc)then
+        g=c1(l+1)*sph_bessel_d(l,root1(l+1)*r/rc)+c2(l+1)*sph_bessel_d(l,root2(l+1)*r/rc)
+        if(r<1.0e-14_dp)then
+          if(l==0.and.m==0)value=value+veff(idx)*g/sqrt(4.0_dp*pi)
+        else
+          x=max(-1.0_dp,min(1.0_dp,cart(3)/r));phi=atan2(cart(2),cart(1));value=value+veff(idx)*g*ylm_d(l,m,x,phi)
+        end if
+      end if
+      idx=idx+stride
+    end do
+    partial(threadIdx%x)=value;call syncthreads()
+    a=blockDim%x/2
+    do while(a>0)
+      if(threadIdx%x<=a)partial(threadIdx%x)=partial(threadIdx%x)+partial(threadIdx%x+a)
+      call syncthreads();a=a/2
+    end do
+    scale=volume/real(n1*n2*n3,dp)
+    if(threadIdx%x==1)radial_v((iat-1)*naug+k)=partial(1)*scale
+  end subroutine
+#endif
+
   subroutine build_uspp_dij_cuda_species(dveff,shape,potcar,crystal,itype,ddij_atom)
     real(dp),device,intent(in)::dveff(:)
     integer,intent(in)::shape(3),itype
@@ -131,12 +211,14 @@ contains
     integer::nlm,lmax,naug,nrad,ngrid,natoms,pairs,ich,l,m,a,b,k,ir,ion0
     integer::nang,it,ip,plan,status
     integer,allocatable::chan(:),lv(:),mv(:)
-    integer,allocatable::laug(:)
+    integer,allocatable::laug(:),maug(:)
     real(dp),allocatable::multipole(:,:),gshape(:,:),rw(:),pos(:,:),dion_lm(:,:),dirs(:,:),yweight(:,:),invlat(:,:),xg(:),wg(:)
     real(dp),device,allocatable::dmultipole(:,:),dgshape(:,:),dr(:),drw(:),dpos(:,:),ddion(:,:), &
       ddirs(:,:),dyweight(:,:),dinv(:,:),dsamples(:),dvlm(:),dradial_v(:)
-    integer,device,allocatable::dlaug(:)
+    integer,device,allocatable::dlaug(:),dmaug(:)
     complex(dp),device,allocatable::dfreq(:),dcoef(:)
+    real(dp),allocatable::roots1(:),roots2(:),coeff1(:),coeff2(:),lattice(:,:)
+    real(dp),device,allocatable::droots1(:),droots2(:),dcoeff1(:),dcoeff2(:),dlattice(:,:)
     real(dp)::root1,root2,c1,c2,m1
     nlm=0;lmax=0
     do ich=1,potcar%channels;nlm=nlm+2*potcar%lps(ich)+1;lmax=max(lmax,2*potcar%lps(ich));end do
@@ -159,11 +241,33 @@ contains
       k=0
       do l=0,lmax;do m=-l,l;k=k+1
         if(abs(lv(a)-lv(b))<=l.and.l<=lv(a)+lv(b).and.mod(lv(a)+lv(b)+l,2)==0)then
-          m1=sum(rw*(potcar%wae(:,chan(a))*potcar%wae(:,chan(b))-potcar%wps(:,chan(a))*potcar%wps(:,chan(b)))*potcar%rgrid**l)
+          m1=potcar%qpaw_l(chan(a),chan(b),l+1)
           multipole((b-1)*nlm+a,k)=gaunt_numeric(lv(a),mv(a),lv(b),mv(b),l,m)*m1
         end if
       end do;end do
     end do;end do
+#ifdef HALF_QDEP_DIRECT_GRID
+    allocate(laug(naug),maug(naug),roots1(lmax+1),roots2(lmax+1),coeff1(lmax+1),coeff2(lmax+1));k=0
+    do l=0,lmax
+      call bessel_root(l,1,roots1(l+1));call bessel_root(l,2,roots2(l+1))
+      call compensation_coefficients(l,potcar%paw_rmax,roots1(l+1),roots2(l+1),potcar%rgrid,rw,coeff1(l+1),coeff2(l+1))
+      do m=-l,l;k=k+1;laug(k)=l;maug(k)=m;end do
+    end do
+    ion0=sum(crystal%counts(:itype-1));allocate(pos(natoms,3));pos=crystal%positions(ion0+1:ion0+natoms,:)
+    allocate(dion_lm(nlm,nlm));dion_lm=0.0_dp
+    do b=1,nlm;do a=1,nlm;if(lv(a)==lv(b).and.mv(a)==mv(b))dion_lm(a,b)=potcar%dion(chan(a),chan(b));end do;end do
+    allocate(lattice(3,3));lattice=crystal%lattice
+    allocate(dmultipole(pairs,naug),dpos(natoms,3),ddion(nlm,nlm),dlaug(naug),dmaug(naug), &
+      droots1(lmax+1),droots2(lmax+1),dcoeff1(lmax+1),dcoeff2(lmax+1),dlattice(3,3), &
+      dradial_v(natoms*naug),ddij_atom(natoms,nlm,nlm))
+    dmultipole=multipole;dpos=pos;ddion=dion_lm;dlaug=laug;dmaug=maug;droots1=roots1;droots2=roots2
+    dcoeff1=coeff1;dcoeff2=coeff2;dlattice=lattice
+    call direct_grid_vlm_kernel<<<natoms*naug,256>>>(dradial_v,dveff,dpos,dlattice,dlaug,dmaug,droots1,droots2, &
+      dcoeff1,dcoeff2,potcar%paw_rmax,crystal%volume,shape(1),shape(2),shape(3),naug,natoms)
+    call finish_dij_kernel<<<(natoms*pairs+127)/128,128>>>(ddij_atom,ddion,dmultipole,dradial_v,nlm,naug,natoms)
+    if(cudaDeviceSynchronize()/=cudaSuccess)error stop 'HALF: direct-grid CUDA QDEP construction failed'
+    return
+#endif
     allocate(laug(naug),dirs(nang,3),yweight(nang,naug),xg(ntheta),wg(ntheta));call gauss_legendre(ntheta,xg,wg)
     k=0;do l=0,lmax;do m=-l,l;k=k+1;laug(k)=l;end do;end do
     ip=0
@@ -197,8 +301,20 @@ contains
   subroutine radial_weights(r,w)
     real(dp),intent(in)::r(:);real(dp),intent(out)::w(:)
     integer::i,n,last
-    real(dp)::h0,h1,s,alpha,beta,eta
-    n=size(r);w=0.0_dp;last=merge(n,n-1,mod(n,2)==1)
+    real(dp)::h0,h1,s,alpha,beta,eta,hlog,spread
+    n=size(r)
+    if(n>=3.and.all(r>0.0_dp))then
+      hlog=log(r(2)/r(1));spread=maxval(abs(log(r(2:n)/r(1:n-1))-hlog))
+      if(spread<1.0e-10_dp*max(1.0_dp,abs(hlog)))then
+        w=0.0_dp
+        do i=3,n,2
+          w(i)=w(i)+r(i)*hlog/3.0_dp;w(i-1)=4.0_dp*r(i-1)*hlog/3.0_dp
+          w(i-2)=w(i-2)+r(i-2)*hlog/3.0_dp
+        end do
+        return
+      end if
+    end if
+    w=0.0_dp;last=merge(n,n-1,mod(n,2)==1)
     do i=1,last-2,2
       h0=r(i+1)-r(i);h1=r(i+2)-r(i+1);s=(h0+h1)/6.0_dp
       w(i)=w(i)+s*(2.0_dp-h1/h0)

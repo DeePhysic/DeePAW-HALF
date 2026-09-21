@@ -80,8 +80,15 @@ PAW/QDEP/one-centre Hamiltonian 尚未完全同构。
 4. 在 HfO2 上逐项比较 onsite density matrix、`Dij`、AE/PS one-centre energy
    和 VASP 对应量。提高角网格不能替代这一步。
 
+## 5. 后续：直接网格 onsite 构造
+
+上述第 4 项已经继续推进。HALF 现可按 VASP `SETDIJ` 的离散方式，把 QDEP
+补偿核直接放到 FFT 网格上，并从 POTCAR partial waves 统一重建所有
+`QPAW(i,j,L)` 径向矩。Si/HfO2 的 `dD/dR` 与中心差分误差均降到
+`3e-9 eV/Angstrom` 以下。完整推导、CPU/CUDA 实现和 VASP 对比见
+[`ONSITE_PAW_ONE_CENTRE_OPTIMIZATION.zh-CN.md`](ONSITE_PAW_ONE_CENTRE_OPTIMIZATION.zh-CN.md)。
+
 原始输出位于：
 
 - `/data/limusen/deepaw_half_force_compare/Si/qdep_24x48`
 - `/data/limusen/deepaw_half_force_compare/HfO2/qdep_24x48`
-

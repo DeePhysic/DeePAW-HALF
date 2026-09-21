@@ -202,7 +202,42 @@ contains
       read(unit,'(A)',iostat=ios)line
       if(ios/=0.or.index(line,'End of Dataset')>0)exit
     end do
+    call rebuild_paw_qion(p)
   end subroutine
+
+  subroutine rebuild_paw_qion(p)
+    ! VASP SET_PAW_AUG does not retain the tabulated PAW overlap matrix as
+    ! the final QION.  It rebuilds QPAW(i,j,L) from the AE/PS partial waves
+    ! with the POTCAR logarithmic-grid Simpson weights and assigns
+    ! QION(i,j)=QPAW(i,j,0).  Keep the same one-centre definition here so
+    ! H, S, augmentation density, and forces share identical L=0 moments.
+    type(potcar_t),intent(inout)::p
+    real(dp),allocatable::w(:),rebuilt(:,:)
+    real(dp)::hlog,spread
+    integer::i,j,k,l,lmin,lmax,n
+    n=size(p%rgrid);allocate(w(n),rebuilt(p%channels,p%channels));w=0.0_dp;rebuilt=0.0_dp
+    if(n<3.or.any(p%rgrid<=0.0_dp))error stop 'HALF: invalid PAW logarithmic radial grid'
+    hlog=log(p%rgrid(2)/p%rgrid(1));spread=maxval(abs(log(p%rgrid(2:n)/p%rgrid(1:n-1))-hlog))
+    if(spread>1.0e-10_dp*max(1.0_dp,abs(hlog)))error stop 'HALF: PAW radial grid is not logarithmic'
+    do k=3,n,2
+      w(k)=w(k)+p%rgrid(k)*hlog/3.0_dp
+      w(k-1)=4.0_dp*p%rgrid(k-1)*hlog/3.0_dp
+      w(k-2)=w(k-2)+p%rgrid(k-2)*hlog/3.0_dp
+    end do
+    p%qpaw_rebuild_max_delta=0.0_dp
+    lmax=2*maxval(p%lps);allocate(p%qpaw_l(p%channels,p%channels,lmax+1));p%qpaw_l=0.0_dp
+    do j=1,p%channels;do i=1,p%channels
+      lmin=abs(p%lps(i)-p%lps(j))
+      do l=lmin,p%lps(i)+p%lps(j),2
+        p%qpaw_l(i,j,l+1)=sum(w*(p%wae(:,i)*p%wae(:,j)-p%wps(:,i)*p%wps(:,j))*p%rgrid**l)
+      end do
+      if(p%lps(i)==p%lps(j))then
+        rebuilt(i,j)=p%qpaw_l(i,j,1)
+        p%qpaw_rebuild_max_delta=max(p%qpaw_rebuild_max_delta,abs(rebuilt(i,j)-p%qpaw(i,j)))
+      end if
+    end do;end do
+    p%qpaw=rebuilt
+  end subroutine rebuild_paw_qion
 
   subroutine row_major(flat,matrix)
     real(dp),intent(in)::flat(:)

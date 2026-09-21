@@ -12,7 +12,7 @@ DeepAW 或 VASP 产生的平滑 `CHGCAR` 密度以及匹配的 PAW `POTCAR`，�
 
 三种实现之间的相互一致性构成内部数值交叉验证。当前 GPU/CUDA Fortran
 Gamma/MIMIC_US 固定密度路径已在 Si 与 HfO2 上通过逐本征值验证；CPU Fortran
-QDEP、任意 k 点、多 k 点能带、spglib
+QDEP（默认采用 VASP 式直接 FFT 网格 SETDIJ）、任意 k 点、多 k 点能带、spglib
 不可约 k 网格、占据数、Ewald 和 Harris 固定密度总能量也已闭合。Si 总能量及
 各分量在 Python 与 Fortran 实现之间的差小于 `4e-12 eV`。旧的中心差分力只
 保留为解析力的数值 oracle，不再作为正式力功能。原生解析力目前已经实现
@@ -79,7 +79,9 @@ $$
 这里 `rho~_G` 是电子数归一化密度系数，`Omega` 是胞体积，`e^2` 是
 eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用于 NLCC 的
 部分芯密度，不会重复加入 Hartree 密度。`DION` 是 POTCAR 固定 onsite 项，
-`QDEP` 才给出势依赖的 MIMIC_US 校正；`VH(G=0)` 是势规范并设为零。
+`QDEP` 才给出势依赖的 MIMIC_US 校正；默认实现把补偿核直接放在 FFT 网格上，
+并从 POTCAR partial waves 在对数径向网格上统一重建 `QPAW(i,j,L)`；`VH(G=0)`
+是势规范并设为零。
 
 计算力时，HALF 从各 k 点波函数重建 PAW onsite 占据矩阵与 POTCAR
 augmentation density：

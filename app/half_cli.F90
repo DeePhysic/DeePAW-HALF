@@ -31,6 +31,10 @@ program half_cli
   type::force_wave_block_t
     complex(dp),allocatable::coefficients(:,:)
   end type
+  type::force_qdep_cache_t
+    real(dp),allocatable::dij_atom(:,:,:)
+    real(dp),allocatable::ddij_atom(:,:,:,:)
+  end type
   character(len=1024) :: invocation, command
   integer :: argument_offset
 
@@ -730,6 +734,7 @@ contains
     logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference
     type(plane_wave_basis_t),allocatable::force_bases(:)
     type(force_wave_block_t),allocatable::force_waves(:)
+    type(force_qdep_cache_t),allocatable::force_qdep_cache(:)
     type(augmentation_occupancy_t),allocatable::augmentation_occupancy(:)
     real(dp)::augmentation_charge
 #ifdef HALF_CLI_HAVE_HDF5
@@ -927,10 +932,24 @@ contains
       if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv,vxc_input)
       else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc,exv,vxc_input);end if
       force_nonlocal=0.0_dp;force_projector=0.0_dp;force_augmentation=0.0_dp
+      if(use_uspp)allocate(force_qdep_cache(size(potcars)))
       do ik=1,set%nk
         call build_paw_operators(potcars,crystal,force_bases(ik),paw)
         if(ik==1)call initialize_augmentation_occupancy(paw,augmentation_occupancy)
-        if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
+        if(use_uspp)then
+          if(ik==1)then
+            call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
+            do it=1,size(paw)
+              force_qdep_cache(it)%dij_atom=paw(it)%dij_atom
+              force_qdep_cache(it)%ddij_atom=paw(it)%ddij_atom
+            end do
+          else
+            do it=1,size(paw)
+              paw(it)%dij_atom=force_qdep_cache(it)%dij_atom
+              paw(it)%ddij_atom=force_qdep_cache(it)%ddij_atom
+            end do
+          end if
+        end if
         call accumulate_augmentation_occupancy(paw,force_waves(ik)%coefficients,occupation(ik,:),set%weights(ik), &
           augmentation_occupancy)
         call add_nonlocal_paw_forces(force_bases(ik),paw,eigenvalues(ik,:),occupation(ik,:),set%weights(ik), &

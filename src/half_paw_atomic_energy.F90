@@ -45,8 +45,7 @@ contains
     aug0=0.0_dp
     do b=1,p%channels;do a=1,p%channels
       if(p%lps(a)/=p%lps(b))cycle;l=p%lps(a)
-      aug0=aug0+y00*real(2*l+1,dp)*p%qato(a,b)* &
-        sum(weights*(p%wae(:,a)*p%wae(:,b)-p%wps(:,a)*p%wps(:,b)))
+      aug0=aug0+y00*real(2*l+1,dp)*p%qato(a,b)*p%qpaw_l(a,b,1)
     end do;end do
     call compensation_shape0(p%rgrid,p%paw_rmax,shape0)
     rho_ps=rho_ps+aug0*shape0*p%rgrid*p%rgrid
@@ -165,8 +164,20 @@ contains
 
   subroutine radial_weights(r,w)
     real(dp),intent(in)::r(:);real(dp),intent(out)::w(:)
-    integer::i,n,last;real(dp)::h0,h1,s,alpha,beta,eta
-    n=size(r);w=0.0_dp;last=merge(n,n-1,mod(n,2)==1)
+    integer::i,n,last;real(dp)::h0,h1,s,alpha,beta,eta,hlog,spread
+    n=size(r)
+    if(n>=3.and.all(r>0.0_dp))then
+      hlog=log(r(2)/r(1));spread=maxval(abs(log(r(2:n)/r(1:n-1))-hlog))
+      if(spread<1.0e-10_dp*max(1.0_dp,abs(hlog)))then
+        w=0.0_dp
+        do i=3,n,2
+          w(i)=w(i)+r(i)*hlog/3.0_dp;w(i-1)=4.0_dp*r(i-1)*hlog/3.0_dp
+          w(i-2)=w(i-2)+r(i-2)*hlog/3.0_dp
+        end do
+        return
+      end if
+    end if
+    w=0.0_dp;last=merge(n,n-1,mod(n,2)==1)
     do i=1,last-2,2
       h0=r(i+1)-r(i);h1=r(i+2)-r(i+1);s=(h0+h1)/6.0_dp
       w(i)=w(i)+s*(2.0_dp-h1/h0);w(i+1)=w(i+1)+s*(h0+h1)**2/(h0*h1);w(i+2)=w(i+2)+s*(2.0_dp-h0/h1)

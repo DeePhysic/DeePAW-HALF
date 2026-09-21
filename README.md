@@ -30,8 +30,10 @@ library interface:
 - multi-dataset text POTCAR parsing;
 - complete-grid Hartree, ionic, NLCC, LDA and PBE potentials on CPU and GPU;
 - PAW reciprocal projectors and DION/QPAW overlap matrices on CPU and GPU;
-- atom-dependent MIMIC_US QDEP matrices on CPU and GPU, including periodic cubic
-  B-spline sampling, two-Bessel compensation functions and Gaunt transforms;
+- atom-dependent MIMIC_US QDEP matrices on CPU and GPU, using direct FFT-grid
+  SETDIJ by default and a shared POTCAR-log-grid reconstruction of all
+  `QPAW(i,j,L)` moments; the legacy A/B path retains periodic cubic B-spline
+  sampling, while both paths share the two-Bessel functions and Gaunt transforms;
 - device-resident cuFFT potential construction, H/S assembly, Hermitian
   cleanup and cuSOLVER eigensolution without full-matrix host transfers;
 - dense generalized H/S solvers using MKL on CPU and cuSOLVER on GPU;

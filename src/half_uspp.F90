@@ -78,8 +78,7 @@ contains
       do b=1,nlm;do a=1,nlm;k=0
         do l=0,lmax;do m=-l,l;k=k+1
           if(abs(lv(a)-lv(b))<=l.and.l<=lv(a)+lv(b).and.mod(lv(a)+lv(b)+l,2)==0)then
-            moment=sum(rw*(potcars(it)%wae(:,chan(a))*potcars(it)%wae(:,chan(b))- &
-              potcars(it)%wps(:,chan(a))*potcars(it)%wps(:,chan(b)))*potcars(it)%rgrid**l)
+            moment=potcars(it)%qpaw_l(chan(a),chan(b),l+1)
             multipole((b-1)*nlm+a,k)=gaunt_numeric(lv(a),mv(a),lv(b),mv(b),l,m)*moment
           end if
         end do;end do
@@ -119,7 +118,14 @@ contains
     real(dp),allocatable::coeff(:)
     integer::n,i,t,i1,i2,i3
     real(dp)::b1,b2,b3
-    n=size(veff);allocate(work(n),freq(n),coeff(n));work=cmplx(veff,0.0_dp,dp)
+    n=size(veff)
+#ifdef HALF_QDEP_DIRECT_GRID
+    do i=1,size(potcars)
+      call build_species_direct(veff,shape,potcars(i),crystal,i,paw(i))
+    end do
+    return
+#else
+    allocate(work(n),freq(n),coeff(n));work=cmplx(veff,0.0_dp,dp)
     call fft3_forward(shape,work,freq)
     do i=1,n
       t=i-1;i3=mod(t,shape(3));t=t/shape(3);i2=mod(t,shape(2));i1=t/shape(2)
@@ -132,7 +138,106 @@ contains
     do i=1,size(potcars)
       call build_species(coeff,shape,potcars(i),crystal,i,paw(i))
     end do
+#endif
   end subroutine
+
+  subroutine build_species_direct(veff,shape,potcar,crystal,itype,paw)
+    ! VASP SETDIJ construction for PAW/MIMIC_US: put the normalized
+    ! compensation functions on the actual FFT points around each ion and
+    ! contract them directly with Veff.  This avoids the additional
+    ! spline-to-radial-shell and angular-quadrature approximations.
+    real(dp),intent(in)::veff(:)
+    integer(i32),intent(in)::shape(3)
+    type(potcar_t),intent(in)::potcar
+    type(crystal_t),intent(in)::crystal
+    integer,intent(in)::itype
+    type(paw_species_t),intent(inout)::paw
+    integer::nlm,lmax,naug,nrad,natoms,pairs,ich,l,m,a,b,k,iat,ion0
+    integer::i1,i2,i3,index,alpha
+    integer,allocatable::chan(:),lv(:),mv(:),laug(:),maug(:)
+    real(dp),allocatable::rw(:),multipole(:,:),root1(:),root2(:),c1(:),c2(:),radial_v(:),radial_grad(:,:)
+    real(dp)::moment,frac(3),df(3),cart(3),cart_minus(3),cart_plus(3),kernel,scale,h
+    nlm=0;lmax=0
+    do ich=1,potcar%channels
+      nlm=nlm+2*potcar%lps(ich)+1;lmax=max(lmax,2*potcar%lps(ich))
+    end do
+    if(nlm/=paw%nlm)error stop 'HALF: direct-grid QDEP channel mismatch'
+    naug=(lmax+1)*(lmax+1);nrad=size(potcar%rgrid);natoms=crystal%counts(itype);pairs=nlm*nlm
+    allocate(chan(nlm),lv(nlm),mv(nlm),laug(naug),maug(naug),rw(nrad),multipole(pairs,naug), &
+      root1(0:lmax),root2(0:lmax),c1(0:lmax),c2(0:lmax),radial_v(naug),radial_grad(naug,3))
+    a=0
+    do ich=1,potcar%channels;do m=-potcar%lps(ich),potcar%lps(ich)
+      a=a+1;chan(a)=ich;lv(a)=potcar%lps(ich);mv(a)=m
+    end do;end do
+    call radial_weights(potcar%rgrid,rw);k=0
+    do l=0,lmax
+      call bessel_root(l,1,root1(l));call bessel_root(l,2,root2(l))
+      call compensation_coefficients(l,potcar%paw_rmax,root1(l),root2(l),c1(l),c2(l))
+      do m=-l,l;k=k+1;laug(k)=l;maug(k)=m;end do
+    end do
+    multipole=0.0_dp
+    do b=1,nlm;do a=1,nlm;k=0
+      do l=0,lmax;do m=-l,l;k=k+1
+        if(abs(lv(a)-lv(b))<=l.and.l<=lv(a)+lv(b).and.mod(lv(a)+lv(b)+l,2)==0)then
+          moment=potcar%qpaw_l(chan(a),chan(b),l+1)
+          multipole((b-1)*nlm+a,k)=gaunt_numeric(lv(a),mv(a),lv(b),mv(b),l,m)*moment
+        end if
+      end do;end do
+    end do;end do
+    ion0=sum(crystal%counts(:itype-1));scale=crystal%volume/real(product(shape),dp)
+    ! This differentiates the compact QDEP kernel, not a displaced atom or
+    ! a repeated eigensolve.  The small Cartesian stencil is independent of
+    ! the ionic finite-difference validation path.
+    h=1.0e-5_dp
+    do iat=1,natoms
+      radial_v=0.0_dp;radial_grad=0.0_dp
+      do i1=0,shape(1)-1;do i2=0,shape(2)-1;do i3=0,shape(3)-1
+        index=i1*shape(2)*shape(3)+i2*shape(3)+i3+1
+        frac=[real(i1,dp)/real(shape(1),dp),real(i2,dp)/real(shape(2),dp),real(i3,dp)/real(shape(3),dp)]
+        df=frac-crystal%positions(ion0+iat,:);df=df-anint(df);cart=matmul(df,crystal%lattice)
+        if(sum(cart*cart)<=potcar%paw_rmax*potcar%paw_rmax)then
+          do k=1,naug
+            kernel=qdep_kernel(laug(k),maug(k),cart,potcar%paw_rmax,root1(laug(k)),root2(laug(k)), &
+              c1(laug(k)),c2(laug(k)))
+            radial_v(k)=radial_v(k)+scale*veff(index)*kernel
+            do alpha=1,3
+              cart_minus=cart;cart_plus=cart;cart_minus(alpha)=cart_minus(alpha)-h;cart_plus(alpha)=cart_plus(alpha)+h
+              radial_grad(k,alpha)=radial_grad(k,alpha)+scale*veff(index)* &
+                (qdep_kernel(laug(k),maug(k),cart_minus,potcar%paw_rmax,root1(laug(k)),root2(laug(k)), &
+                   c1(laug(k)),c2(laug(k)))- &
+                 qdep_kernel(laug(k),maug(k),cart_plus,potcar%paw_rmax,root1(laug(k)),root2(laug(k)), &
+                   c1(laug(k)),c2(laug(k))))/(2.0_dp*h)
+            end do
+          end do
+        end if
+      end do;end do;end do
+      paw%dij_atom(iat,:,:)=paw%dij
+      do b=1,nlm;do a=1,nlm
+        paw%dij_atom(iat,a,b)=paw%dij_atom(iat,a,b)+sum(multipole((b-1)*nlm+a,:)*radial_v)
+        do alpha=1,3
+          paw%ddij_atom(iat,a,b,alpha)=sum(multipole((b-1)*nlm+a,:)*radial_grad(:,alpha))
+        end do
+      end do;end do
+      paw%dij_atom(iat,:,:)=0.5_dp*(paw%dij_atom(iat,:,:)+transpose(paw%dij_atom(iat,:,:)))
+      do alpha=1,3
+        paw%ddij_atom(iat,:,:,alpha)=0.5_dp*(paw%ddij_atom(iat,:,:,alpha)+transpose(paw%ddij_atom(iat,:,:,alpha)))
+      end do
+    end do
+  end subroutine build_species_direct
+
+  real(dp) function qdep_kernel(l,m,cart,rc,z1,z2,c1,c2)result(value)
+    integer,intent(in)::l,m
+    real(dp),intent(in)::cart(3),rc,z1,z2,c1,c2
+    real(dp)::r,x,phi,g
+    r=sqrt(sum(cart*cart))
+    if(r>rc)then;value=0.0_dp;return;end if
+    g=c1*sph_bessel(l,z1*r/rc)+c2*sph_bessel(l,z2*r/rc)
+    if(r<1.0e-14_dp)then
+      if(l==0.and.m==0)then;value=g/sqrt(4.0_dp*pi);else;value=0.0_dp;end if
+    else
+      x=max(-1.0_dp,min(1.0_dp,cart(3)/r));phi=atan2(cart(2),cart(1));value=g*ylm(l,m,x,phi)
+    end if
+  end function qdep_kernel
 
   subroutine build_species(coeff,shape,potcar,crystal,itype,paw)
     real(dp),intent(in)::coeff(:)
@@ -179,8 +284,7 @@ contains
       do l=0,lmax;do m=-l,l
         k=k+1
         if(abs(lv(a)-lv(b))<=l.and.l<=lv(a)+lv(b).and.mod(lv(a)+lv(b)+l,2)==0)then
-          moment=sum(rw*(potcar%wae(:,chan(a))*potcar%wae(:,chan(b))- &
-            potcar%wps(:,chan(a))*potcar%wps(:,chan(b)))*potcar%rgrid**l)
+          moment=potcar%qpaw_l(chan(a),chan(b),l+1)
           multipole((b-1)*nlm+a,k)=gaunt_numeric(lv(a),mv(a),lv(b),mv(b),l,m)*moment
         end if
       end do;end do
@@ -291,8 +395,22 @@ contains
 
   subroutine radial_weights(r,w)
     real(dp),intent(in)::r(:);real(dp),intent(out)::w(:)
-    integer::i,n,last;real(dp)::h0,h1,s,alpha,beta,eta
-    n=size(r);w=0.0_dp;last=merge(n,n-1,mod(n,2)==1)
+    integer::i,n,last;real(dp)::h0,h1,s,alpha,beta,eta,hlog,spread
+    n=size(r)
+    if(n>=3.and.all(r>0.0_dp))then
+      hlog=log(r(2)/r(1));spread=maxval(abs(log(r(2:n)/r(1:n-1))-hlog))
+      if(spread<1.0e-10_dp*max(1.0_dp,abs(hlog)))then
+        ! VASP SET_SIMP: Simpson integration in x=log(r), hence dr=r dx.
+        w=0.0_dp
+        do i=3,n,2
+          w(i)=w(i)+r(i)*hlog/3.0_dp
+          w(i-1)=4.0_dp*r(i-1)*hlog/3.0_dp
+          w(i-2)=w(i-2)+r(i-2)*hlog/3.0_dp
+        end do
+        return
+      end if
+    end if
+    w=0.0_dp;last=merge(n,n-1,mod(n,2)==1)
     do i=1,last-2,2
       h0=r(i+1)-r(i);h1=r(i+2)-r(i+1);s=(h0+h1)/6
       w(i)=w(i)+s*(2-h1/h0);w(i+1)=w(i+1)+s*(h0+h1)**2/(h0*h1);w(i+2)=w(i+2)+s*(2-h0/h1)

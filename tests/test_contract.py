@@ -411,6 +411,21 @@ def test_high_order_qdep_force_accuracy_record():
         assert high < baseline / 10.0
 
 
+def test_vasp_style_direct_grid_qdep_and_one_centre_moments():
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    cpu = (ROOT / "src/half_uspp.F90").read_text().lower()
+    cuda = (ROOT / "src/half_cuda_uspp.cuf").read_text().lower()
+    potcar = (ROOT / "src/half_potcar.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "half_qdep_direct_grid" in cmake.lower()
+    assert "subroutine build_species_direct" in cpu
+    assert "volume/real(product(shape),dp)" in cpu
+    assert "direct_grid_vlm_kernel" in cuda
+    assert "subroutine rebuild_paw_qion" in potcar
+    assert "qpaw_l" in potcar
+    assert "force_qdep_cache" in cli
+
+
 def test_si_reference_input_contract():
     # Independent lightweight read: confirms the bootstrap target and expected
     # oracle values without importing HAPPY from the source tree.

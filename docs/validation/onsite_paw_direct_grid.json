@@ -1,0 +1,25 @@
+{
+  "branch": "force-accuracy-experiments",
+  "method": "VASP-style direct FFT-grid QDEP/SETDIJ",
+  "qdep_direct_grid": true,
+  "Si": {
+    "encut_eV": 520,
+    "bands": 24,
+    "half_free_energy_eV": -43.30662540354035,
+    "half_minus_vasp_energy_eV": -0.013307173540354711,
+    "force_component_mae_eV_per_Angstrom": 0.0007396113269589605,
+    "force_component_max_error_eV_per_Angstrom": 0.0013086932104788983,
+    "augmentation_dd_max_error_eV_per_Angstrom": 2.7522501258136193e-9,
+    "qpaw_q0_rebuild_max_delta": 2.4827623842926805e-7
+  },
+  "HfO2": {
+    "encut_eV": 521,
+    "bands": 80,
+    "half_free_energy_eV": -121.88442719319166,
+    "half_minus_vasp_energy_eV": 0.08815572680833839,
+    "force_component_mae_eV_per_Angstrom": 0.06837978991869259,
+    "force_component_max_error_eV_per_Angstrom": 0.3199472407593795,
+    "augmentation_dd_max_error_eV_per_Angstrom": 2.4255391861682796e-9,
+    "qpaw_q0_rebuild_max_delta": 3.7069344231005497e-7
+  }
+}

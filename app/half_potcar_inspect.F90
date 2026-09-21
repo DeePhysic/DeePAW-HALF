@@ -17,7 +17,8 @@ program half_potcar_inspect
     write(*,'(A,*(I0,1X))')'lps=',p(1)%lps
     write(*,'(A,I0)')'nmax=',p(1)%nmax
     write(*,'(A,ES24.16)')'local_checksum=',sum(p(1)%psp_local)
-    write(*,'(A,ES24.16)')'projector_checksum=',sum(p(1)%pspnl)
+  write(*,'(A,ES24.16)')'projector_checksum=',sum(p(1)%pspnl)
+  write(*,'(A,ES24.16)')'qpaw_rebuild_max_delta=',p(1)%qpaw_rebuild_max_delta
     write(*,'(A,ES24.16)')'dion_checksum=',sum(p(1)%dion)
     write(*,'(A,ES24.16)')'qpaw_checksum=',sum(p(1)%qpaw)
     write(*,'(A,ES24.16)')'radial_checksum=',sum(p(1)%rgrid)

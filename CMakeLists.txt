@@ -17,6 +17,7 @@ set(HALF_GPU_CC "86" CACHE STRING "NVIDIA GPU compute capability, without the de
 set(HALF_CUDA_VERSION "12.4" CACHE STRING "CUDA toolkit selected by NVHPC")
 set(HALF_QDEP_NTHETA "12" CACHE STRING "Gauss-Legendre polar points for QDEP sphere integration")
 set(HALF_QDEP_NPHI "24" CACHE STRING "Uniform azimuthal points for QDEP sphere integration")
+option(HALF_QDEP_DIRECT_GRID "Assemble PAW QDEP directly on the FFT grid (VASP SETDIJ construction)" ON)
 
 if(HALF_QDEP_NTHETA LESS 4 OR HALF_QDEP_NPHI LESS 8)
   message(FATAL_ERROR "HALF QDEP angular grids require NTHETA>=4 and NPHI>=8")
@@ -112,7 +113,8 @@ set_target_properties(half_core PROPERTIES
 )
 target_compile_definitions(half_core PRIVATE
   HALF_QDEP_NTHETA=${HALF_QDEP_NTHETA}
-  HALF_QDEP_NPHI=${HALF_QDEP_NPHI})
+  HALF_QDEP_NPHI=${HALF_QDEP_NPHI}
+  $<$<BOOL:${HALF_QDEP_DIRECT_GRID}>:HALF_QDEP_DIRECT_GRID>)
 target_include_directories(half_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)

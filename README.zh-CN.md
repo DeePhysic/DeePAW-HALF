@@ -39,6 +39,11 @@ L 通道、Harris Hartree+XC 响应及 Si/HfO2 力验证见
 [HALF 能量和力与完全自洽 VASP 的对比](docs/validation/HALF_VS_VASP_SCF_ENERGY_FORCE.zh-CN.md)。
 VASP 接入区分两种模式：one-step approximate SCF 只做一次电子更新并得到近自洽
 能量；ACC-SCF 继续迭代到 `EDIFF`，获得完全自洽的密度、能量和力。
+独立解析力现在可以使用 spglib 不可约 k 网格：HALF 在观测量空间展开平滑密度、
+PAW augmentation density 和各项原子力，不需要保存完整 k-star 波函数。Si 原胞
+的对角化数从 216 降至 16，wall time 从 35.41 s 降至 4.42 s（8.01×），与完整
+网格的力差为 `1.1e-7 eV/Angstrom`。详见
+[不可约 k 点解析力展开](docs/validation/KPOINT_SYMMETRY_FORCE_EXPANSION.zh-CN.md)。
 
 ## 数值模型：从固定密度到本征值
 

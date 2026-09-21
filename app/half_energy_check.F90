@@ -6,13 +6,16 @@ program half_energy_check
   use half_paw,only:paw_species_t
   use half_forces,only:add_nonlocal_paw_forces
   use half_potcar_interp,only:vasp_local_spline_second,vasp_local_spline_eval,vasp_four_point_eval
+  use half_kpoints,only:kpoint_set_t,symmetrize_scalar_grid,symmetrize_atomic_vectors
   implicit none
   type(crystal_t)::crystal,shifted
   type(plane_wave_basis_t)::basis
   type(paw_species_t),allocatable::paw(:)
+  type(kpoint_set_t)::symset
   real(dp)::eig(2,3),weight(2),mu,band,entropy,e1,e2,ep,em,h,phase,table(8),m2table(8),dx
   real(dp)::analytic(2,3),numeric(2,3),inverse_lattice(3,3),delta(3)
   real(dp)::nlforce(1,3),nlnumeric(3),eval(1),focc(1),r0(3),eplus,eminus
+  real(dp)::symgrid(8),symvectors(2,3),expected_vectors(2,3)
   complex(dp)::waves(3,1),projector0(2,3),cc(2)
   integer::i,j,ig
   real(dp),allocatable::occ(:,:)
@@ -33,6 +36,22 @@ program half_energy_check
   if(abs(m2table(8))>1e-14_dp.or.abs((vasp_local_spline_eval(table,m2table,8.0_dp,dx)- &
       vasp_local_spline_eval(table,m2table,8.0_dp,0.0_dp))/dx)>1e-6_dp) &
     error stop 'HALF: VASP local-potential spline boundary regression'
+
+  symset%nsym=2
+  allocate(symset%rotations(3,3,2),symset%translations(3,2),symset%cart_rotations(3,3,2),symset%atom_map(2,2))
+  symset%rotations=0;symset%translations=0.0_dp;symset%cart_rotations=0.0_dp
+  do i=1,3;symset%rotations(i,i,:)=1;symset%cart_rotations(i,i,1)=1.0_dp;end do
+  symset%translations(:,2)=[0.5_dp,0.0_dp,0.0_dp]
+  symset%cart_rotations(1,1,2)=-1.0_dp;symset%cart_rotations(2,2,2)=-1.0_dp
+  symset%cart_rotations(3,3,2)=1.0_dp;symset%atom_map(:,1)=[1,2];symset%atom_map(:,2)=[2,1]
+  symgrid=[(real(i,dp),i=1,8)];call symmetrize_scalar_grid(symset,[2,2,2],symgrid)
+  if(maxval(abs(symgrid-[1.5_dp,1.5_dp,3.5_dp,3.5_dp,5.5_dp,5.5_dp,7.5_dp,7.5_dp]))>1e-14_dp) &
+    error stop 'HALF: scalar-grid space-group expansion regression'
+  symvectors=reshape([1.0_dp,4.0_dp,2.0_dp,5.0_dp,3.0_dp,6.0_dp],[2,3])
+  expected_vectors(1,:)=[-1.5_dp,-1.5_dp,4.5_dp];expected_vectors(2,:)=[1.5_dp,1.5_dp,4.5_dp]
+  call symmetrize_atomic_vectors(symset,symvectors)
+  if(maxval(abs(symvectors-expected_vectors))>1e-14_dp) &
+    error stop 'HALF: atomic-vector space-group expansion regression'
 
   eig=reshape([-1.0_dp,-0.8_dp,0.5_dp,0.7_dp,2.0_dp,2.2_dp],[2,3])
   weight=[0.25_dp,0.75_dp]

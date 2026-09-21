@@ -87,6 +87,12 @@ The project-level comparison against fully self-consistent VASP is
 The VASP handoff exposes two distinct modes: one-step approximate SCF reaches
 near-self-consistent energy after one electronic refinement, while ACC-SCF
 continues to `EDIFF` for fully self-consistent density, energy, and forces.
+Standalone analytic forces can use spglib irreducible k meshes: HALF expands
+the smooth plus PAW augmentation density and every atomic force component in
+observable space, without materializing full-star wavefunctions. For primitive
+Si this reduces 216 diagonalizations to 16 and wall time from 35.41 to 4.42 s
+(8.01x), with full-mesh force parity at `1.1e-7 eV/Angstrom`. See
+[Irreducible-k force expansion](docs/validation/KPOINT_SYMMETRY_FORCE_EXPANSION.md).
 
 ## Numerical model, derived step by step
 

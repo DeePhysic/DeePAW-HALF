@@ -4,7 +4,8 @@ program half_cli
   use half_chgcar, only: read_chgcar
   use half_potcar, only: read_potcar,validate_potcar_structure
   use half_basis, only: build_plane_wave_basis
-  use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh,generate_cubic_band_path
+  use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh, &
+    generate_cubic_band_path,symmetrize_scalar_grid,symmetrize_atomic_vectors
   use half_paw, only: paw_species_t, build_paw_operators
   use half_energy, only: compute_occupations,ewald_energy,ewald_forces,read_vasp_eigenval
   use half_artifacts, only: write_bands_artifacts,write_energy_npz
@@ -139,6 +140,7 @@ contains
       set%divisions(2),', ',set%divisions(3),'],'
     write(*,'(A,I0,A)')'  "full_kpoint_count": ',set%full_count,','
     write(*,'(A,I0,A)')'  "kpoint_count": ',set%nk,','
+    write(*,'(A,I0,A)')'  "space_group_operation_count": ',set%nsym,','
     write(*,'(A)')'  "kpoints": ['
     do k=1,set%nk
       write(*,'(A,3(ES24.16,A),ES24.16,A)',advance='no')'    [',set%points(k,1),', ', &
@@ -807,6 +809,10 @@ contains
     if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),set)
     else if(full_mesh)then;call gamma_centered_mesh(crystal,kspacing,set)
     else;call gamma_centered_irreducible_mesh(crystal,kspacing,set,symprec,.true.);end if
+    ! A symmetry-reduced Hamiltonian requires a density invariant under the
+    ! same space group.  This also removes harmless equivariance noise from a
+    ! learned DeepAW density, as VASP does before an irreducible-k calculation.
+    if(len_trim(kpoints_path)==0.and..not.full_mesh)call symmetrize_scalar_grid(set,rho%shape,rho%values)
     use_reference=len_trim(reference_path)>0
     if(use_reference)then
       call read_vasp_eigenval(trim(reference_path),reference_set,reference_eigenvalues,reference_nelect)
@@ -957,6 +963,10 @@ contains
       end do
       rho_out%shape=rho%shape;allocate(rho_out%values(size(rho%values)));rho_out%values=rho_smooth%values
       call add_augmentation_density(potcars,crystal,rho%shape,augmentation_occupancy,rho_out%values,augmentation_charge)
+      ! Expanding the combined smooth plus PAW augmentation density is
+      ! algebraically equivalent to rotating each star wavefunction and its
+      ! onsite occupation matrix, without materializing full-mesh states.
+      call symmetrize_scalar_grid(set,rho%shape,rho_out%values)
       write(0,'(A,4ES18.8)')'HALF analytic density input/smooth/augmentation/final=',rho%electron_count(), &
         rho_out%electron_count()-augmentation_charge,augmentation_charge,rho_out%electron_count()
       call ewald_forces(crystal,charges,force_ewald)
@@ -967,6 +977,13 @@ contains
       call local_ionic_forces(rho_out,potcars,crystal,force_local)
       call nlcc_forces(vxc_input,potcars,crystal,rho%shape,force_nlcc)
       call harris_correction_forces(rho,rho_out,potcars,crystal,trim(xc)=='pbe',force_harris)
+      call symmetrize_atomic_vectors(set,force_ewald)
+      call symmetrize_atomic_vectors(set,force_local)
+      call symmetrize_atomic_vectors(set,force_nonlocal)
+      call symmetrize_atomic_vectors(set,force_projector)
+      call symmetrize_atomic_vectors(set,force_augmentation)
+      call symmetrize_atomic_vectors(set,force_nlcc)
+      call symmetrize_atomic_vectors(set,force_harris)
       forces=force_ewald+force_local+force_nonlocal+force_nlcc+force_harris
       do iat=1,crystal%nions
         write(0,'(A,I0,7(A,3ES14.6))')'HALF analytic force atom ',iat,' total=',forces(iat,:), &
@@ -1005,6 +1022,7 @@ contains
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
     write(unit,'(A)')'         --forces  (standalone analytic PAW/Harris force; never displaces atoms)'
+    write(unit,'(A)')'                   (automatic irreducible meshes expand density, PAW augmentation, and force by space group)'
     write(unit,'(A)')'         --atomic-reference-energy EV --paw-atomic-double-counting EV'
   end subroutine
 
@@ -1091,6 +1109,12 @@ contains
     write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",';write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),','
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
     write(unit,'(A,I0,A)')'  "full_kpoint_count": ',set%full_count,',';write(unit,'(A,I0,A)')'  "irreducible_kpoint_count": ',set%nk,','
+    write(unit,'(A,I0,A)')'  "space_group_operation_count": ',set%nsym,','
+    if(have_forces.and.set%nsym>1)then
+      write(unit,'(A)')'  "force_kpoint_expansion": "observable-space-group",'
+    else
+      write(unit,'(A)')'  "force_kpoint_expansion": null,'
+    end if
     write(unit,'(A,I0,A,I0,A)')'  "plane_wave_range": [',minval(plane_waves),', ',maxval(plane_waves),'],'
     write(unit,'(A,ES24.16,A)')'  "electron_count": ',nelect,',';write(unit,'(A,ES24.16,A)')'  "smooth_density_electron_count": ',density_electrons,','
     write(unit,'(A,ES24.16,A)')'  "fermi_level_eV": ',mu,',';write(unit,'(A,ES24.16,A)')'  "band_energy_eV": ',band,','

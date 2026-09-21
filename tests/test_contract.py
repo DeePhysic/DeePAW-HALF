@@ -258,7 +258,9 @@ def test_si_finite_difference_force_parity_record():
     assert record["max_abs_force_error_eV_per_Angstrom"] < 1e-8
     assert record["speedup"] > 40.0
     cli = (ROOT / "app/half_cli.F90").read_text().lower()
-    assert "case('--forces')" in cli
+    assert "case('--finite-difference-force-check')" in cli
+    assert "case('--forces');call fail" in cli
+    assert "finite_difference_validation_oracle" in cli
     assert "evaluate_free_energy" in cli
 
 

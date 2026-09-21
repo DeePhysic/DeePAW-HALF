@@ -273,7 +273,12 @@ CPU/CUDA backend selection:
 # Evaluate the symmetry-reduced fixed-density Harris energy.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
-  --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output-prefix energy
+  --vaspwave-h5 vaspwave.h5 --output-prefix energy
+
+# Developer-only finite-difference oracle (never the production force path).
+./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
+  --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
+  --finite-difference-force-check --force-step 0.001 --output-prefix force_check
 
 # Alternatively consume a matching VASP EIGENVAL on an explicit mesh.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
@@ -306,8 +311,9 @@ and final energy as dense `VASP_LIKE`, while reducing total elapsed time from
 
 MPI is implemented for the CPU `bands` and `energy` paths. Rank `r` solves
 k points `r+1, r+1+nranks, ...`; collective reductions restore the ordered
-eigenvalue and plane-wave arrays, and only rank 0 writes JSON. Finite-difference
-forces use the same distribution for every displaced structure. Use one
+eigenvalue and plane-wave arrays, and only rank 0 writes JSON. The optional
+finite-difference validation oracle uses the same distribution for every
+displaced structure; production `--forces` never displaces atoms. Use one
 BLAS/OpenMP thread per rank unless deliberately testing hybrid MPI+OpenMP.
 Multi-rank CUDA and multi-rank `vaspwave.h5` output are rejected explicitly.
 

@@ -764,7 +764,8 @@ contains
         if(trim(solver)/='evd'.and.trim(solver)/='evj'.and.trim(solver)/='evx'.and.trim(solver)/='acc') &
           call fail('--solver must be evd, evj, evx, or acc')
       case('--no-uspp-dij');use_uspp=.false.
-      case('--forces');do_forces=.true.
+      case('--forces');call fail('--forces is reserved for the complete analytic PAW/Harris force; it never displaces atoms and is not available until FORDEP/FORHAR validation is complete')
+      case('--finite-difference-force-check');do_forces=.true.
       case('--force-step');call option_value(i,narg,'--force-step',value);read(value,*,iostat=ios)force_step
         if(ios/=0.or.force_step<=0)call fail('invalid --force-step value')
       case('--paw-atomic-double-counting');call option_value(i,narg,'--paw-atomic-double-counting',value);read(value,*,iostat=ios)paw_atomic
@@ -797,7 +798,7 @@ contains
         call fail('EIGENVAL coordinates or weights do not match k points')
       if(abs(reference_nelect-nelect)>5e-4_dp)call fail('EIGENVAL electron count does not match POTCAR')
       if(len_trim(hdf5_path)>0)call fail('vaspwave.h5 export requires reconstructed eigenvectors, not EIGENVAL')
-      if(do_forces)call fail('forces require reconstructed eigenstates, not EIGENVAL')
+      if(do_forces)call fail('finite-difference force checks require reconstructed eigenstates, not EIGENVAL')
     end if
 #ifdef HALF_CLI_CUDA
     if(trim(backend)=='auto'.or.trim(backend)=='cuda')then;actual_backend='cuda';else;actual_backend='cpu';end if
@@ -895,7 +896,7 @@ contains
           actual_backend,solver,use_uspp,atomic_reference,paw_atomic,have_paw_atomic,displaced_energies(ion))
       end do
       forces(iat,i)=-(displaced_energies(2)-displaced_energies(1))/(2.0_dp*force_step)
-      if(parallel_root())write(0,'(A,I0,A,I0,A,ES16.8)')'HALF force: atom ',iat,' axis ',i,' force_eV_per_A=',forces(iat,i)
+      if(parallel_root())write(0,'(A,I0,A,I0,A,ES16.8)')'HALF finite-difference oracle: atom ',iat,' axis ',i,' force_eV_per_A=',forces(iat,i)
       end do;end do
     else
       allocate(forces(0,0))
@@ -927,7 +928,8 @@ contains
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
-    write(unit,'(A)')'         --forces --force-step ANGSTROM'
+    write(unit,'(A)')'         --forces  (analytic PAW/Harris force; unavailable until all terms validate)'
+    write(unit,'(A)')'         --finite-difference-force-check --force-step ANGSTROM  (validation oracle only)'
     write(unit,'(A)')'         --atomic-reference-energy EV --paw-atomic-double-counting EV'
   end subroutine
 
@@ -1027,6 +1029,7 @@ contains
     write(unit,'(A,ES24.16,A)')'  "minimum_overlap_eigenvalue": ',smin,','
     write(unit,'(A,ES24.16,A)')'  "internal_energy_eV": ',internal,',';write(unit,'(A,ES24.16,A)')'  "free_energy_eV": ',free,','
     if(have_forces)then
+      write(unit,'(A)')'  "force_method": "finite_difference_validation_oracle",'
       write(unit,'(A,ES24.16,A)')'  "force_step_Angstrom": ',force_step,',';write(unit,'(A)')'  "forces_eV_per_Angstrom": ['
       do iat=1,size(forces,1)
         write(unit,'(A,3(ES24.16,:,A))',advance='no')'    [',forces(iat,1),', ',forces(iat,2),', ',forces(iat,3),']'
@@ -1034,6 +1037,7 @@ contains
       end do
       write(unit,'(A)')'  ]'
     else
+      write(unit,'(A)')'  "force_method": null,'
       write(unit,'(A)')'  "forces_eV_per_Angstrom": null'
     end if
     write(unit,'(A)')'}'

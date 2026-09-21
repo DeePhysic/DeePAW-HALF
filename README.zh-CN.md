@@ -193,7 +193,12 @@ half bands CHGCAR.smooth POTCAR \
 # 使用 spglib 不可约 k 网格计算固定密度 Harris 总能量
 half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
-  --vaspwave-h5 vaspwave.h5 --forces --force-step 0.001 --output-prefix energy
+  --vaspwave-h5 vaspwave.h5 --output-prefix energy
+
+# 仅供开发验证的有限差分 oracle，绝不是生产力路径
+half energy CHGCAR.smooth POTCAR \
+  --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
+  --finite-difference-force-check --force-step 0.001 --output-prefix force_check
 
 # 也可在显式网格上读取匹配的 VASP EIGENVAL
 half energy CHGCAR.smooth POTCAR \
@@ -219,7 +224,8 @@ VASP `HALF_MODE=ACC` 与稠密 `VASP_LIKE` 都使用 5 个 SCF LOOP，最终能�
 
 MPI 作用于 CPU 的 `bands` 和 `energy` 路径。rank `r` 负责
 `r+1, r+1+nranks, ...` 这些 k 点，集合通信恢复原顺序的本征值与平面波计数，
-只有 rank 0 写 JSON。有限差分力对每个位移结构复用同一分发。通常应设置
+只有 rank 0 写 JSON。可选的有限差分验证 oracle 对每个位移结构复用同一分发；
+生产 `--forces` 绝不移动原子。通常应设置
 `OMP_NUM_THREADS=1`、`MKL_NUM_THREADS=1`，避免每个 rank 再生成一组线程。
 多 rank CUDA 与多 rank `vaspwave.h5` 会被明确拒绝。
 

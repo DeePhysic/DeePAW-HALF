@@ -285,7 +285,7 @@ Si 验证采用 $\delta=0.001$ Angstrom。一次 CLI 调用即可同时输出能
 ```bash
 half energy CHGCAR.deepaw POTCAR \
   --encut 200 --bands 8 --backend cuda --uspp-dij \
-  --forces --force-step 0.001 --output-prefix si_energy_force
+  --finite-difference-force-check --force-step 0.001 --output-prefix si_force_oracle
 ```
 
 金刚石 Si 上，CUDA 与 Python 实现的内能相差 $3.425\times10^{-12}$ eV/cell，

@@ -43,7 +43,7 @@ deterministic physics layer that maps density to wavefunctions:
 ```text
                          +-> HALF fixed-density solve -> bands / gap / energy
 structure -> DeepAW rho -+
-                         +-> HALF Harris energy -> finite-difference forces
+                         +-> HALF Harris energy -> analytic-force development
                          +-> HALF initial waves -> VASP SCF -> converged properties
 ```
 
@@ -320,7 +320,7 @@ produces both energy components and forces:
 ```bash
 half energy CHGCAR.deepaw POTCAR \
   --encut 200 --bands 8 --backend cuda --uspp-dij \
-  --forces --force-step 0.001 --output-prefix si_energy_force
+  --finite-difference-force-check --force-step 0.001 --output-prefix si_force_oracle
 ```
 
 For diamond Si, the CUDA and Python internal energies differ by

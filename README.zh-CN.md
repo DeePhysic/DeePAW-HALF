@@ -37,6 +37,8 @@ L 通道、Harris Hartree+XC 响应及 Si/HfO2 力验证见
 [Harris 力的 L 通道与密度响应优化](docs/validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md)。
 项目对外采用的完全自洽 VASP 对比见
 [HALF 能量和力与完全自洽 VASP 的对比](docs/validation/HALF_VS_VASP_SCF_ENERGY_FORCE.zh-CN.md)。
+VASP 接入区分两种模式：one-step approximate SCF 只做一次电子更新并得到近自洽
+能量；ACC-SCF 继续迭代到 `EDIFF`，获得完全自洽的密度、能量和力。
 
 ## 数值模型：从固定密度到本征值
 

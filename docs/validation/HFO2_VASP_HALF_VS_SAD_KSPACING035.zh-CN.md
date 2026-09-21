@@ -332,6 +332,12 @@ DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著�
 
 ### 4.4 能量/力优化能否减少 VASP SCF LOOP
 
+HALF direct 不进行 SCF。可选的 `ICHARG=1`、`NELM=1` 路径称为
+**one-step approximate SCF**：一次电子更新后，Si/HfO2 总能相对完全自洽
+VASP 的差为 `0.303/2.492 meV/atom`，但不宣称密度或力已经收敛。
+**ACC-SCF** 则让 VASP 继续迭代到 `EDIFF`，在保留 HALF 初始子空间 LOOP
+优势的同时获得更高精度的完全自洽结果。
+
 `EATOM`、atomic PAW 能量记账和解析力响应都在本征求解之后计算。优化它们不会
 改变 $H$、$S$、HALF 本征矢或传给 VASP 的波函数，因此不能直接减少 SCF
 LOOP。POTCAR 插值进入 $V_{\mathrm{eff}}$，可能小幅改善初始子空间。要显著减少

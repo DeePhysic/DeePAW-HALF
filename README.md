@@ -84,6 +84,9 @@ force validation are documented in
 [Harris-force L-channel and density-response optimization](docs/validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md).
 The project-level comparison against fully self-consistent VASP is
 [HALF energy and force versus fully self-consistent VASP](docs/validation/HALF_VS_VASP_SCF_ENERGY_FORCE.md).
+The VASP handoff exposes two distinct modes: one-step approximate SCF reaches
+near-self-consistent energy after one electronic refinement, while ACC-SCF
+continues to `EDIFF` for fully self-consistent density, energy, and forces.
 
 ## Numerical model, derived step by step
 

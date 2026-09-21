@@ -371,6 +371,13 @@ direct path into VASP when a fully self-consistent result is required.
 
 ### 4.4 Does energy/force optimization reduce VASP SCF loops?
 
+HALF direct is SCF-free. The optional `ICHARG=1`, `NELM=1` path is called
+**one-step approximate SCF**: it reaches Si/HfO2 energies within
+`0.303/2.492 meV/atom` of fully self-consistent VASP after one electronic
+refinement, but does not claim a converged density or force. **ACC-SCF** keeps
+iterating VASP to `EDIFF` and is the higher-accuracy path, while retaining the
+loop reduction from the HALF initial subspace.
+
 `EATOM`, atomic PAW energy bookkeeping, and analytic-force response are
 post-eigensolver quantities. Improving them does not alter $H$, $S$, the HALF
 eigenvectors, or the wavefunctions handed to VASP, so it cannot directly

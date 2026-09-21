@@ -29,6 +29,19 @@ HfO2 的绝对能量差主要来自与位置无关的 POTCAR 原子参考能 `EA
 
 ## 对 VASP 初始波函数和 SCF LOOP 的影响
 
+工作流明确区分三个精度层级：
+
+| 模式 | 电子更新 | 目标结果 |
+|---|---|---|
+| HALF direct | 无 | 无 SCF 的 Harris 能量、能带和解析力 |
+| one-step approximate SCF | VASP `ICHARG=1`、`NELM=1` | 一次电子更新后的近自洽能量 |
+| ACC-SCF | VASP 继续迭代到 `EDIFF` | 用更少 LOOP 获得完全自洽 VASP 精度 |
+
+one-step approximate-SCF 相对完全自洽 VASP 的能量差为 Si
+`0.303 meV/atom`、HfO2 `2.492 meV/atom`；力分量 MAE 分别为
+`0.949` 和 `27.986 meV/Angstrom`。因此一步模式定位为能量近似，收敛密度和
+高精度力则采用 ACC-SCF。
+
 `EATOM`、Ewald 记账、atomic PAW double counting 和解析力响应都在本征问题
 之后计算。优化这些量会改变报告的能量或力，但不会改变 $H$、$S$、本征矢、
 传给 VASP 的波函数或 VASP 的 SCF LOOP 数。

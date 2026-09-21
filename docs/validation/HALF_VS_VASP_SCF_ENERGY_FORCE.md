@@ -33,6 +33,20 @@ density. It is therefore the relevant end-to-end accuracy result.
 
 ## Consequence for VASP initialization
 
+The workflow distinguishes three accuracy levels:
+
+| Mode | Electronic update | Intended result |
+|---|---|---|
+| HALF direct | none | SCF-free Harris energy, bands, and analytic forces |
+| one-step approximate SCF | VASP `ICHARG=1`, `NELM=1` | near-self-consistent energy after one electronic refinement |
+| ACC-SCF | continue VASP to `EDIFF` | fully self-consistent VASP accuracy with fewer loops |
+
+For the one-step approximate-SCF mode, the energy differences from fully
+self-consistent VASP are `0.303 meV/atom` for Si and `2.492 meV/atom` for
+HfO2. The corresponding force-component MAEs are `0.949` and
+`27.986 meV/Angstrom`; one step is therefore an energy approximation, while
+ACC-SCF is the higher-accuracy route for converged density and forces.
+
 `EATOM`, Ewald bookkeeping, atomic PAW double counting, and the analytic force
 response are evaluated after the eigenproblem. Improving them changes reported
 energies or forces but does not change $H$, $S$, eigenvectors, the wavefunctions

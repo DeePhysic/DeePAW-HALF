@@ -21,7 +21,13 @@
       "force_component_rmse_meV_per_A": 0.519719838039,
       "force_component_max_meV_per_A": 0.912781131820,
       "half_max_force_norm_meV_per_A": 0.015774682466,
-      "vasp_max_force_norm_meV_per_A": 1.095779631130
+      "vasp_max_force_norm_meV_per_A": 1.095779631130,
+      "one_step_approximate_scf": {
+        "vasp_energy_eV_per_cell": -43.29331823,
+        "energy_difference_from_scf_meV_per_atom": 0.303012500001,
+        "force_component_mae_from_scf_meV_per_A": 0.948666666667,
+        "force_component_max_from_scf_meV_per_A": 1.771
+      }
     },
     "HfO2": {
       "atoms": 12,
@@ -34,7 +40,13 @@
       "force_component_rmse_meV_per_A": 14.565795293834,
       "force_component_max_meV_per_A": 28.153871267953,
       "half_max_force_norm_meV_per_A": 95.310139650109,
-      "vasp_max_force_norm_meV_per_A": 122.190413854770
+      "vasp_max_force_norm_meV_per_A": 122.190413854770,
+      "one_step_approximate_scf": {
+        "vasp_energy_eV_per_cell": -121.97258292,
+        "energy_difference_from_scf_meV_per_atom": 2.491581666668,
+        "force_component_mae_from_scf_meV_per_A": 27.986,
+        "force_component_max_from_scf_meV_per_A": 96.955
+      }
     }
   },
   "data": {

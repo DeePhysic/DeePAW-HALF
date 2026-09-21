@@ -486,9 +486,9 @@ contains
     real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),overlap_mins(:),path_x(:),shifted(:,:)
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
-    real(dp)::encut,eh,exc,smin,smax,potential_seconds,assembly_seconds,gpu_seconds
+    real(dp)::encut,eh,exc,smin,smax,potential_seconds,assembly_seconds,gpu_seconds,acc_tol,acc_residual
     real(dp)::nelect,vbm,cbm,gap,gamma_gap
-    integer::narg,i,ios,ik,nbands,unit,npoints,nocc,gamma_index,artifact_status
+    integer::narg,i,ios,ik,nbands,unit,npoints,nocc,gamma_index,artifact_status,acc_max_iter,acc_block_size,acc_iterations
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,path_spec,path_used
     character(len=16)::xc,backend,solver,actual_backend
     logical::use_uspp
@@ -514,6 +514,7 @@ contains
     kpoints_path='';path_spec='';path_used='';i=offset+3
     if(i<=narg)then;call get_command_argument(i,arg);if(arg(1:1)/='-')then;kpoints_path=arg;i=i+1;end if;end if
     encut=400.0_dp;nbands=8;npoints=60;xc='pbe';backend='auto';solver='evd';use_uspp=.true.
+    acc_tol=1.0e-4_dp;acc_max_iter=40;acc_block_size=16
     output_path='bands.json';output_prefix='bands';hdf5_path=''
     do while(i<=narg)
       call get_command_argument(i,arg)
@@ -532,6 +533,12 @@ contains
       case('--solver');call option_value(i,narg,'--solver',solver);solver=lower(trim(solver))
         if(trim(solver)/='evd'.and.trim(solver)/='evj'.and.trim(solver)/='evx'.and.trim(solver)/='acc') &
           call fail('--solver must be evd, evj, evx, or acc')
+      case('--acc-tol');call option_value(i,narg,'--acc-tol',value);read(value,*,iostat=ios)acc_tol
+        if(ios/=0.or.acc_tol<=0)call fail('invalid --acc-tol value')
+      case('--acc-max-iter');call option_value(i,narg,'--acc-max-iter',value);read(value,*,iostat=ios)acc_max_iter
+        if(ios/=0.or.acc_max_iter<1)call fail('invalid --acc-max-iter value')
+      case('--acc-block-size');call option_value(i,narg,'--acc-block-size',value);read(value,*,iostat=ios)acc_block_size
+        if(ios/=0.or.acc_block_size<1)call fail('invalid --acc-block-size value')
       case('--output');call option_value(i,narg,'--output',output_path);output_prefix=strip_json_suffix(output_path)
       case('--output-prefix');call option_value(i,narg,'--output-prefix',output_prefix);output_path=trim(output_prefix)//'.json'
       case('--vaspwave-h5');call option_value(i,narg,'--vaspwave-h5',hdf5_path)
@@ -574,10 +581,14 @@ contains
       if(trim(actual_backend)=='cuda')then
         if(len_trim(hdf5_path)>0)then
           call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
-            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands)
+            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands, &
+            acc_tolerance=acc_tol,acc_max_iterations=acc_max_iter,acc_block_size=acc_block_size, &
+            iterations=acc_iterations,final_residual=acc_residual)
         else
           call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
-            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,target_bands=nbands)
+            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,target_bands=nbands, &
+            acc_tolerance=acc_tol,acc_max_iterations=acc_max_iter,acc_block_size=acc_block_size, &
+            iterations=acc_iterations,final_residual=acc_residual)
         end if
       else
 #endif
@@ -641,7 +652,8 @@ contains
     write(unit,'(A)')'Usage: half bands CHARGE POTENTIAL [KPOINTS] [OPTIONS]'
     write(unit,'(A)')'       half-bands CHARGE POTENTIAL [KPOINTS] [OPTIONS]'
     write(unit,'(A)')'Options: --encut EV --bands N --npoints N --path LABELS --xc lda|pbe --backend auto|cpu|cuda'
-    write(unit,'(A)')'         --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
+    write(unit,'(A)')'         --solver evd|evj|evx|acc --acc-tol EV --acc-max-iter N --acc-block-size N'
+    write(unit,'(A)')'         --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
     write(unit,'(A)')'KPOINTS is a VASP explicit reciprocal-coordinate file; omit it for an automatic cubic band path.'
   end subroutine
 

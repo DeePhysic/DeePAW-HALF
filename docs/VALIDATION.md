@@ -49,6 +49,12 @@ and
 HAPPY is the numerical oracle for HALF. Comparisons use identical CHGCAR,
 POTCAR, XC, ENCUT, k points and band counts.
 
+The Si primitive-cell CLI band benchmark overlays dense EVD and matrix-free
+ACC and reports convergence per band. ACC reproduces the lowest eight bands to
+`3.79e-12 eV`, including the occupied subspace and gap, while its default early
+stop leaves the highest requested empty bands unconverged. See the
+[`band plot and report`](validation/SI_PRIMITIVE_BAND_ACC.md).
+
 | Quantity | Acceptance threshold |
 |---|---:|
 | smooth electron count | `5e-8 electron` |

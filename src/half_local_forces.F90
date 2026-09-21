@@ -1,6 +1,6 @@
 module half_local_forces
   use half_kinds,only:dp
-  use half_constants,only:pi,felect,edeps
+  use half_constants,only:pi,felect
   use half_types,only:crystal_t,charge_grid_t,potcar_t,plane_wave_basis_t
   use half_fft,only:fft3_forward,fft3_backward
   use half_potential,only:build_veff_lda,build_veff_pbe
@@ -127,20 +127,24 @@ contains
   end subroutine accumulate_smooth_density
 
   subroutine harris_correction_forces(input_density,output_density,potcars,crystal,use_pbe,forces)
+    ! Frozen-input-density Harris response.  The smooth DeepAW density is an
+    ! external field and therefore has no d n_in / d R_I term.  The only
+    ! density entering V_Hxc that follows an ion is the POTCAR core density.
+    ! Consequently there is no Hartree response here; this term is the XC
+    ! kernel acting on (n_out-n_in), contracted with d n_core,I / d R_I.
     type(charge_grid_t),intent(in)::input_density,output_density
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
     logical,intent(in)::use_pbe
     real(dp),intent(out)::forces(:,:)
     type(charge_grid_t)::plus_density,minus_density
-    real(dp),allocatable::delta_f(:),vplus(:),vminus(:),dummy(:),response(:),delta_c(:)
-    complex(dp),allocatable,target::work(:),freq(:),vh_g(:),vh_r(:)
-    real(dp)::eh,exc,exv,t,q(3),g2
-    integer::n,i,i1,i2,i3,n1,n2,n3,idx
+    real(dp),allocatable::delta_f(:),vplus(:),vminus(:),dummy(:),response(:)
+    real(dp)::eh,exc,exv,t
+    integer::n
     n=size(input_density%values)
     if(size(output_density%values)/=n.or.any(input_density%shape/=output_density%shape)) &
       error stop 'HALF: Harris input/output density grids differ'
-    allocate(delta_f(n),response(n),delta_c(n),work(n),freq(n),vh_g(n),vh_r(n))
+    allocate(delta_f(n),response(n))
     delta_f=output_density%values-input_density%values;t=1.0e-4_dp
     plus_density%shape=input_density%shape;minus_density%shape=input_density%shape
     allocate(plus_density%values(n),minus_density%values(n))
@@ -153,19 +157,7 @@ contains
       call build_veff_lda(minus_density,potcars,crystal,dummy,eh,exc,exv,vminus)
     end if
     response=(vplus-vminus)/(2*t)
-    call reorder(delta_f,input_density%shape,delta_c);work=cmplx(delta_c,0.0_dp,dp)
-    call fft3_forward(input_density%shape,work,freq);freq=freq/real(n,dp);idx=0
-    do i1=0,input_density%shape(1)-1;n1=fft_integer(i1,input_density%shape(1))
-      do i2=0,input_density%shape(2)-1;n2=fft_integer(i2,input_density%shape(2))
-        do i3=0,input_density%shape(3)-1;n3=fft_integer(i3,input_density%shape(3));idx=idx+1
-          q=matmul([real(n1,dp),real(n2,dp),real(n3,dp)],crystal%reciprocal);g2=dot_product(q,q)
-          if(g2>1.0e-12_dp)then;vh_g(idx)=edeps*freq(idx)/(g2*crystal%volume);else;vh_g(idx)=(0.0_dp,0.0_dp);end if
-        end do
-      end do
-    end do
-    call fft3_backward(input_density%shape,vh_g,vh_r)
-    call reorder_c_to_f(real(vh_r,dp),input_density%shape,delta_f);response=response+delta_f
-    call atomic_radial_density_forces(response,potcars,crystal,input_density%shape,.false.,forces)
+    call atomic_radial_density_forces(response,potcars,crystal,input_density%shape,.true.,forces)
   end subroutine harris_correction_forces
 
   subroutine atomic_radial_density_forces(potential,potcars,crystal,shape,use_core,forces)

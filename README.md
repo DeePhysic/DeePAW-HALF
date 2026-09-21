@@ -60,9 +60,13 @@ now contains the Ewald, reciprocal-space local, and generalized PAW
 partial-core derivative. It also reconstructs the output PAW augmentation
 density from the POTCAR AE/PS partial waves and compensation multipoles,
 contracts its explicit displacement derivative through `dD_ij/dR`, and uses
-the augmented output density in the fixed-density Harris response. The
-standalone `--forces` path never moves atoms; total-force parity validation is
-still in progress. Native `vaspwave.h5` output and HDF5
+the augmented output density in the force functional. The smooth DeepAW input
+density remains frozen; the Harris response contains only the POTCAR core
+density XC-kernel derivative. Spherical atomic PAW double counting is rebuilt
+automatically from POTCAR AE/PS partial waves, atomic occupancies, core density,
+`DEXC`, and compensation charge rather than from a CHGCAR augmentation tail or
+a VASP output value. The standalone `--forces` path never moves atoms;
+total-force parity validation is still in progress. Native `vaspwave.h5` output and HDF5
 charge/structure/embedded-POTCAR input are supported. Dense H/S assembly,
 matrix application, and k-point solution are exposed through `libhalf`.
 
@@ -317,10 +321,13 @@ CPU/CUDA backend selection:
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
   --vaspwave-h5 vaspwave.h5 --output-prefix energy
 
-# Developer-only finite-difference oracle (never the production force path).
+# Production analytic force path; it never displaces atoms.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
-  --finite-difference-force-check --force-step 0.001 --output-prefix force_check
+  --forces --output-prefix energy_force
+
+# Developer derivative oracle for selected force kernels.
+./build/cpu-release/half-force-check CHGCAR.smooth POTCAR
 
 # Alternatively consume a matching VASP EIGENVAL on an explicit mesh.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \

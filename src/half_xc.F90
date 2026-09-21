@@ -5,7 +5,7 @@ module half_xc
   use half_fft,only:fft3_forward,fft3_backward
   implicit none
   private
-  public::perdew_zunger_xc,pbe_xc
+  public::perdew_zunger_xc,pbe_xc,pbe_energy_density
 contains
   subroutine perdew_zunger_xc(rho,omega,vxc,exc)
     real(dp),intent(in)::rho(:),omega

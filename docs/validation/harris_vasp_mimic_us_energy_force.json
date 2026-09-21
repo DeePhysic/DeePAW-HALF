@@ -1,0 +1,52 @@
+{
+  "definition": {
+    "mimic_us": "LMAXMIX=-1",
+    "vasp_state": "unconverged initial state captured with NELM=1",
+    "xc": "PBE",
+    "ispin": 1,
+    "sigma_eV": 0.02,
+    "kspacing_inverse_Angstrom": 0.35,
+    "chgcar_augmentation_used_by_half": false,
+    "paw_augmentation_source": "POTCAR and current projector occupancies"
+  },
+  "Si": {
+    "encut_eV": 520.0,
+    "half_free_energy_eV": -43.31402496353364,
+    "vasp_mimic_us_toten_eV": -43.29331823,
+    "half_minus_vasp_energy_eV": -0.02070673353364,
+    "half_potcar_atomic_double_counting_eV": 140.75877271,
+    "vasp_atomic_double_counting_eV": 139.83599031,
+    "force_component_mae_eV_per_Angstrom": 0.005320860645573899,
+    "force_component_rmse_eV_per_Angstrom": 0.005455294788093299,
+    "force_component_max_error_eV_per_Angstrom": 0.007808087564139718,
+    "half_max_force_component_eV_per_Angstrom": 0.006975087564139717,
+    "finite_difference_check": {
+      "atom": 1,
+      "axis": "x",
+      "step_Angstrom": 0.001,
+      "analytic_eV_per_Angstrom": 0.006100663,
+      "central_difference_eV_per_Angstrom": 0.00435109328123,
+      "absolute_error_eV_per_Angstrom": 0.00174956971877
+    }
+  },
+  "HfO2": {
+    "encut_eV": 521.0,
+    "half_free_energy_eV": -121.88652681066834,
+    "vasp_mimic_us_toten_eV": -121.97258292,
+    "half_minus_vasp_energy_eV": 0.08605610933166,
+    "half_potcar_atomic_double_counting_eV": 36.08936555,
+    "vasp_atomic_double_counting_eV": 27.47790227,
+    "force_component_mae_eV_per_Angstrom": 0.06804547324499675,
+    "force_component_rmse_eV_per_Angstrom": 0.11511945074127977,
+    "force_component_max_error_eV_per_Angstrom": 0.3195422684567135,
+    "half_max_force_component_eV_per_Angstrom": 0.10425526845671351,
+    "finite_difference_check": {
+      "atom": 1,
+      "axis": "x",
+      "step_Angstrom": 0.001,
+      "analytic_eV_per_Angstrom": -0.10425526845671351,
+      "central_difference_eV_per_Angstrom": -0.10732968428328604,
+      "absolute_error_eV_per_Angstrom": 0.00307441582657253
+    }
+  }
+}

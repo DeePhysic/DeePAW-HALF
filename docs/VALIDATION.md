@@ -24,6 +24,14 @@ claim is made until those terms close quantitatively.
 The corresponding machine-readable values are in
 [`validation/harris_vasp_mimic_us_energy_force.json`](validation/harris_vasp_mimic_us_energy_force.json).
 
+The experimental `force-accuracy-experiments` branch makes the CPU/CUDA QDEP
+angular quadrature configurable. Raising it from 12x24 to 24x48 reduces the
+selected Si and HfO2 analytic-versus-finite-difference errors by about 40x and
+12x, respectively. See the
+[`Chinese experiment report`](validation/FORCE_ACCURACY_EXPERIMENTS.zh-CN.md)
+and
+[`machine-readable record`](validation/force_accuracy_qdep_angular_grid.json).
+
 HAPPY is the numerical oracle for HALF. Comparisons use identical CHGCAR,
 POTCAR, XC, ENCUT, k points and band counts.
 

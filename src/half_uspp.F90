@@ -141,7 +141,7 @@ contains
     type(crystal_t),intent(in)::crystal
     integer,intent(in)::itype
     type(paw_species_t),intent(inout)::paw
-    integer,parameter::ntheta=12,nphi=24
+    integer,parameter::ntheta=HALF_QDEP_NTHETA,nphi=HALF_QDEP_NPHI
     integer::nlm,lmax,naug,nrad,natoms,pairs,nang,ich,l,m,a,b,k,ir,iat,ip,it,ion0,alpha
     integer,allocatable::chan(:),lv(:),mv(:),laug(:)
     real(dp),allocatable::rw(:),gshape(:,:),multipole(:,:),dirs(:,:),yweight(:,:),xg(:),wg(:), &

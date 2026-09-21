@@ -193,6 +193,17 @@ def test_cpu_mimic_us_pipeline_is_available():
     assert "--uspp-dij requires a cuda build" not in cli
 
 
+def test_qdep_angular_quadrature_is_configurable():
+    cmake = (ROOT / "CMakeLists.txt").read_text()
+    cpu = (ROOT / "src/half_uspp.F90").read_text()
+    cuda = (ROOT / "src/half_cuda_uspp.cuf").read_text()
+    assert 'set(HALF_QDEP_NTHETA "12" CACHE STRING' in cmake
+    assert 'set(HALF_QDEP_NPHI "24" CACHE STRING' in cmake
+    assert "HALF_QDEP_NTHETA=${HALF_QDEP_NTHETA}" in cmake
+    assert "ntheta=HALF_QDEP_NTHETA" in cpu
+    assert "nphi=HALF_QDEP_NPHI" in cuda
+
+
 def test_arbitrary_kpoint_cli_is_enabled():
     cli = (ROOT / "app/half_cli.F90").read_text().lower()
     assert "case('--kpoint')" in cli
@@ -381,6 +392,23 @@ def test_potcar_atomic_double_counting_and_frozen_density_force_are_native():
     assert "atomic_radial_density_forces" in harris
     assert ".true.,forces" in harris
     assert "edeps" not in harris
+
+
+def test_high_order_qdep_force_accuracy_record():
+    import json
+
+    record = json.loads(
+        (ROOT / "docs/validation/force_accuracy_qdep_angular_grid.json").read_text()
+    )
+    assert record["high_grid"] == {"ntheta": 24, "nphi": 48}
+    for system in ("Si", "HfO2"):
+        baseline = record[system]["baseline"][
+            "derivative_absolute_error_eV_per_Angstrom"
+        ]
+        high = record[system]["high_grid"][
+            "derivative_absolute_error_eV_per_Angstrom"
+        ]
+        assert high < baseline / 10.0
 
 
 def test_si_reference_input_contract():

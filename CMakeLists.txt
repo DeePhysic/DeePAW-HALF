@@ -15,6 +15,12 @@ option(HALF_BUILD_VASP "Build the bundled private VASP 6.6.0 integration" OFF)
 option(HALF_ENABLE_ESCN_API "Enable the DeePAW-eSCN HTTP inference client" ON)
 set(HALF_GPU_CC "86" CACHE STRING "NVIDIA GPU compute capability, without the decimal point")
 set(HALF_CUDA_VERSION "12.4" CACHE STRING "CUDA toolkit selected by NVHPC")
+set(HALF_QDEP_NTHETA "12" CACHE STRING "Gauss-Legendre polar points for QDEP sphere integration")
+set(HALF_QDEP_NPHI "24" CACHE STRING "Uniform azimuthal points for QDEP sphere integration")
+
+if(HALF_QDEP_NTHETA LESS 4 OR HALF_QDEP_NPHI LESS 8)
+  message(FATAL_ERROR "HALF QDEP angular grids require NTHETA>=4 and NPHI>=8")
+endif()
 
 if(HALF_ENABLE_CUDA AND NOT CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC|PGI")
   message(FATAL_ERROR
@@ -104,6 +110,9 @@ set_target_properties(half_core PROPERTIES
   POSITION_INDEPENDENT_CODE YES
   EXPORT_NAME half
 )
+target_compile_definitions(half_core PRIVATE
+  HALF_QDEP_NTHETA=${HALF_QDEP_NTHETA}
+  HALF_QDEP_NPHI=${HALF_QDEP_NPHI})
 target_include_directories(half_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)

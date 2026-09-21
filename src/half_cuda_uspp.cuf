@@ -127,7 +127,7 @@ contains
     type(potcar_t),intent(in)::potcar
     type(crystal_t),intent(in)::crystal
     real(dp),device,allocatable,intent(out)::ddij_atom(:,:,:)
-    integer,parameter::ntheta=12,nphi=24
+    integer,parameter::ntheta=HALF_QDEP_NTHETA,nphi=HALF_QDEP_NPHI
     integer::nlm,lmax,naug,nrad,ngrid,natoms,pairs,ich,l,m,a,b,k,ir,ion0
     integer::nang,it,ip,plan,status
     integer,allocatable::chan(:),lv(:),mv(:)

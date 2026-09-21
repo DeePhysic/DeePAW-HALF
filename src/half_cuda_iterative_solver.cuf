@@ -277,15 +277,35 @@ contains
   subroutine kinetic_order(kinetic,indices)
     real(dp),intent(in)::kinetic(:)
     integer,intent(out)::indices(:)
-    integer::i,j,key
+    integer::i,parent,child,last,tmp
     do i=1,size(indices);indices(i)=i;end do
+
+    ! Build a max heap, then extract it in descending heap order.  The final
+    ! index array is ascending in kinetic energy.  The previous insertion sort
+    ! was effectively linear for Gamma bases but degraded to O(NPL**2) at the
+    ! shifted k points supplied by VASP.
     do i=2,size(indices)
-      key=indices(i);j=i-1
-      do while(j>=1)
-        if(kinetic(indices(j))<=kinetic(key))exit
-        indices(j+1)=indices(j);j=j-1
+      child=i
+      do while(child>1)
+        parent=child/2
+        if(kinetic(indices(parent))>=kinetic(indices(child)))exit
+        tmp=indices(parent);indices(parent)=indices(child);indices(child)=tmp
+        child=parent
       end do
-      indices(j+1)=key
+    end do
+    do last=size(indices),2,-1
+      tmp=indices(1);indices(1)=indices(last);indices(last)=tmp
+      parent=1
+      do
+        child=2*parent
+        if(child>last-1)exit
+        if(child+1<=last-1)then
+          if(kinetic(indices(child+1))>kinetic(indices(child)))child=child+1
+        end if
+        if(kinetic(indices(parent))>=kinetic(indices(child)))exit
+        tmp=indices(parent);indices(parent)=indices(child);indices(child)=tmp
+        parent=child
+      end do
     end do
   end subroutine
 end module half_cuda_iterative_solver

@@ -149,6 +149,7 @@ def test_cuda_acc_path_is_matrix_free_and_vasp_selectable():
     assembly = (ROOT / "src/half_cuda_assembly.cuf").read_text().lower()
     iterative = (ROOT / "src/half_cuda_iterative_solver.cuf").read_text().lower()
     adapter = (ROOT / "vendor/vasp-6.6.0/src/half_vasp_init.F").read_text().lower()
+    reader = (ROOT / "vendor/vasp-6.6.0/src/reader.F").read_text().lower()
     cli = (ROOT / "app/half_cli.F90").read_text().lower()
     assert "HALF_SOLVER_ACC = 4" in header
     assert "apply_hs_operator_cuda" in assembly
@@ -159,6 +160,7 @@ def test_cuda_acc_path_is_matrix_free_and_vasp_selectable():
     assert "cusolverdnzhegvd" in iterative
     assert "half_solver_acc=4" in adapter
     assert "matrix_free" in adapter
+    assert "half_mode)/='acc'" in reader
     assert "--acc-tol" in cli
     assert "--acc-max-iter" in cli
 

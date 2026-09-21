@@ -201,6 +201,11 @@ FFT、动能、PAW 投影收缩、残差、预条件、S 正交化及块旋转�
 `HALF_MODE=ACC` 即选用相同路径并直接使用 VASP 的 `NBANDS`；默认残差阈值为
 `1e-4 eV`。
 
+在 20 原子 CsPbBr3 验证体系（`NPL=20640--20780`、12 个 k 点、105 bands）中，
+VASP `HALF_MODE=ACC` 与稠密 `VASP_LIKE` 都使用 5 个 SCF LOOP，最终能量相同；
+总耗时从 1861.0 秒降至 275.5 秒，即加速 6.75 倍。记录见
+[RTX PRO 6000 验证数据](docs/validation/cspbbr3_vasp_acc_pro6000.json)。
+
 MPI 作用于 CPU 的 `bands` 和 `energy` 路径。rank `r` 负责
 `r+1, r+1+nranks, ...` 这些 k 点，集合通信恢复原顺序的本征值与平面波计数，
 只有 rank 0 写 JSON。有限差分力对每个位移结构复用同一分发。通常应设置

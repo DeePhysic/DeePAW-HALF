@@ -283,6 +283,12 @@ and final maximum residual. Use `--solver evx` as the dense partial-spectrum
 reference. For VASP, `HALF_MODE=ACC` selects the same path and uses VASP's
 `NBANDS`; its default residual tolerance is `1e-4 eV`.
 
+On the 20-atom CsPbBr3 validation case (`NPL=20640--20780`, 12 k points,
+105 bands), integrated VASP `HALF_MODE=ACC` retained the same five SCF loops
+and final energy as dense `VASP_LIKE`, while reducing total elapsed time from
+1861.0 to 275.5 seconds (6.75x). See the
+[RTX PRO 6000 record](docs/validation/cspbbr3_vasp_acc_pro6000.json).
+
 MPI is implemented for the CPU `bands` and `energy` paths. Rank `r` solves
 k points `r+1, r+1+nranks, ...`; collective reductions restore the ordered
 eigenvalue and plane-wave arrays, and only rank 0 writes JSON. Finite-difference

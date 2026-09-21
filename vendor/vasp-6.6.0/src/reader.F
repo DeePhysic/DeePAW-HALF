@@ -148,8 +148,9 @@
       CALL STRIP(HALF_MODE,N,'L')
       CALL LOWER(HALF_MODE)
       IF (TRIM(HALF_MODE)/='traditional' .AND. TRIM(HALF_MODE)/='dense' .AND. &
-          TRIM(HALF_MODE)/='vasp_like' .AND. TRIM(HALF_MODE)/='vasp-like' .AND. TRIM(HALF_MODE)/='vasp') &
-        CALL vtutor%error("HALF_MODE must be TRADITIONAL or VASP_LIKE")
+          TRIM(HALF_MODE)/='vasp_like' .AND. TRIM(HALF_MODE)/='vasp-like' .AND. TRIM(HALF_MODE)/='vasp' .AND. &
+          TRIM(HALF_MODE)/='acc' .AND. TRIM(HALF_MODE)/='matrix_free' .AND. TRIM(HALF_MODE)/='matrix-free') &
+        CALL vtutor%error("HALF_MODE must be TRADITIONAL, VASP_LIKE, or ACC")
       HALF_ESCN_URL=' '
       CALL PROCESS_INCAR(LOPEN, IU0, IU5, 'HALF_ESCN_URL', HALF_ESCN_URL, 255, IERR, WRITEXMLINCAR)
       CALL STRIP(HALF_ESCN_URL,N,'L')

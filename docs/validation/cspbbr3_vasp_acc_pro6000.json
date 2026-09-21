@@ -1,0 +1,51 @@
+{
+  "date": "2026-09-21",
+  "hardware": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+  "driver": "595.84",
+  "compiler": "NVHPC 26.5",
+  "cuda_toolkit": "13.2",
+  "system": "058_mp-567681_CsPbBr3",
+  "atoms": 20,
+  "encut_eV": 520.0,
+  "kspacing_Angstrom_inverse": 0.35,
+  "kpoints": 12,
+  "nbands": 105,
+  "plane_wave_range": [20640, 20780],
+  "ediff_eV": 0.0001,
+  "lmaxmix": -1,
+  "ispin": 1,
+  "algo": "All",
+  "acc_iterations_per_kpoint": 40,
+  "acc_residual_eV": {
+    "minimum": 0.022251,
+    "maximum": 0.4095,
+    "mean": 0.22846925
+  },
+  "vasp_like_dense": {
+    "scf_loops": 5,
+    "loop_real_sum_seconds": 206.063,
+    "loop_plus_real_seconds": 287.3192,
+    "elapsed_seconds": 1861.047,
+    "non_loop_plus_seconds": 1573.7278,
+    "final_E0_eV": -63.79168,
+    "normal_termination": true
+  },
+  "acc_matrix_free": {
+    "scf_loops": 5,
+    "loop_real_sum_seconds": 161.2736,
+    "loop_plus_real_seconds": 221.7555,
+    "elapsed_seconds": 275.522,
+    "non_loop_plus_seconds": 53.7665,
+    "final_E0_eV": -63.79168,
+    "normal_termination": true
+  },
+  "speedup": {
+    "total_elapsed": 6.754622135437461,
+    "non_loop_plus_estimate": 29.26967163568394
+  },
+  "notes": [
+    "The non-LOOP+ value is an estimate of HALF initialization plus other VASP setup/finalization overhead, not an instrumented HALF-only timer.",
+    "The ACC residual is intentionally loose because VASP performs the subsequent SCF refinement.",
+    "A shifted-k-point O(NPL^2) insertion-sort bottleneck was found during this test and replaced by O(NPL log NPL) heap sort."
+  ]
+}

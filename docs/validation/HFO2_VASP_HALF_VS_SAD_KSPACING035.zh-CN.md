@@ -267,30 +267,48 @@ E_{\mathrm{HALF}}=
 $$
 
 实现包括占据数与熵、Hartree 和 XC 双计数校正、Ewald 离子能、局域势 $G=0$
-项、原子参考项，以及存在时的 PAW 原子校正。输入既可以是显式 k 点，也可以是
+项和原子参考项。球形原子 PAW 校正由 POTCAR 的原子占据、AE/PS partial waves、
+core density、`DEXC` 与补偿电荷自动重建，不读取 CHGCAR augmentation 尾部，
+也不复制 VASP 输出数值。输入既可以是显式 k 点，也可以是
 对称性约化网格；CPU 版本可以用 MPI 分发独立 k 点。
 
 ### 4.2 原子力
 
-HALF 对同一 Harris 能量做中心有限差分：
+HALF 的正式力路径是解析导数：
 
 $$
-F_{I\alpha}\simeq-
-\frac{E(\mathbf R_I+\delta\mathbf e_\alpha)-
-E(\mathbf R_I-\delta\mathbf e_\alpha)}{2\delta}.
+F_{I\alpha}=-\frac{\partial E_{\mathrm{HALF}}}{\partial R_{I\alpha}}
+=F^{\mathrm{Ewald}}+F^{\mathrm{local}}+F^{D-\varepsilon Q}
++F^{\mathrm{aug}}+F^{\mathrm{NLCC}}+F^{\mathrm{Harris\ core}}.
 $$
 
-Si 验证采用 $\delta=0.001$ Angstrom。一次 CLI 调用即可同时输出能量分量和力：
+其中广义非局域项为
+
+$$
+F^{D-\varepsilon Q}_{I\alpha}
+=-\sum_{n\mathbf k}w_{\mathbf k}f_{n\mathbf k}
+\left\langle\psi_{n\mathbf k}\left|
+\partial_{I\alpha}H-\varepsilon_{n\mathbf k}\partial_{I\alpha}S
+\right|\psi_{n\mathbf k}\right\rangle .
+$$
+
+DeepAW 平滑输入密度保持冻结，所以其导数为零；Harris 响应只保留 POTCAR core
+density 平移产生的 XC-kernel 项。中心有限差分只作为开发验证 oracle，不进入
+正式 CLI。一次调用即可输出能量分量和解析力：
 
 ```bash
 half energy CHGCAR.deepaw POTCAR \
-  --encut 200 --bands 8 --backend cuda --uspp-dij \
-  --finite-difference-force-check --force-step 0.001 --output-prefix si_force_oracle
+  --encut 520 --kspacing 0.35 --bands 24 --backend cuda \
+  --forces --output-prefix si_energy_force
 ```
 
-金刚石 Si 上，CUDA 与 Python 实现的内能相差 $3.425\times10^{-12}$ eV/cell，
-最大力分量差为 $2.238\times10^{-9}$ eV/Angstrom。力计算耗时 1.08 s，单核 Python 实现为
-48.94 s，即加速 **45.31 倍**。
+相对未收敛的初始 VASP `LMAXMIX=-1` MIMIC_US 状态，当前 Si 能量差
+`0.0207 eV/cell`，力分量 MAE 为 `0.00532 eV/Angstrom`；HfO2 分别为
+`0.0861 eV/cell` 与 `0.0680 eV/Angstrom`。相对同一个 HALF 能量，atom-1/x
+解析力与中心差分的误差为 Si `0.00175 eV/Angstrom`、HfO2
+`0.00307 eV/Angstrom`。这些是开发验证结果，不代表已经达到 VASP 力一致性；
+完整数据见
+[`HARRIS_VASP_MIMIC_US_ENERGY_FORCE.zh-CN.md`](HARRIS_VASP_MIMIC_US_ENERGY_FORCE.zh-CN.md)。
 
 ### 4.3 与已有机器学习势报道结果的对比
 
@@ -299,7 +317,7 @@ DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著�
 
 | 方法 | 已报道能量结果 | 已报道力结果 |
 |---|---:|---:|
-| DeePAW-HALF，金刚石 Si | 内部实现相差 $3.425\times10^{-12}$ eV/cell | 最大分量差 $2.238\times10^{-9}$ eV/Angstrom；实现加速 45.31× |
+| DeePAW-HALF，当前 Si/HfO2 验证 | 相对初始 VASP MIMIC_US 状态绝对能量差 2.59/7.17 meV/atom | 分量 MAE 5.32/68.0 meV/Angstrom；onsite VASP 一致性仍在完善 |
 | [M3GNet](https://doi.org/10.1038/s43588-022-00349-3) | MAE 35 meV/atom | MAE 72 meV/Angstrom |
 | [CHGNet](https://doi.org/10.1038/s42256-023-00716-3) | MAE 30 meV/atom | MAE 77 meV/Angstrom |
 | [MACE-MP-0 medium](https://doi.org/10.1063/5.0297006) | MAE 20 meV/atom | MAE 45 meV/Angstrom |
@@ -331,9 +349,10 @@ DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著�
   逐本征值误差比跨时段 wall time 更稳定。
 - ACC 的残差阈值和迭代上限应按用途选择：独立能带需要更严格，VASP 初始化可以
   更宽松。
-- 中心有限差分只保留为验证 oracle。原生 Ewald、局域势和广义非局域 PAW
-  解析导数已经实现；augmentation、NLCC 与固定密度 Harris 修正完成前不能宣称
-  获得生产可用的总力。
+- 中心有限差分只保留为验证 oracle。原生 Ewald、局域势、广义非局域 PAW、
+  augmentation、NLCC 与固定密度 Harris-core 解析导数均已实现。文档所列分量
+  与自身能量导数达到数 meV/Angstrom 一致性，但 VASP onsite PAW 的严格一致性
+  仍在完善。
 
 ## 7. 结论
 
@@ -346,12 +365,12 @@ DeePAW-HALF 已形成从学习密度到平面波电子结构的三条可用路�
   从 16 降至 4，MP-85 的平均 LOOP 从 25.365 降至 11.435（2.218×），
   CsPbBr₃ 上 ACC 又把大基组初始化的总作业时间降低 6.75 倍。
 - **能量与解析力**：HALF 无需先运行 SCF 即可计算 Harris 总能量；Ewald、局域势
-  与广义 PAW 投影子力已经通过导数测试。其余 PAW/Harris 分量必须补齐，并与
-  VASP 逐项比较后，才能给出总力精度和速度结论。
+  及 POTCAR augmentation 等正式力分量均为解析实现。Si/HfO2 所列分量相对
+  自身能量中心差分误差为 `0.00175--0.00307 eV/Angstrom`；在宣称 VASP 力
+  一致性前仍需逐项闭合 onsite PAW。
 
 因此 DeePAW-HALF 是一层可复用的“密度—电子结构”接口：向上连接 DeepAW
-密度模型，向下可输出能带、能量和波函数，正在补齐原生
-解析力，也可为
+密度模型，向下可输出能带、能量、解析力和波函数，也可为
 VASP 提供更好的 SCF 起点。
 
 ## 8. 数据与复现记录

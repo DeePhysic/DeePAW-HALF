@@ -299,35 +299,52 @@ $$
 
 The implementation includes occupations and entropy, Hartree and XC
 double-counting corrections, Ewald ion-ion energy, local-potential $G=0$ and
-atomic reference terms, and the PAW atomic correction when present. It can use
-an explicit k-point set or a symmetry-reduced mesh, with MPI distributing
-independent k points in the CPU build.
+atomic reference terms. The spherical atomic PAW correction is reconstructed
+from POTCAR atomic occupancies, AE/PS partial waves, core density, `DEXC`, and
+compensation charge. It is not read from a CHGCAR augmentation tail or copied
+from VASP output. An explicit k-point set or a symmetry-reduced mesh can be
+used, with MPI distributing independent k points in the CPU build.
 
 ### 4.2 Atomic forces
 
-HALF evaluates atomic forces by a central finite difference of the same Harris
-energy:
+HALF evaluates production forces analytically. In compact form,
 
 $$
-F_{I\alpha}\simeq-
-\frac{E(\mathbf R_I+\delta\mathbf e_\alpha)-
-E(\mathbf R_I-\delta\mathbf e_\alpha)}{2\delta}.
+F_{I\alpha}=-\frac{\partial E_{\mathrm{HALF}}}{\partial R_{I\alpha}}
+=F^{\mathrm{Ewald}}+F^{\mathrm{local}}+F^{D-\varepsilon Q}
++F^{\mathrm{aug}}+F^{\mathrm{NLCC}}+F^{\mathrm{Harris\ core}}.
 $$
 
-The validated Si calculation used $\delta=0.001$ Angstrom. A single CLI call
-produces both energy components and forces:
+The generalized nonlocal term is evaluated as
+
+$$
+F^{D-\varepsilon Q}_{I\alpha}
+=-\sum_{n\mathbf k}w_{\mathbf k}f_{n\mathbf k}
+\left\langle\psi_{n\mathbf k}\left|
+\partial_{I\alpha}H-\varepsilon_{n\mathbf k}\partial_{I\alpha}S
+\right|\psi_{n\mathbf k}\right\rangle .
+$$
+
+The DeepAW smooth input density is frozen. Hence its derivative is zero and
+the Harris response contains only the XC-kernel response caused by translating
+the POTCAR core density. Central finite differences are used only as a
+developer oracle and never by the production CLI. A single call produces
+energy components and analytic forces:
 
 ```bash
 half energy CHGCAR.deepaw POTCAR \
-  --encut 200 --bands 8 --backend cuda --uspp-dij \
-  --finite-difference-force-check --force-step 0.001 --output-prefix si_force_oracle
+  --encut 520 --kspacing 0.35 --bands 24 --backend cuda \
+  --forces --output-prefix si_energy_force
 ```
 
-For diamond Si, the CUDA and Python internal energies differ by
-$3.425\times10^{-12}$ eV per cell, and the maximum force-component difference
-is $2.238\times10^{-9}$ eV/Angstrom. The force calculation took 1.08 s versus
-48.94 s for the single-core Python implementation, a **45.31x implementation
-speedup**.
+Against the un-converged initial VASP `LMAXMIX=-1` MIMIC_US state, the current
+Si energy differs by 0.0207 eV/cell and its force-component MAE is
+0.00532 eV/Angstrom. HfO2 differs by 0.0861 eV/cell and
+0.0680 eV/Angstrom. Against the same HALF energy, atom-1/x analytic versus
+central-difference discrepancies are 0.00175 eV/Angstrom for Si and
+0.00307 eV/Angstrom for HfO2. These are development results, not a claim of
+VASP force parity; full data are in
+[`HARRIS_VASP_MIMIC_US_ENERGY_FORCE.zh-CN.md`](HARRIS_VASP_MIMIC_US_ENERGY_FORCE.zh-CN.md).
 
 ### 4.3 Comparison with reported machine-learning potentials
 
@@ -338,7 +355,7 @@ beside representative published results.
 
 | Method | Reported energy result | Reported force result |
 |---|---:|---:|
-| DeePAW-HALF, diamond Si | $3.425\times10^{-12}$ eV/cell internal parity | $2.238\times10^{-9}$ eV/Angstrom maximum component difference; 45.31x implementation speedup |
+| DeePAW-HALF, Si/HfO2 current validation | 2.59/7.17 meV/atom absolute energy difference vs initial VASP MIMIC_US state | 5.32/68.0 meV/Angstrom component MAE; onsite VASP parity remains in progress |
 | [M3GNet](https://doi.org/10.1038/s43588-022-00349-3) | 35 meV/atom MAE | 72 meV/Angstrom MAE |
 | [CHGNet](https://doi.org/10.1038/s42256-023-00716-3) | 30 meV/atom MAE | 77 meV/Angstrom MAE |
 | [MACE-MP-0 medium](https://doi.org/10.1063/5.0297006) | 20 meV/atom MAE | 45 meV/Angstrom MAE |
@@ -378,9 +395,10 @@ foundation for VASP initial wavefunctions.
 - ACC tolerance and iteration limits should follow the task: standalone bands
   need tighter convergence, while VASP initialization can stop earlier.
 - Central finite differences are retained only as a validation oracle. Native
-  analytic Ewald, local-potential, and generalized nonlocal PAW derivatives
-  are implemented; augmentation, NLCC, and fixed-density Harris corrections
-  remain before a production total force can be claimed.
+  analytic Ewald, local-potential, generalized nonlocal PAW, augmentation,
+  NLCC, and frozen-density Harris-core derivatives are implemented. Their
+  derivative consistency is at the few-meV/Angstrom level for the documented
+  components, while exact VASP onsite PAW parity remains in progress.
 
 ## 7. Conclusion
 
@@ -396,15 +414,15 @@ plane-wave electronic structure:
   loops fall from 25.365 to 11.435 (2.218x); and ACC reduces the large-basis
   CsPbBr3 job time by 6.75x relative to dense HALF initialization.
 - **Energy and analytic forces:** HALF evaluates the Harris total energy
-  without a preceding SCF run. Analytic Ewald, local, and generalized PAW
-  projector-force components are derivative-tested; the remaining PAW/Harris
-  components must be completed and compared term by term with VASP before a
-  total-force accuracy or speed claim is made.
+  without a preceding SCF run. All production force components are analytic
+  and use POTCAR-derived augmentation. Internal finite-difference checks are
+  at 0.00175--0.00307 eV/Angstrom for the documented Si/HfO2 components;
+  onsite PAW terms must still be matched term by term before claiming VASP
+  force parity.
 
 DeePAW-HALF is a reusable density-to-electronic-structure layer: DeepAW
-supplies density, while HALF produces bands, energies, and wavefunctions
-directly, is gaining a native
-analytic-force path, or gives
+supplies density, while HALF produces bands, energies, forces, and wavefunctions
+directly, or gives
 VASP a substantially better SCF starting point.
 
 ## 8. Data and reproducibility records

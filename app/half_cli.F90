@@ -19,6 +19,7 @@ program half_cli
   use half_dense_solver, only: solve_dense_gamma
   use half_local_forces,only:local_ionic_forces,nlcc_forces,accumulate_smooth_density,harris_correction_forces
   use half_forces,only:add_nonlocal_paw_forces
+  use half_paw_atomic_energy,only:compute_paw_atomic_double_counting
 #endif
 #ifdef HALF_CLI_CUDA
   use half_cuda_solver, only: solve_dense_gamma_cuda_full
@@ -718,7 +719,7 @@ contains
     real(dp)::encut,kspacing,symprec,sigma,nelect,density_electrons,mu,band_energy,entropy_term,reference_nelect
     real(dp)::eh,exc,exv,smin,k_smin,smax,potential_seconds,assembly_seconds,gpu_seconds
     real(dp)::ewald,ewald_real,ewald_recip,ewald_self,ewald_background,atomic_reference,local_g0
-    real(dp)::paw_atomic,internal_energy,free_energy
+    real(dp)::paw_atomic,paw_atomic_ae,paw_atomic_ps,internal_energy,free_energy
     real(dp)::force_step,displaced_energies(2),inverse_lattice(3,3),delta_cart(3)
     real(dp),allocatable::forces(:,:),force_ewald(:,:),force_local(:,:),force_nonlocal(:,:),force_projector(:,:), &
       force_augmentation(:,:),force_nlcc(:,:),force_harris(:,:)
@@ -901,6 +902,15 @@ contains
     local_g0=0;do it=1,size(potcars)
       if(allocated(potcars(it)%psp_local))local_g0=local_g0+potcars(it)%psp_local(1)*real(crystal%counts(it),dp)
     end do;local_g0=local_g0*nelect/crystal%volume
+#ifdef HALF_CLI_HAVE_MKL
+    if(use_uspp.and..not.have_paw_atomic)then
+      call compute_paw_atomic_double_counting(potcars,crystal%counts,trim(xc)=='pbe',paw_atomic,paw_atomic_ae,paw_atomic_ps)
+      have_paw_atomic=.true.
+      write(0,'(A,3ES20.10)')'HALF automatic PAW atomic double counting total/AE/PS=',paw_atomic,paw_atomic_ae,paw_atomic_ps
+    end if
+#else
+    if(use_uspp.and..not.have_paw_atomic)call fail('automatic PAW atomic double counting requires an MKL-enabled build')
+#endif
     internal_energy=band_energy-eh-exv+exc+ewald+local_g0+atomic_reference
     if(have_paw_atomic)internal_energy=internal_energy+paw_atomic
     free_energy=internal_energy+entropy_term
@@ -940,7 +950,7 @@ contains
       call harris_correction_forces(rho,rho_out,potcars,crystal,trim(xc)=='pbe',force_harris)
       forces=force_ewald+force_local+force_nonlocal+force_nlcc+force_harris
       do iat=1,crystal%nions
-        write(0,'(A,I0,6(A,3ES14.6))')'HALF analytic force atom ',iat,' total=',forces(iat,:), &
+        write(0,'(A,I0,7(A,3ES14.6))')'HALF analytic force atom ',iat,' total=',forces(iat,:), &
           ' ewald=',force_ewald(iat,:),' local=',force_local(iat,:),' projector=',force_projector(iat,:), &
           ' paw_aug=',force_augmentation(iat,:),' nlcc=',force_nlcc(iat,:),' harris=',force_harris(iat,:)
       end do

@@ -20,8 +20,11 @@ Ewald、倒空间局域势以及
 广义 PAW `D-epsilon Q` Hellmann--Feynman 导数，以及 NLCC/`FORCOR` partial-core
 导数。现在还会从 POTCAR 的 AE/PS partial waves 与补偿多极矩重建输出态的
 augmentation density，通过 `dD_ij/dR` 计入其显式位移力，并把带 augmentation
-的输出密度用于固定密度 Harris 响应。独立 CLI 的 `--forces` 全程不移动原子；
-总力与同一泛函的数值导数仍在继续验证。原生
+的输出密度用于力泛函。DeepAW 平滑输入密度保持冻结，Harris 响应只包含
+POTCAR core density 移动产生的 XC-kernel 导数。球形原子 PAW double counting
+也会由 POTCAR 的 AE/PS partial waves、原子占据、core density、`DEXC` 与补偿
+电荷自动重建，不读取 CHGCAR augmentation 尾部，也不依赖 VASP 输出数值。
+独立 CLI 的 `--forces` 全程不移动原子；总力与同一泛函的数值导数仍在继续验证。原生
 `vaspwave.h5` 输出以及 HDF5 电荷/结构/内嵌 POTCAR 输入已经支持。
 
 PAW 无矩阵算符、全带约束最小化、残差预条件、S 度量正交化、重启式

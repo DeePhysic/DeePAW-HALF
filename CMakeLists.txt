@@ -69,7 +69,7 @@ else()
 endif()
 if(HALF_HAVE_MKL)
   list(APPEND HALF_CORE_SOURCES
-    src/half_fft.F90 src/half_uspp.F90 src/half_xc.F90
+    src/half_fft.F90 src/half_uspp.F90 src/half_xc.F90 src/half_paw_atomic_energy.F90
     src/half_potential.F90 src/half_local_forces.F90 src/half_dense_solver.F90)
 endif()
 if(HALF_HAVE_HDF5)

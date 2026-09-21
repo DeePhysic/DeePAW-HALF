@@ -20,8 +20,8 @@ Statuses are `done`, `active`, `planned`, and `blocked`.
 | Arbitrary single k point | `basis.py`, `reconstruct_bandstructure.py` | `half_basis.F90`, `half_cli.F90` | done on CPU/CUDA; `--kpoint KX KY KZ` |
 | Band paths, k meshes and symmetry reduction | `kpoints.py`, ASE | `half_kpoints.F90`, `half_cli.F90` | done; explicit reciprocal KPOINTS, ASE-identical automatic SC/FCC/BCC paths, full Gamma meshes and spglib irreducible meshes |
 | Occupations, EIGENVAL, Ewald and energy | `occupations.py`, `ewald.py`, `total_energy.py` | `half_energy.F90`, `half_cli.F90` | done on CPU/CUDA; zero/finite-T occupations, reconstructed and reference-EIGENVAL paths; Si/HfO2 component parity |
-| Analytic forces | not present in HAPPY | optional future `half_forces.cuf` | performance extension; HAPPY-compatible finite-difference forces are done |
-| Finite-difference force oracle | `total_energy.py` | `half_cli.F90` | done on CPU/CUDA; Si parity within 2.3e-9 eV/Angstrom and 45x faster than HAPPY in the validated case |
+| Analytic forces | not present in HAPPY | `half_energy.F90`, `half_local_forces.F90`, `half_forces.F90` | in progress: analytic Ewald, reciprocal local and generalized PAW `(D-epsilon Q)` terms implemented and derivative-tested; augmentation, NLCC and fixed-density Harris corrections remain before production use |
+| Finite-difference force oracle | `total_energy.py` | `half_cli.F90` | validation only; Si parity within 2.3e-9 eV/Angstrom, not the production force algorithm |
 | `vaspwave.h5` output | `vaspwave.py` | `half_vaspwave.F90`, `half_hdf5_bridge.c` | done for EVD bands/energy; VASP FFT coefficient order, float32 complex packing and charge round trip validated |
 | MPI k-point distribution | n/a | `half_parallel.F90`, `half_cli.F90` | done for CPU bands, energy and finite-difference forces; cyclic distribution, rank-0 output and collective reconstruction; 3.903x on 4 ranks for the 36-k-point HfO2 case |
 | HAPPY-style CLI artifacts | `happy-bands`, `happy-energy` | `half_cli.F90`, `half_artifacts.F90` | done; bands JSON/CSV/NPZ/PNG and energy JSON/NPZ, including gap and overlap diagnostics |

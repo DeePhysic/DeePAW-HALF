@@ -49,8 +49,12 @@ The CUDA MIMIC_US path reproduces HAPPY for both Si (725 plane waves) and HfO2
 Explicit multi-k bands, Gamma-centered full/irreducible spglib meshes,
 occupations, Ewald and the fixed-density Harris total energy are also native
 Fortran features. The Si total energy and every reported component agree with
-HAPPY to better than `4e-12 eV`. Central finite-difference forces reproduce
-HAPPY within `2.3e-9 eV/Angstrom` in the validated Si case. Native `vaspwave.h5` output and HDF5
+HAPPY to better than `4e-12 eV`. The old central finite-difference force path
+is retained only as a numerical oracle. A native analytic force implementation
+now contains the Ewald, reciprocal-space local, and generalized PAW
+`D-epsilon Q` Hellmann-Feynman derivatives; augmentation, NLCC, and fixed-density
+Harris corrections are still being completed and must not yet be presented as
+a production total force. Native `vaspwave.h5` output and HDF5
 charge/structure/embedded-POTCAR input are supported. Dense H/S assembly,
 matrix application, and k-point solution are exposed through `libhalf`.
 
@@ -124,7 +128,8 @@ concentric angular grids around every atom, projected onto real spherical
 harmonics, radially integrated against VASP's two-Bessel compensation
 functions, and contracted with the AE-minus-PS multipole moments. Explicit
 multi-point bands and symmetry-reduced fixed-density energies are implemented;
-matrix application, finite-difference forces, and wavefunction export are implemented. The authoritative status is
+matrix application and wavefunction export are implemented. Finite-difference
+forces are validation-only while the analytic PAW force is completed. The authoritative status is
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
 For the implemented DION problem, `S` is positive definite and the generalized

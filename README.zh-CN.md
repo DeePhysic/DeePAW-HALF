@@ -12,10 +12,11 @@
 HAPPY 是移植过程中的数值 oracle。当前 CUDA Gamma/MIMIC_US 固定密度路径已在
 Si 与 HfO2 上通过逐本征值验证；CPU QDEP、任意 k 点、多 k 点能带、spglib
 不可约 k 网格、占据数、Ewald 和 Harris 固定密度总能量也已闭合。Si 总能量及
-各分量与 HAPPY 的差小于 `4e-12 eV`；中心差分力在 Si 验证中与 HAPPY 相差小于
-`2.3e-9 eV/Angstrom`。原生 `vaspwave.h5` 输出以及 HDF5
-电荷/结构/内嵌 POTCAR 输入已经支持；有限差分力也已实现。
-CPU 版本还可选用 MPI 按独立 k 点分发 `bands`、`energy` 与有限差分力计算。
+各分量与 HAPPY 的差小于 `4e-12 eV`。旧的中心差分力只保留为解析力的数值
+oracle，不再作为正式力功能。原生解析力目前已经实现 Ewald、倒空间局域势以及
+广义 PAW `D-epsilon Q` Hellmann--Feynman 导数；augmentation、NLCC 与固定密度
+Harris 修正尚在补齐，因此当前不得把它表述为可用于生产的总力。原生
+`vaspwave.h5` 输出以及 HDF5 电荷/结构/内嵌 POTCAR 输入已经支持。
 
 PAW 无矩阵算符、全带约束最小化、残差预条件、S 度量正交化、重启式
 Rayleigh-Ritz、复杂度以及 VASP 直接内存接入的完整推导见
@@ -77,7 +78,8 @@ CPU 与 CUDA 路径现已实现上式完整的 Gamma 点 MIMIC_US 项；`--uspp-
 校正。GPU 先对周期有效势进行三次 B 样条预滤波，再围绕每个原子在球面网格取样，
 投影到实球谐函数，并用 VASP 的双球贝塞尔补偿函数完成径向积分，最后与 AE−PS
 多极矩收缩得到每个原子的 $D_{ij}^I$。显式多 k 点能带和对称性约化总能量已经
-实现；H/S 组装、矩阵应用、力和波函数导出也已实现。单个非 Gamma k 点可用
+实现；H/S 组装、矩阵应用和波函数导出也已实现。有限差分力仅用于验证，解析
+PAW 总力完成并通过 VASP 分项验证后才会开放为正式功能。单个非 Gamma k 点可用
 `--kpoint KX KY KZ`。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 

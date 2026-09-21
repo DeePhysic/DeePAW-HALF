@@ -1,5 +1,8 @@
 # libhalf integration API
 
+For the equations and the complete `HALF_SOLVER_ACC` algorithm, see
+[HARRIS_ACC_THEORY.md](HARRIS_ACC_THEORY.md).
+
 `libhalf` is the stable, compiler-neutral integration layer for VASP and other
 electronic-structure programs.  It follows the same model as libxc: callers
 select an implementation by integer identifiers, create an opaque context,

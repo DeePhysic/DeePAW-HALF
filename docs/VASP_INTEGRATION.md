@@ -1,16 +1,19 @@
 # VASP 6.6.0 direct initialization with DeePAW-HALF
 
+The mathematical derivation of the matrix-free ACC path used by this adapter
+is in [HARRIS_ACC_THEORY.md](HARRIS_ACC_THEORY.md).
+
 This note describes an in-process integration. With the repository owner's
 authorization, this private branch stores the user-supplied
 `vasp-edge-release.6.6.0` source. It must not be redistributed from this
 private repository to parties without a VASP license. The insertion points
 below were verified and tested in that source tree.
 
-The private `vasp-6.6-half-integration` branch contains the complete source and
+The private `deepaw-half-acc` branch contains the complete source and
 a one-command build:
 
 ```bash
-git switch vasp-6.6-half-integration
+git switch deepaw-half-acc
 tools/half-cmake vasp all
 ```
 

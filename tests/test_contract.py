@@ -26,6 +26,8 @@ def test_expected_project_surface_exists():
         "include/half_api.f90",
         "docs/API.md",
         "docs/API.zh-CN.md",
+        "docs/HARRIS_ACC_THEORY.md",
+        "docs/HARRIS_ACC_THEORY.zh-CN.md",
         "src/half_vaspwave.F90",
         "src/half_hdf5_bridge.c",
         "src/half_cuda.cuf",

@@ -33,8 +33,8 @@ library interface:
 - device-resident cuFFT potential construction, H/S assembly, Hermitian
   cleanup and cuSOLVER eigensolution without full-matrix host transfers;
 - dense generalized H/S solvers using MKL on CPU and cuSOLVER on GPU;
-- CUDA Gamma CLI solver selection: `--solver evd` (default divide-and-conquer)
-  or `--solver evj` (Jacobi, through a device-pointer CUDA C++ bridge);
+- CUDA solver selection: dense `evd`, Jacobi `evj`, index-range `evx`, or the
+  matrix-free all-band `acc` path;
 - independent CPU Fortran and CUDA Fortran backends;
 - optional CPU MPI distribution over independent k points;
 - CUDA 12.4 and CUDA 13.0 build presets;
@@ -53,6 +53,11 @@ HAPPY to better than `4e-12 eV`. Central finite-difference forces reproduce
 HAPPY within `2.3e-9 eV/Angstrom` in the validated Si case. Native `vaspwave.h5` output and HDF5
 charge/structure/embedded-POTCAR input are supported. Dense H/S assembly,
 matrix application, and k-point solution are exposed through `libhalf`.
+
+The derivation of the matrix-free PAW operator, constrained all-band
+minimization, residual preconditioning, S-orthogonalization, restarted
+Rayleigh-Ritz update, complexity, and direct VASP handoff is given in
+[Matrix-free Harris all-band acceleration](docs/HARRIS_ACC_THEORY.md).
 
 ## Numerical model, derived step by step
 
@@ -338,7 +343,7 @@ The full HfO2 HALF-versus-SAD SCF comparison at `KSPACING=0.35`,
 `LMAXPAW=-1`, and `ALGO=All` is documented in the
 [validation report](docs/validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.md).
 
-The private `vasp-6.6-half-integration` branch vendors the complete VASP 6.6.0
+The private `deepaw-half-acc` branch vendors the complete VASP 6.6.0
 source under `vendor/vasp-6.6.0`. On the Pro 6000 host, one command configures
 and builds HALF, the oneMKL FFTW wrapper, and `vasp_std`, then runs the HALF
 tests:

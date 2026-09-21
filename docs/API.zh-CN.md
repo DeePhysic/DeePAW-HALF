@@ -1,5 +1,8 @@
 # libhalf 集成 API
 
+`HALF_SOLVER_ACC` 的方程、完整迭代推导和 VASP 接续原理见
+[HARRIS_ACC_THEORY.zh-CN.md](HARRIS_ACC_THEORY.zh-CN.md)。
+
 `libhalf` 是供 VASP 和其他电子结构软件调用的稳定、编译器无关接口。其使用方式
 类似 libxc：调用方以整数 ID 选择功能，创建不透明 context，查询能力与基组，再
 通过 C ABI 执行计算。公开 ABI 用 `HALF_ABI_VERSION` 单独管理版本。

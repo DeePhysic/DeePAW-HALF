@@ -1,13 +1,16 @@
 # VASP 6.6.0 直接调用 DeePAW-HALF 初始化波函数
 
+本 adapter 使用的 ACC 无矩阵算法及完整公式推导见
+[HARRIS_ACC_THEORY.zh-CN.md](HARRIS_ACC_THEORY.zh-CN.md)。
+
 本文描述进程内集成方案。该私有分支按仓库所有者授权保存了用户提供的
 `vasp-edge-release.6.6.0` 源码；不得从此私有仓库向无 VASP 许可的第三方再分发。
 下述插入点已在该源码上核对并测试。
 
-私有分支 `vasp-6.6-half-integration` 已包含完整源码和一键构建入口：
+私有分支 `deepaw-half-acc` 已包含完整源码和一键构建入口：
 
 ```bash
-git switch vasp-6.6-half-integration
+git switch deepaw-half-acc
 tools/half-cmake vasp all
 ```
 

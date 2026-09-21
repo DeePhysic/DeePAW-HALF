@@ -17,6 +17,10 @@ Si 与 HfO2 上通过逐本征值验证；CPU QDEP、任意 k 点、多 k 点能
 电荷/结构/内嵌 POTCAR 输入已经支持；有限差分力也已实现。
 CPU 版本还可选用 MPI 按独立 k 点分发 `bands`、`energy` 与有限差分力计算。
 
+PAW 无矩阵算符、全带约束最小化、残差预条件、S 度量正交化、重启式
+Rayleigh-Ritz、复杂度以及 VASP 直接内存接入的完整推导见
+[Harris 无矩阵全带加速原理与推导](docs/HARRIS_ACC_THEORY.zh-CN.md)。
+
 ## 数值模型：从固定密度到本征值
 
 HAPPY 的目标模型、也是 HALF 的长期移植目标，是**固定密度**重建：它读取
@@ -90,8 +94,8 @@ CHGCAR + POTCAR
   -> 以 FFT 构造 Veff：Hartree、局域离子势、XC 与 NLCC
   -> 生成倒空间 PAW 投影子，构造 DION/QPAW 矩阵
   -> 可选：GPU 构造 QDEP，得到逐原子的 D = DION + DeltaD
-  -> 组装稠密复数 H、S 矩阵并进行厄米化
-  -> 广义厄米对角化：CPU 使用 MKL，GPU 使用 cuSOLVER
+  -> 参考路径：组装稠密复数 H、S，使用 MKL/cuSOLVER 对角化
+  -> ACC 路径：分块 H*Psi/S*Psi，全带 Rayleigh-Ritz，只求解小型子空间
   -> 输出本征值及 JSON 验证报告
 ```
 
@@ -107,6 +111,7 @@ CUDA 路径将 FFT 势构造、投影子计算、H/S 组装和本征值求解全
 | `src/half_potential.F90`、`src/half_cuda_potential.cuf` | 有效势 |
 | `src/half_paw.F90`、`src/half_cuda_assembly.cuf` | PAW 项与 H/S 组装 |
 | `src/half_dense_solver.F90`、`src/half_cuda_solver.cuf` | CPU/GPU 广义本征求解 |
+| `src/half_cuda_iterative_solver.cuf` | CUDA 无矩阵全带迭代与提前停止 |
 | `app/half_cli.F90` | 统一 CLI |
 
 ## 构建
@@ -246,7 +251,7 @@ HfO₂ 在 `KSPACING=0.35`、`LMAXPAW=-1`、`ALGO=All` 下的 HALF/SAD 完整
 SCF 对照见
 [加速效果报告](docs/validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md)。
 
-在私有分支 `vasp-6.6-half-integration` 中，VASP 6.6.0 完整源码位于
+在私有分支 `deepaw-half-acc` 中，VASP 6.6.0 完整源码位于
 `vendor/vasp-6.6.0`，可在 Pro 6000 节点用一条命令完成 HALF、MKL FFTW wrapper
 和 `vasp_std` 的配置、编译及 HALF 测试：
 

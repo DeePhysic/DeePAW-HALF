@@ -62,6 +62,8 @@ by at most `2.48e-7` and `3.71e-7`, respectively.
 
 ## Force consistency and comparison
 
+### First-stage result (historical)
+
 The position derivative acts on the same compact grid kernel used for the
 energy. `half-force-check` uses a displaced-ion central difference only as an
 independent development oracle. The maximum errors in `dD/dR` are
@@ -73,12 +75,11 @@ orders of magnitude below the previous shell-quadrature errors.
 | Si | -43.306625404 | -0.013307174 | 0.000739611 |
 | HfO2 | -121.884427193 | +0.088155727 | 0.068379790 |
 
-The Si energy difference decreases from about `20.7` to `13.3 meV/cell`.
-HfO2 `dD/dR` is now numerically converged but its VASP force difference is
-essentially unchanged. This isolates the remaining HfO2 discrepancy away from
-QDEP angular integration and radial moments; the next comparison must target
-the atomic AE/PS double-counting and the output-augmentation contribution to
-the local force.
+These values record the first stage after the direct-grid implementation. The
+reference used an ordinary VASP `ICHARG=1`, `NELM=1` run. VASP regarded the
+single exact diagonalization as electronically converged and therefore did not
+add the frozen-density Harris convergence correction to its final force. It is
+not the strict reference for the current HALF Harris force.
 
 The analytic-force pass also caches the k-independent `D` and `dD/dR` arrays.
 In the contended Pro 6000 run, HfO2 wall time decreased from `121.87` to
@@ -87,3 +88,14 @@ exclusive-GPU performance claim.
 
 Machine-readable results are in
 [`onsite_paw_direct_grid.json`](onsite_paw_direct_grid.json).
+
+## Subsequent closure
+
+The follow-up implementation includes the full Hartree-plus-XC density
+response, differentiates POTCAR `PSPRHO` on the fixed-density Harris path, and
+matches VASP interpolation for the local potential, `PSPCOR`, and `PSPRHO`.
+The strict oracle is now VASP `ICHARG=11`, which retains the convergence-force
+correction. The resulting force-component MAEs are `6.99e-6 eV/Angstrom` for
+Si and `1.007e-3 eV/Angstrom` for HfO2. See
+[`HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md`](HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md)
+for the derivation, $L$-channel diagnostic, and raw-data locations.

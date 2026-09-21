@@ -5,11 +5,12 @@ program half_energy_check
   use half_energy,only:compute_occupations,ewald_energy,ewald_forces
   use half_paw,only:paw_species_t
   use half_forces,only:add_nonlocal_paw_forces
+  use half_potcar_interp,only:vasp_local_spline_second,vasp_local_spline_eval,vasp_four_point_eval
   implicit none
   type(crystal_t)::crystal,shifted
   type(plane_wave_basis_t)::basis
   type(paw_species_t),allocatable::paw(:)
-  real(dp)::eig(2,3),weight(2),mu,band,entropy,e1,e2,ep,em,h,phase
+  real(dp)::eig(2,3),weight(2),mu,band,entropy,e1,e2,ep,em,h,phase,table(8),m2table(8),dx
   real(dp)::analytic(2,3),numeric(2,3),inverse_lattice(3,3),delta(3)
   real(dp)::nlforce(1,3),nlnumeric(3),eval(1),focc(1),r0(3),eplus,eminus
   complex(dp)::waves(3,1),projector0(2,3),cc(2)
@@ -23,6 +24,15 @@ program half_energy_check
     error stop 'HALF: zero-temperature occupation regression'
   if(abs(mu-1.0_dp)>1e-14_dp.or.abs(band-1.0_dp)>1e-14_dp.or.abs(entropy)>1e-14_dp) &
     error stop 'HALF: zero-temperature energy regression'
+
+  do i=1,8;table(i)=real(i-1,dp)**3;end do
+  if(abs(vasp_four_point_eval(table,8.0_dp,2.3_dp)-2.3_dp**3)>1e-13_dp) &
+    error stop 'HALF: VASP four-point POTCAR interpolation regression'
+  do i=1,8;table(i)=real(i-1,dp)**2;end do
+  call vasp_local_spline_second(table,8.0_dp,m2table);dx=1.0e-7_dp
+  if(abs(m2table(8))>1e-14_dp.or.abs((vasp_local_spline_eval(table,m2table,8.0_dp,dx)- &
+      vasp_local_spline_eval(table,m2table,8.0_dp,0.0_dp))/dx)>1e-6_dp) &
+    error stop 'HALF: VASP local-potential spline boundary regression'
 
   eig=reshape([-1.0_dp,-0.8_dp,0.5_dp,0.7_dp,2.0_dp,2.2_dp],[2,3])
   weight=[0.25_dp,0.75_dp]

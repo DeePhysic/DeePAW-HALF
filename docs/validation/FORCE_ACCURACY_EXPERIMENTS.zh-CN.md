@@ -1,5 +1,10 @@
 # HALF 解析力精度实验
 
+> 历史实验说明：本报告保留早期球面积分诊断结果。后续已经实现直接网格
+> QDEP、完整 Hartree+XC Harris 响应和 VASP 一致的 POTCAR 插值；当前严格
+> `ICHARG=11` 对比见
+> [`HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md`](HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md)。
+
 本报告只记录 `force-accuracy-experiments` 分支上的实验，不改变稳定分支的默认
 结果。目标是分别回答：
 

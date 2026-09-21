@@ -20,16 +20,20 @@ Ewald、倒空间局域势以及
 广义 PAW `D-epsilon Q` Hellmann--Feynman 导数，以及 NLCC/`FORCOR` partial-core
 导数。现在还会从 POTCAR 的 AE/PS partial waves 与补偿多极矩重建输出态的
 augmentation density，通过 `dD_ij/dR` 计入其显式位移力，并把带 augmentation
-的输出密度用于力泛函。DeepAW 平滑输入密度保持冻结，Harris 响应只包含
-POTCAR core density 移动产生的 XC-kernel 导数。球形原子 PAW double counting
+的输出密度用于力泛函。DeepAW 平滑输入密度保持冻结；Harris 响应包含
+输出—输入密度差产生的 Hartree+XC kernel 场，并按 POTCAR `PSPRHO` 的移动
+导数收缩。球形原子 PAW double counting
 也会由 POTCAR 的 AE/PS partial waves、原子占据、core density、`DEXC` 与补偿
 电荷自动重建，不读取 CHGCAR augmentation 尾部，也不依赖 VASP 输出数值。
-独立 CLI 的 `--forces` 全程不移动原子；总力与同一泛函的数值导数仍在继续验证。原生
+独立 CLI 的 `--forces` 全程不移动原子；相对严格固定密度 VASP 基准，Si/HfO2
+力分量 MAE 已达到 `6.99e-6/1.01e-3 eV/Angstrom`。原生
 `vaspwave.h5` 输出以及 HDF5 电荷/结构/内嵌 POTCAR 输入已经支持。
 
 PAW 无矩阵算符、全带约束最小化、残差预条件、S 度量正交化、重启式
 Rayleigh-Ritz、复杂度以及 VASP 直接内存接入的完整推导见
 [Harris 无矩阵全带加速原理与推导](docs/HARRIS_ACC_THEORY.zh-CN.md)。
+L 通道、Harris Hartree+XC 响应及 Si/HfO2 力验证见
+[Harris 力的 L 通道与密度响应优化](docs/validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md)。
 
 ## 数值模型：从固定密度到本征值
 
@@ -160,6 +164,7 @@ CUDA 路径将 FFT 势构造、投影子计算、H/S 组装和本征值求解全
 | --- | --- |
 | `src/half_chgcar.F90`、`src/half_potcar.F90` | 输入解析 |
 | `src/half_basis.F90`、`src/half_fft.F90` | 平面波基与 FFT |
+| `src/half_potcar_interp.F90` | 与 POTCAR 表格约定一致的局域势、`PSPCOR`、`PSPRHO` 插值 |
 | `src/half_potential.F90`、`src/half_cuda_potential.cuf` | 有效势 |
 | `src/half_paw.F90`、`src/half_cuda_assembly.cuf` | PAW 项与 H/S 组装 |
 | `src/half_dense_solver.F90`、`src/half_cuda_solver.cuf` | CPU/GPU 广义本征求解 |

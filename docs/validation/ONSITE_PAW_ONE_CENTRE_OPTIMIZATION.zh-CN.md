@@ -112,7 +112,7 @@ $$
 相较 `24×48` 球壳积分的约 `4.36e-5`（Si）与 `2.56e-4`
 （HfO2），离散一致性提高约四到五个数量级。
 
-## 5. 完整能量/力结果
+## 5. 第一阶段能量/力结果（历史）
 
 Pro 6000、CUDA 13.2、NVHPC 26.5、PBE、`ISPIN=1`、`SIGMA=0.02 eV`，
 使用 VASP `IBZKPT`；Si 为 520 eV/24 bands，HfO2 为 521 eV/80 bands。
@@ -122,12 +122,10 @@ Pro 6000、CUDA 13.2、NVHPC 26.5、PBE、`ISPIN=1`、`SIGMA=0.02 eV`，
 | Si | `-43.306625404` | `-0.013307174` | `0.000739611` | `0.001308693` |
 | HfO2 | `-121.884427193` | `+0.088155727` | `0.068379790` | `0.319947241` |
 
-直接网格使 Si 相对 VASP 的能量差由约 `20.7 meV/cell` 降到
-`13.3 meV/cell`，并把 HALF 最大残余力降到 `0.457 meV/Angstrom`。
-HfO2 的内部 $D$ 导数已经达到数值精度，但相对 VASP 的力差基本不变。
-这证明 HfO2 的剩余误差不再来自 QDEP 网格、角向积分或 $Q^L$ 径向矩；下一步
-应逐项核对原子 AE/PS double-counting 和输出 augmentation density 对局域力的
-贡献，不能再靠增加球面积分点解决。
+这组数字记录直接网格实现完成时的第一阶段状态。它采用普通 `ICHARG=1`、
+`NELM=1` VASP 力作参照；该计算在一次精确对角化后被 VASP 判定为电子收敛，
+因此最终力没有加入固定输入密度 Harris 泛函所需的收敛修正。它不能作为当前
+HALF Harris 解析力的严格参照。后续完整响应修正和正确 oracle 见第 7 节。
 
 解析力阶段还缓存了与 k 点无关的 `D_ij` 和 `dD_ij/dR`。HfO2 完整测试
 wall time 从 `121.87 s` 降到 `97.78 s`；该数字包含本征求解且测试时 GPU
@@ -140,3 +138,11 @@ wall time 从 `121.87 s` 降到 `97.78 s`；该数字包含本征求解且测试
 - 构建：`/data/limusen/deepaw-half-acc-src/build/direct-grid-cpu` 与
   `/data/limusen/deepaw-half-acc-src/build/direct-grid-cuda-nvhpc`
 
+## 7. 后续闭合
+
+后续实现将 Harris 收敛力改为完整的 Hartree+XC 密度响应，并按 VASP 的固定密度
+路径以 POTCAR `PSPRHO` 求导，同时统一了局域势、`PSPCOR` 和 `PSPRHO` 的插值。
+严格参照改用 VASP `ICHARG=11`，以保证最终力确实包含收敛修正。当前 Si 与
+HfO2 的力分量 MAE 分别为 `6.99e-6` 和 `1.007e-3 eV/Angstrom`。完整公式、
+$L$ 通道诊断和数据位置见
+[`HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md`](HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md)。

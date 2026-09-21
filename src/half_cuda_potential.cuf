@@ -4,6 +4,7 @@ module half_cuda_potential
   use half_kinds,only:dp
   use half_constants,only:pi,autoa,hatoev,felect,edeps
   use half_types,only:crystal_t,charge_grid_t,potcar_t
+  use half_potcar_interp,only:vasp_local_spline_second
   implicit none
   private
   public::build_veff_cuda
@@ -30,6 +31,19 @@ contains
     h=xmax/real(n,dp); k=max(1,min(n-1,int(floor(x/h))+1)); t=(x-real(k-1,dp)*h)/h
     value=(1-t)*y(k)+t*y(k+1)+h*h*(((1-t)**3-(1-t))*m2(k)+(t**3-t)*m2(k+1))/6
   end function
+
+  attributes(device) function four_point_eval_d(y,xmax,x,n)result(value)
+    real(dp),device,intent(in)::y(*)
+    real(dp),value::xmax,x
+    integer,value::n
+    real(dp)::value,arg,rem,v1,v2,v3,v4,t0,t1,t2,t3
+    integer::k
+    arg=x*real(n,dp)/xmax+1.0_dp;k=max(2,min(n-2,int(arg)));rem=arg-real(k,dp)
+    v1=y(k-1);v2=y(k);v3=y(k+1);v4=y(k+2)
+    t0=v2;t1=(6.0_dp*v3-2.0_dp*v1-3.0_dp*v2-v4)/6.0_dp
+    t2=(v1+v3-2.0_dp*v2)/2.0_dp;t3=(v4-v1+3.0_dp*(v2-v3))/6.0_dp
+    value=t0+rem*(t1+rem*(t2+rem*t3))
+  end function four_point_eval_d
 
   attributes(device) subroutine reciprocal_vector(index0,n1,n2,n3,reciprocal,qx,qy,qz,g2)
     integer,value::index0,n1,n2,n3
@@ -76,10 +90,10 @@ contains
     end if
   end subroutine
 
-  attributes(global) subroutine add_ionic_species_kernel(local_g,core_g,radial_values,radial_m2,core_values,core_m2, &
+  attributes(global) subroutine add_ionic_species_kernel(local_g,core_g,radial_values,radial_m2,core_values, &
       positions,reciprocal,n,n1,n2,n3,nrad,natoms,gmax,zval,volume,has_core)
     complex(dp),device,intent(inout)::local_g(*),core_g(*)
-    real(dp),device,intent(in)::radial_values(*),radial_m2(*),core_values(*),core_m2(*),positions(*),reciprocal(*)
+    real(dp),device,intent(in)::radial_values(*),radial_m2(*),core_values(*),positions(*),reciprocal(*)
     integer,value::n,n1,n2,n3,nrad,natoms,has_core
     real(dp),value::gmax,zval,volume
     integer::i,iat
@@ -92,7 +106,7 @@ contains
       if(g2>1.0e-12_dp)radial=radial-4*pi*zval*felect/g2
       if(g2<=1.0e-12_dp.or.gn>gmax-gmax/real(nrad,dp))radial=0
       core_radial=0
-      if(has_core/=0.and.gn<=gmax-3*gmax/real(nrad,dp))core_radial=spline_eval_d(core_values,core_m2,gmax,gn,nrad)
+      if(has_core/=0.and.gn<=gmax-3*gmax/real(nrad,dp))core_radial=four_point_eval_d(core_values,gmax,gn,nrad)
       structure=(0.0_dp,0.0_dp)
       do iat=1,natoms
         phase=qx*positions(iat)+qy*positions(natoms+iat)+qz*positions(2*natoms+iat)
@@ -277,9 +291,9 @@ contains
     real(dp),intent(out)::e_hartree,e_xc
     real(dp),intent(out),optional::e_xc_potential
     real(dp),device,allocatable::drawcharge(:),dcharge(:),drec(:,:),dlocal_r(:),dcore_r(:),deh(:),density(:),sigma(:),grad(:,:), &
-      fs(:),fn(:),flux(:),edens(:),dradial(:),dm2(:),dcore_values(:),dcore_m2(:),dpositions(:,:)
+      fs(:),fn(:),flux(:),edens(:),dradial(:),dm2(:),dcore_values(:),dpositions(:,:)
     complex(dp),device,allocatable::work(:),rho_g(:),local_g(:),core_g(:),freq(:),deriv(:)
-    real(dp),allocatable::m2(:),m2core(:),positions(:,:),host_terms(:)
+    real(dp),allocatable::m2(:),positions(:,:),host_terms(:)
     integer::n,n1,n2,n3,it,iat,ion0,nrad,plan,status,blocks,alpha,ierr
     n=size(charge%values);n1=charge%shape(1);n2=charge%shape(2);n3=charge%shape(3);blocks=(n+255)/256
     allocate(drawcharge(n),dcharge(n),drec(3,3),dlocal_r(n),dcore_r(n),deh(n),dveff(n),work(n),rho_g(n),local_g(n),core_g(n))
@@ -291,17 +305,16 @@ contains
     call initialize_reciprocal_kernel<<<blocks,256>>>(rho_g,local_g,core_g,deh,drec,n,n1,n2,n3,crystal%volume)
     ion0=0
     do it=1,size(potcars)
-      nrad=size(potcars(it)%psp_local);allocate(m2(nrad),m2core(nrad));m2core=0
-      call spline_second_host(potcars(it)%psp_local,potcars(it)%psp_gmax,m2)
-      if(potcars(it)%has_core)call spline_second_host(potcars(it)%pspcor,potcars(it)%psp_gmax,m2core)
-      allocate(dradial(nrad),dm2(nrad),dcore_values(nrad),dcore_m2(nrad),positions(crystal%counts(it),3),dpositions(crystal%counts(it),3))
-      dradial=potcars(it)%psp_local;dm2=m2;dcore_values=0;dcore_m2=m2core
+      nrad=size(potcars(it)%psp_local);allocate(m2(nrad))
+      call vasp_local_spline_second(potcars(it)%psp_local,potcars(it)%psp_gmax,m2)
+      allocate(dradial(nrad),dm2(nrad),dcore_values(nrad),positions(crystal%counts(it),3),dpositions(crystal%counts(it),3))
+      dradial=potcars(it)%psp_local;dm2=m2;dcore_values=0
       if(potcars(it)%has_core)dcore_values=potcars(it)%pspcor
       do iat=1,crystal%counts(it);positions(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do
       dpositions=positions
-      call add_ionic_species_kernel<<<blocks,256>>>(local_g,core_g,dradial,dm2,dcore_values,dcore_m2,dpositions,drec, &
+      call add_ionic_species_kernel<<<blocks,256>>>(local_g,core_g,dradial,dm2,dcore_values,dpositions,drec, &
         n,n1,n2,n3,nrad,crystal%counts(it),potcars(it)%psp_gmax,potcars(it)%zval,crystal%volume,merge(1,0,potcars(it)%has_core))
-      deallocate(m2,m2core,positions,dradial,dm2,dcore_values,dcore_m2,dpositions);ion0=ion0+crystal%counts(it)
+      deallocate(m2,positions,dradial,dm2,dcore_values,dpositions);ion0=ion0+crystal%counts(it)
     end do
     status=cufftExecZ2Z(plan,local_g,work,CUFFT_INVERSE);call extract_real_kernel<<<blocks,256>>>(work,dlocal_r,n,1.0_dp)
     status=cufftExecZ2Z(plan,core_g,work,CUFFT_INVERSE);call extract_real_kernel<<<blocks,256>>>(work,dcore_r,n,1.0_dp)
@@ -349,19 +362,4 @@ contains
     status=cufftDestroy(plan)
   end subroutine
 
-  subroutine spline_second_host(y,xmax,m2)
-    real(dp),intent(in)::y(:),xmax
-    real(dp),intent(out)::m2(:)
-    real(dp)::h,w
-    real(dp),allocatable::diag(:),rhs(:),upper(:)
-    integer::n,i
-    n=size(y);h=xmax/real(n,dp);allocate(diag(n),rhs(n),upper(n));diag=0;rhs=0;upper=0
-    diag(2)=1;rhs(2)=((y(3)-y(2))/h-(y(2)-y(1))/h)/h
-    do i=3,n-2;diag(i)=4*h;upper(i)=h;rhs(i)=6*((y(i+1)-y(i))/h-(y(i)-y(i-1))/h);end do
-    diag(n-1)=1;rhs(n-1)=((y(n)-y(n-1))/h-(y(n-1)-y(n-2))/h)/h
-    do i=3,n-1;w=merge(h,0.0_dp,i<=n-2)/diag(i-1);diag(i)=diag(i)-w*upper(i-1);rhs(i)=rhs(i)-w*rhs(i-1);end do
-    m2(n-1)=rhs(n-1)/diag(n-1)
-    do i=n-2,2,-1;m2(i)=(rhs(i)-upper(i)*m2(i+1))/diag(i);end do
-    m2(1)=2*m2(2)-m2(3);m2(n)=2*m2(n-1)-m2(n-2)
-  end subroutine
 end module half_cuda_potential

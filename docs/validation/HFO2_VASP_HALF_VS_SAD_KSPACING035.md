@@ -312,7 +312,7 @@ HALF evaluates production forces analytically. In compact form,
 $$
 F_{I\alpha}=-\frac{\partial E_{\mathrm{HALF}}}{\partial R_{I\alpha}}
 =F^{\mathrm{Ewald}}+F^{\mathrm{local}}+F^{D-\varepsilon Q}
-+F^{\mathrm{aug}}+F^{\mathrm{NLCC}}+F^{\mathrm{Harris\ core}}.
++F^{\mathrm{aug}}+F^{\mathrm{NLCC}}+F^{\mathrm{Harris\ response}}.
 $$
 
 The generalized nonlocal term is evaluated as
@@ -325,11 +325,18 @@ F^{D-\varepsilon Q}_{I\alpha}
 \right|\psi_{n\mathbf k}\right\rangle .
 $$
 
-The DeepAW smooth input density is frozen. Hence its derivative is zero and
-the Harris response contains only the XC-kernel response caused by translating
-the POTCAR core density. Central finite differences are used only as a
-developer oracle and never by the production CLI. A single call produces
-energy components and analytic forces:
+The DeepAW smooth input density is frozen. The Harris convergence force uses
+the full response
+
+$$
+g_{\mathrm{Hxc}}=v_H[n_{\mathrm{out}}-n_{\mathrm{in}}]
++f_{\mathrm{xc}}[n_{\mathrm{in}}+n_{\mathrm{core}}]
+(n_{\mathrm{out}}-n_{\mathrm{in}}),
+$$
+
+contracted with the translated POTCAR `PSPRHO`; NLCC separately differentiates
+`PSPCOR`. Central finite differences are only a developer oracle and never the
+production CLI. A single call produces energy components and analytic forces:
 
 ```bash
 half energy CHGCAR.deepaw POTCAR \
@@ -337,14 +344,12 @@ half energy CHGCAR.deepaw POTCAR \
   --forces --output-prefix si_energy_force
 ```
 
-Against the un-converged initial VASP `LMAXMIX=-1` MIMIC_US state, the current
-Si energy differs by 0.0207 eV/cell and its force-component MAE is
-0.00532 eV/Angstrom. HfO2 differs by 0.0861 eV/cell and
-0.0680 eV/Angstrom. Against the same HALF energy, atom-1/x analytic versus
-central-difference discrepancies are 0.00175 eV/Angstrom for Si and
-0.00307 eV/Angstrom for HfO2. These are development results, not a claim of
-VASP force parity; full data are in
-[`HARRIS_VASP_MIMIC_US_ENERGY_FORCE.zh-CN.md`](HARRIS_VASP_MIMIC_US_ENERGY_FORCE.zh-CN.md).
+Against the strict frozen-density VASP `ICHARG=11` oracle, the current
+force-component MAE is `6.99e-6 eV/Angstrom` for Si and
+`1.007e-3 eV/Angstrom` for HfO2. This is a like-for-like comparison in which
+VASP retains its Harris convergence correction; a one-step `ICHARG=1` run does
+not. Full formulas, $L$-channel diagnostics, and raw-data locations are in
+[`HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md`](HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md).
 
 ### 4.3 Comparison with reported machine-learning potentials
 
@@ -355,7 +360,7 @@ beside representative published results.
 
 | Method | Reported energy result | Reported force result |
 |---|---:|---:|
-| DeePAW-HALF, Si/HfO2 current validation | 2.59/7.17 meV/atom absolute energy difference vs initial VASP MIMIC_US state | 5.32/68.0 meV/Angstrom component MAE; onsite VASP parity remains in progress |
+| DeePAW-HALF, Si/HfO2 current validation | 2.59/7.17 meV/atom absolute energy difference vs initial VASP MIMIC_US state | 0.00699/1.007 meV/Angstrom component MAE vs fixed-density VASP `ICHARG=11` |
 | [M3GNet](https://doi.org/10.1038/s43588-022-00349-3) | 35 meV/atom MAE | 72 meV/Angstrom MAE |
 | [CHGNet](https://doi.org/10.1038/s42256-023-00716-3) | 30 meV/atom MAE | 77 meV/Angstrom MAE |
 | [MACE-MP-0 medium](https://doi.org/10.1063/5.0297006) | 20 meV/atom MAE | 45 meV/Angstrom MAE |
@@ -396,9 +401,9 @@ foundation for VASP initial wavefunctions.
   need tighter convergence, while VASP initialization can stop earlier.
 - Central finite differences are retained only as a validation oracle. Native
   analytic Ewald, local-potential, generalized nonlocal PAW, augmentation,
-  NLCC, and frozen-density Harris-core derivatives are implemented. Their
-  derivative consistency is at the few-meV/Angstrom level for the documented
-  components, while exact VASP onsite PAW parity remains in progress.
+  NLCC, and full frozen-density Hartree-plus-XC Harris response are
+  implemented. Against fixed-density VASP `ICHARG=11`, the Si/HfO2
+  force-component MAEs are `6.99e-6` and `1.007e-3 eV/Angstrom`.
 
 ## 7. Conclusion
 
@@ -415,10 +420,9 @@ plane-wave electronic structure:
   CsPbBr3 job time by 6.75x relative to dense HALF initialization.
 - **Energy and analytic forces:** HALF evaluates the Harris total energy
   without a preceding SCF run. All production force components are analytic
-  and use POTCAR-derived augmentation. Internal finite-difference checks are
-  at 0.00175--0.00307 eV/Angstrom for the documented Si/HfO2 components;
-  onsite PAW terms must still be matched term by term before claiming VASP
-  force parity.
+  and use POTCAR-derived augmentation. Against fixed-density VASP `ICHARG=11`,
+  the Si/HfO2 force-component MAEs are `6.99e-6` and
+  `1.007e-3 eV/Angstrom`, respectively.
 
 DeePAW-HALF is a reusable density-to-electronic-structure layer: DeepAW
 supplies density, while HALF produces bands, energies, forces, and wavefunctions

@@ -10,11 +10,14 @@ electron count to within `1.0e-5 e`; the detailed record is
 [`validation/potcar_augmentation_force_si_hfo2.json`](validation/potcar_augmentation_force_si_hfo2.json).
 
 The current force functional treats the DeepAW smooth input density as frozen.
-Its Harris response therefore contains only the XC-kernel contraction caused
-by translating the POTCAR core density; it does not translate `PSPRHO` and has
-no Hartree response. Atomic PAW double counting is reconstructed from POTCAR
-and is independent of the CHGCAR augmentation tail. The latest direct Si/HfO2
-numbers and the remaining variational-consistency work are recorded below.
+Its Harris convergence force includes the full Hartree-plus-XC response to the
+output-minus-input density and contracts that response with the translated
+POTCAR `PSPRHO`; NLCC remains the separate `PSPCOR` derivative. Atomic PAW
+double counting is reconstructed from POTCAR and is independent of the CHGCAR
+augmentation tail. Against the strict VASP `ICHARG=11` frozen-density oracle,
+the force-component MAE is `6.99e-6 eV/Angstrom` for Si and
+`1.007e-3 eV/Angstrom` for HfO2. See
+[`validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md`](validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md).
 
 A direct comparison against non-converged VASP `LMAXMIX=-1` MIMIC_US energy
 and forces is recorded in

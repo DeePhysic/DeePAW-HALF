@@ -63,6 +63,7 @@ contains
     do it=1,size(potcars)
       nlm=0;lmax=0
       do ich=1,potcars(it)%channels;nlm=nlm+2*potcars(it)%lps(ich)+1;lmax=max(lmax,2*potcars(it)%lps(ich));end do
+      lmax=active_qdep_lmax(lmax)
       naug=(lmax+1)*(lmax+1);nrad=size(potcars(it)%rgrid);pairs=nlm*nlm
       allocate(chan(nlm),lv(nlm),mv(nlm),laug(naug),maug(naug),rw(nrad),multipole(pairs,naug), &
         coeff(naug),root1(0:lmax),root2(0:lmax),c1(0:lmax),c2(0:lmax))
@@ -161,6 +162,7 @@ contains
     do ich=1,potcar%channels
       nlm=nlm+2*potcar%lps(ich)+1;lmax=max(lmax,2*potcar%lps(ich))
     end do
+    lmax=active_qdep_lmax(lmax)
     if(nlm/=paw%nlm)error stop 'HALF: direct-grid QDEP channel mismatch'
     naug=(lmax+1)*(lmax+1);nrad=size(potcar%rgrid);natoms=crystal%counts(itype);pairs=nlm*nlm
     allocate(chan(nlm),lv(nlm),mv(nlm),laug(naug),maug(naug),rw(nrad),multipole(pairs,naug), &
@@ -256,6 +258,7 @@ contains
     do ich=1,potcar%channels
       nlm=nlm+2*potcar%lps(ich)+1;lmax=max(lmax,2*potcar%lps(ich))
     end do
+    lmax=active_qdep_lmax(lmax)
     if(nlm/=paw%nlm)error stop 'HALF: CPU QDEP channel mismatch'
     naug=(lmax+1)*(lmax+1);nrad=size(potcar%rgrid);natoms=crystal%counts(itype)
     pairs=nlm*nlm;nang=ntheta*nphi
@@ -343,6 +346,14 @@ contains
       end do
     end do
   end subroutine
+
+  pure integer function active_qdep_lmax(potcar_lmax) result(lmax)
+    integer,intent(in)::potcar_lmax
+    lmax=potcar_lmax
+#if HALF_QDEP_LMAX >= 0
+    lmax=min(lmax,HALF_QDEP_LMAX)
+#endif
+  end function active_qdep_lmax
 
   real(dp) function cubic_sample(coeff,shape,frac)result(value)
     real(dp),intent(in)::coeff(:),frac(3)

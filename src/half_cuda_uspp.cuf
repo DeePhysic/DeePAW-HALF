@@ -222,6 +222,9 @@ contains
     real(dp)::root1,root2,c1,c2,m1
     nlm=0;lmax=0
     do ich=1,potcar%channels;nlm=nlm+2*potcar%lps(ich)+1;lmax=max(lmax,2*potcar%lps(ich));end do
+#if HALF_QDEP_LMAX >= 0
+    lmax=min(lmax,HALF_QDEP_LMAX)
+#endif
     naug=(lmax+1)*(lmax+1);nrad=size(potcar%rgrid);ngrid=size(dveff);natoms=crystal%counts(itype);pairs=nlm*nlm;nang=ntheta*nphi
     allocate(chan(nlm),lv(nlm),mv(nlm));a=0
     do ich=1,potcar%channels;do m=-potcar%lps(ich),potcar%lps(ich);a=a+1;chan(a)=ich;lv(a)=potcar%lps(ich);mv(a)=m;end do;end do

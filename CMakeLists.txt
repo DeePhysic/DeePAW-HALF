@@ -17,10 +17,15 @@ set(HALF_GPU_CC "86" CACHE STRING "NVIDIA GPU compute capability, without the de
 set(HALF_CUDA_VERSION "12.4" CACHE STRING "CUDA toolkit selected by NVHPC")
 set(HALF_QDEP_NTHETA "12" CACHE STRING "Gauss-Legendre polar points for QDEP sphere integration")
 set(HALF_QDEP_NPHI "24" CACHE STRING "Uniform azimuthal points for QDEP sphere integration")
+set(HALF_QDEP_LMAX "-1" CACHE STRING
+  "Maximum PAW augmentation angular momentum included consistently in QDEP, augmentation density, and forces (-1: all POTCAR channels)")
 option(HALF_QDEP_DIRECT_GRID "Assemble PAW QDEP directly on the FFT grid (VASP SETDIJ construction)" ON)
 
 if(HALF_QDEP_NTHETA LESS 4 OR HALF_QDEP_NPHI LESS 8)
   message(FATAL_ERROR "HALF QDEP angular grids require NTHETA>=4 and NPHI>=8")
+endif()
+if(HALF_QDEP_LMAX LESS -1)
+  message(FATAL_ERROR "HALF_QDEP_LMAX must be -1 (all channels) or a non-negative integer")
 endif()
 
 if(HALF_ENABLE_CUDA AND NOT CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC|PGI")
@@ -60,6 +65,7 @@ set(HALF_CORE_SOURCES
   src/half_basis.F90
   src/half_kpoints.F90
   src/half_paw.F90
+  src/half_potcar_interp.F90
   src/half_energy.F90
   src/half_forces.F90
   src/half_artifacts.F90
@@ -114,6 +120,7 @@ set_target_properties(half_core PROPERTIES
 target_compile_definitions(half_core PRIVATE
   HALF_QDEP_NTHETA=${HALF_QDEP_NTHETA}
   HALF_QDEP_NPHI=${HALF_QDEP_NPHI}
+  HALF_QDEP_LMAX=${HALF_QDEP_LMAX}
   $<$<BOOL:${HALF_QDEP_DIRECT_GRID}>:HALF_QDEP_DIRECT_GRID>)
 target_include_directories(half_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

@@ -1,0 +1,44 @@
+{
+  "branch": "force-accuracy-experiments",
+  "date": "2026-09-21",
+  "configuration": {
+    "host_gpu": "NVIDIA RTX PRO 6000",
+    "cuda": "13.2",
+    "nvhpc": "26.5",
+    "xc": "PBE",
+    "force_oracle": "VASP fixed-density ICHARG=11",
+    "half_qdep_lmax_default": -1
+  },
+  "systems": {
+    "Si": {
+      "encut_eV": 520.0,
+      "bands": 24,
+      "half_free_energy_eV": -43.306622750489744,
+      "old_force_component_mae_eV_per_A": 0.00020111723014063786,
+      "new_force_component_mae_eV_per_A": 0.000006990761604403839,
+      "new_force_component_max_eV_per_A": 0.000015179862151338492,
+      "mae_improvement": 28.769
+    },
+    "HfO2": {
+      "encut_eV": 521.0,
+      "bands": 80,
+      "half_free_energy_eV": -121.88444076167572,
+      "old_force_component_mae_eV_per_A": 0.03646252686063237,
+      "new_force_component_mae_eV_per_A": 0.0010070622565843098,
+      "new_force_component_max_eV_per_A": 0.002570818877460246,
+      "mae_improvement": 36.207,
+      "lmax_scan": [0, 2, 4],
+      "lmax_scan_result": "bitwise-identical energy and forces"
+    }
+  },
+  "regression": {
+    "cuda_direct_grid": "9/9 passed",
+    "cpu_direct_grid": "9/9 passed",
+    "legacy_shell": "9/9 passed"
+  },
+  "data": {
+    "half": "/data/limusen/deepaw_half_force_compare/final_vasp_interp_gpu",
+    "vasp": "/data/limusen/mimic_us_energy_force_compare/{Si,HfO2}_harris_icharg11",
+    "l_channel_scan": "/data/limusen/deepaw_half_force_compare/l_channel_scan"
+  }
+}

@@ -42,11 +42,11 @@ contains
     integer,intent(in)::itype
     type(paw_species_t),intent(inout)::paw
     integer,parameter::ntheta=12,nphi=24
-    integer::nlm,lmax,naug,nrad,natoms,pairs,nang,ich,l,m,a,b,k,ir,iat,ip,it,ion0
+    integer::nlm,lmax,naug,nrad,natoms,pairs,nang,ich,l,m,a,b,k,ir,iat,ip,it,ion0,alpha
     integer,allocatable::chan(:),lv(:),mv(:),laug(:)
     real(dp),allocatable::rw(:),gshape(:,:),multipole(:,:),dirs(:,:),yweight(:,:),xg(:),wg(:), &
-      vlm(:,:),radial_v(:),pos(:,:),invlat(:,:)
-    real(dp)::root1,root2,c1,c2,moment,cart(3),frac(3),value
+      vlm(:,:),radial_v(:),radial_grad(:,:),pos(:,:),invlat(:,:)
+    real(dp)::root1,root2,c1,c2,moment,cart(3),frac(3),value,grad_value(3)
     nlm=0;lmax=0
     do ich=1,potcar%channels
       nlm=nlm+2*potcar%lps(ich)+1;lmax=max(lmax,2*potcar%lps(ich))
@@ -98,7 +98,7 @@ contains
         k=k+1;yweight(ip,k)=ylm(l,b,xg(it),2*pi*real(m,dp)/real(nphi,dp))*wg(it)*2*pi/real(nphi,dp)
       end do;end do
     end do;end do
-    ion0=sum(crystal%counts(:itype-1));allocate(pos(natoms,3),invlat(3,3),vlm(naug,nrad),radial_v(naug))
+    ion0=sum(crystal%counts(:itype-1));allocate(pos(natoms,3),invlat(3,3),vlm(naug,nrad),radial_v(naug),radial_grad(naug,3))
     do iat=1,natoms;pos(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do
     invlat=inverse3(crystal%lattice)
     do iat=1,natoms
@@ -113,12 +113,30 @@ contains
       do k=1,naug
         radial_v(k)=sum(rw*potcar%rgrid*potcar%rgrid*gshape(:,laug(k)+1)*vlm(k,:))
       end do
+      do alpha=1,3
+        vlm=0.0_dp
+        do ir=1,nrad
+          do ip=1,nang
+            cart=pos(iat,:)+potcar%rgrid(ir)*dirs(ip,:);frac=modulo(matmul(cart,invlat),1.0_dp)
+            call cubic_sample_gradient(coeff,shape,frac,invlat,grad_value);value=grad_value(alpha)
+            do k=1,naug;vlm(k,ir)=vlm(k,ir)+value*yweight(ip,k);end do
+          end do
+        end do
+        do k=1,naug
+          radial_grad(k,alpha)=sum(rw*potcar%rgrid*potcar%rgrid*gshape(:,laug(k)+1)*vlm(k,:))
+        end do
+      end do
       paw%dij_atom(iat,:,:)=paw%dij
       do b=1,nlm;do a=1,nlm
         paw%dij_atom(iat,a,b)=paw%dij_atom(iat,a,b)+ &
           sum(multipole((b-1)*nlm+a,:)*radial_v)
       end do;end do
       paw%dij_atom(iat,:,:)=0.5_dp*(paw%dij_atom(iat,:,:)+transpose(paw%dij_atom(iat,:,:)))
+      do alpha=1,3;do b=1,nlm;do a=1,nlm
+        paw%ddij_atom(iat,a,b,alpha)=sum(multipole((b-1)*nlm+a,:)*radial_grad(:,alpha))
+      end do;end do
+      paw%ddij_atom(iat,:,:,alpha)=0.5_dp*(paw%ddij_atom(iat,:,:,alpha)+transpose(paw%ddij_atom(iat,:,:,alpha)))
+      end do
     end do
   end subroutine
 
@@ -139,11 +157,37 @@ contains
     end do
   end function
 
+  subroutine cubic_sample_gradient(coeff,shape,frac,invlat,gradient)
+    real(dp),intent(in)::coeff(:),frac(3),invlat(3,3)
+    integer(i32),intent(in)::shape(3)
+    real(dp),intent(out)::gradient(3)
+    integer::ix,iy,iz,a,b,c,ia,ib,ic,index,alpha
+    real(dp)::coord(3),w1(4),w2(4),w3(4),dw1(4),dw2(4),dw3(4),df(3),value
+    coord=frac*real(shape,dp);ix=floor(coord(1));iy=floor(coord(2));iz=floor(coord(3))
+    call cubic_weights(coord(1)-ix,w1);call cubic_weights(coord(2)-iy,w2);call cubic_weights(coord(3)-iz,w3)
+    call cubic_weights_derivative(coord(1)-ix,dw1);call cubic_weights_derivative(coord(2)-iy,dw2)
+    call cubic_weights_derivative(coord(3)-iz,dw3);df=0.0_dp
+    do a=1,4;ia=modulo(ix+a-2,shape(1));do b=1,4;ib=modulo(iy+b-2,shape(2));do c=1,4
+      ic=modulo(iz+c-2,shape(3));index=ia*shape(2)*shape(3)+ib*shape(3)+ic+1;value=coeff(index)
+      df(1)=df(1)+dw1(a)*w2(b)*w3(c)*value*real(shape(1),dp)
+      df(2)=df(2)+w1(a)*dw2(b)*w3(c)*value*real(shape(2),dp)
+      df(3)=df(3)+w1(a)*w2(b)*dw3(c)*value*real(shape(3),dp)
+    end do;end do;end do
+    do alpha=1,3;gradient(alpha)=sum(df*invlat(alpha,:));end do
+  end subroutine cubic_sample_gradient
+
   pure subroutine cubic_weights(t,w)
     real(dp),intent(in)::t;real(dp),intent(out)::w(4)
     w(1)=(1-t)**3/6;w(2)=(3*t**3-6*t*t+4)/6
     w(3)=(-3*t**3+3*t*t+3*t+1)/6;w(4)=t**3/6
   end subroutine
+  pure subroutine cubic_weights_derivative(t,w)
+    real(dp),intent(in)::t;real(dp),intent(out)::w(4)
+    w(1)=-0.5_dp*(1-t)**2
+    w(2)=1.5_dp*t*t-2.0_dp*t
+    w(3)=-1.5_dp*t*t+t+0.5_dp
+    w(4)=0.5_dp*t*t
+  end subroutine cubic_weights_derivative
 
   subroutine radial_weights(r,w)
     real(dp),intent(in)::r(:);real(dp),intent(out)::w(:)

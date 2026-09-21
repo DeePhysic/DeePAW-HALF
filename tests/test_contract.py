@@ -271,10 +271,13 @@ def test_analytic_hellmann_feynman_force_components_are_native_fortran():
     check = (ROOT / "app/half_energy_check.F90").read_text().lower()
     assert "subroutine ewald_forces" in energy
     assert "dij_atom(iat,:,:)-eigenvalues(ib)*paw(it)%qij" in nonlocal_force
+    assert "ddij_atom" in nonlocal_force
     assert "subroutine local_ionic_forces" in local_force
     assert "subroutine nlcc_forces" in local_force
     assert "nonlocal_force_max_error" in check
     assert "ewald_force_max_error" in check
+    force_check = (ROOT / "app/half_force_check.F90").read_text().lower()
+    assert "augmentation_dd_max_error" in force_check
 
 
 def test_si_automatic_band_path_parity_record():

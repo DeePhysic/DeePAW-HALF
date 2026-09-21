@@ -48,6 +48,10 @@ contains
           do alpha=1,3
             forces(ion0+iat,alpha)=forces(ion0+iat,alpha)-2.0_dp*kweight*occupations(ib)* &
               real(dot_product(metric_c,dc(:,alpha)),dp)
+            if(allocated(paw(it)%ddij_atom))then
+              forces(ion0+iat,alpha)=forces(ion0+iat,alpha)-kweight*occupations(ib)* &
+                real(dot_product(c,matmul(paw(it)%ddij_atom(iat,:,:,alpha),c)),dp)
+            end if
           end do
         end do
       end do

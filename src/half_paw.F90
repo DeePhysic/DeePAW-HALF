@@ -12,6 +12,7 @@ module half_paw
     ! DION is species-wide, but the MIMIC_US correction DeltaD depends on
     ! Veff around each ion.  Keep the assembled D matrix per atom.
     real(dp), allocatable :: dij_atom(:,:,:)
+    real(dp), allocatable :: ddij_atom(:,:,:,:)
   end type
 contains
   subroutine build_paw_operators(potcars,crystal,basis,paw)
@@ -29,12 +30,12 @@ contains
       do ich=1,potcars(it)%channels; nlm=nlm+2*potcars(it)%lps(ich)+1; end do
       paw(it)%natoms=crystal%counts(it); paw(it)%nlm=nlm
       allocate(paw(it)%projectors(crystal%counts(it),nlm,basis%npw),paw(it)%dij(nlm,nlm),paw(it)%qij(nlm,nlm), &
-        paw(it)%dij_atom(crystal%counts(it),nlm,nlm))
+        paw(it)%dij_atom(crystal%counts(it),nlm,nlm),paw(it)%ddij_atom(crystal%counts(it),nlm,nlm,3))
       allocate(spline_m2(size(potcars(it)%pspnl,1),potcars(it)%channels))
       do ich=1,potcars(it)%channels
         call spline_second(potcars(it)%pspnl(:,ich),potcars(it)%pspnl_gmax,spline_m2(:,ich))
       end do
-      paw(it)%projectors=(0.0_dp,0.0_dp); paw(it)%dij=0; paw(it)%qij=0; ilm=0
+      paw(it)%projectors=(0.0_dp,0.0_dp); paw(it)%dij=0; paw(it)%qij=0;paw(it)%ddij_atom=0; ilm=0
       do ich=1,potcars(it)%channels
         l=potcars(it)%lps(ich)
         do m=-l,l

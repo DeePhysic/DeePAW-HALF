@@ -1,0 +1,34 @@
+{
+  "system": "Si primitive cell",
+  "density": "VASP self-consistent CHGCAR; VASP and HALF fixed-density bands",
+  "encut_eV": 520,
+  "kpoints": 60,
+  "bands": 12,
+  "nocc": 4,
+  "vasp": {
+    "version": "6.6.0",
+    "icharg": 11,
+    "lmaxmix": -1,
+    "algo": "All",
+    "wall_seconds": 12.17,
+    "electronic_iterations": 11,
+    "gap_eV": 0.6047720000000005,
+    "gamma_gap_eV": 2.567591
+  },
+  "half": {
+    "solver": "EVD",
+    "wall_seconds": 6.98,
+    "gap_eV": 0.6047658174485404,
+    "gamma_gap_eV": 2.567586125873616
+  },
+  "difference": {
+    "gap_meV": -0.006182551460121033,
+    "gamma_gap_meV": -0.004874126384279975,
+    "occupied_mae_meV": 0.0036708065652313326,
+    "occupied_max_meV": 0.01672039992683949,
+    "lowest8_mae_meV": 0.004390625680862162,
+    "lowest8_max_meV": 0.057647089800383355,
+    "all12_mae_meV": 0.8249161060283906,
+    "all12_max_meV": 77.73743026555913
+  }
+}

@@ -31,3 +31,18 @@
 [`EVD`](assets/si_primitive_bands_evd.json)、
 [`ACC-40`](assets/si_primitive_bands_acc.json) 和
 [`ACC-200`](assets/si_primitive_bands_acc_strict.json)。
+
+## 与 VASP 6.6.0 的逐点对比
+
+另以 VASP `ALGO=All` 自洽得到的 Si CHGCAR 作为共同固定密度输入。VASP
+使用 `ICHARG=11`、`LMAXMIX=-1`，HALF 使用稠密 EVD；两边均为 520 eV、
+12 条带和完全相同的 60 个显式 k 点，并分别按自己的 VBM 对齐。
+
+![HALF-EVD 与 VASP ALGO=All 能带](assets/si_half_evd_vs_vasp_bands.png)
+
+VASP 与 HALF 的间接带隙分别为 `0.604772 eV` 和 `0.604765817 eV`，差
+`-0.00618 meV`。占据带 MAE/最大误差为 `0.00367/0.01672 meV`；最低
+8 条带为 `0.00439/0.05765 meV`。第 11--12 条最高空带在 VASP 的能量
+收敛停止条件下没有达到同等级的本征残差，因而不用于低能能带精度结论。
+机器可读统计见
+[`si_half_evd_vs_vasp_bands.json`](assets/si_half_evd_vs_vasp_bands.json)。

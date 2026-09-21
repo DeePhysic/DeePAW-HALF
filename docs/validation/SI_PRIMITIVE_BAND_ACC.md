@@ -26,3 +26,20 @@ The `half bands` command now accepts `--acc-tol`, `--acc-max-iter`, and
 [`EVD`](assets/si_primitive_bands_evd.json),
 [`ACC-40`](assets/si_primitive_bands_acc.json), and
 [`ACC-200`](assets/si_primitive_bands_acc_strict.json).
+
+## Pointwise comparison with VASP 6.6.0
+
+A VASP `ALGO=All` self-consistent Si CHGCAR was also used as a common fixed
+density. VASP used `ICHARG=11` and `LMAXMIX=-1`, while HALF used dense EVD.
+Both calculations used 520 eV, 12 bands, and the same 60 explicit k points;
+each spectrum was aligned to its own VBM.
+
+![HALF-EVD and VASP ALGO=All bands](assets/si_half_evd_vs_vasp_bands.png)
+
+The VASP and HALF indirect gaps are `0.604772 eV` and `0.604765817 eV`, a
+`-0.00618 meV` difference. The occupied-band MAE/maximum errors are
+`0.00367/0.01672 meV`; for the lowest eight bands they are
+`0.00439/0.05765 meV`. VASP's energy-based stopping condition leaves bands
+11--12 with looser empty-state residuals, so they are excluded from the
+low-energy accuracy claim. See the
+[`machine-readable record`](assets/si_half_evd_vs_vasp_bands.json).

@@ -1,4 +1,4 @@
-# DeePAW-HALF：从 DeepAW 密度计算能带、能量和力，并加速 VASP 自洽计算
+# DeePAW-HALF：从 DeepAW 密度计算能带、能量，开发解析力并加速 VASP 自洽计算
 
 ## 摘要
 
@@ -11,13 +11,15 @@ DeePAW-HALF 把 DeepAW 预测的平滑电子密度转化为可直接使用的平
 2. **DeepAW → HALF → VASP SCF**：HALF 把固定密度本征态直接写入 VASP 的
    波函数内存，代替 SAD/随机初始轨道；VASP 随后沿原有 `ALGO=All` 流程继续
    自洽，从而减少电子迭代。
-3. **DeepAW → HALF → energy/forces**：HALF 直接从学习密度计算 Harris 总能量
-   和有限差分原子力，无需先执行 SCF。
+3. **DeepAW → HALF → energy/analytic forces**：HALF 直接从学习密度计算 Harris
+   总能量；原生 Hellmann--Feynman 力目前已包含 Ewald、倒空间局域势和广义 PAW
+   `D-epsilon Q` 导数。原先的有限差分结果只保留作导数 oracle，不是生产总力。
 
 HfO₂ 验证中，HALF 独立能带与 VASP 的带能量平均绝对差为 **0.840 meV**，
-采样带隙相差 **0.557 meV**。Si 的能量和力路径与 HAPPY 分别达到
-$3.425\times10^{-12}$ eV/cell 和 $2.238\times10^{-9}$ eV/Angstrom 一致性，
-CUDA 力计算加速 **45.31 倍**。在 VASP SCF 中，HALF 初始化把电子迭代从
+采样带隙相差 **0.557 meV**。Si 的能量路径与 HAPPY 达到
+$3.425\times10^{-12}$ eV/cell 一致性。原先 $2.238\times10^{-9}$ eV/Angstrom
+和 **45.31 倍** 是有限差分 oracle 的验证结果，不是尚未完成的解析总力性能。
+在 VASP SCF 中，HALF 初始化把电子迭代从
 16 次降至 4 次，端到端加速 **1.38 倍**。在 85 个材料的批量测试中，
 平均 SCF LOOP 从 25.365 降至 11.435，即平均迭代加速 **2.218 倍**。对于更大的
 20 原子 CsPbBr₃，矩阵自由 ACC 求解器在保持 5 次 SCF LOOP 和相同最终能量的
@@ -329,7 +331,9 @@ DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著�
   逐本征值误差比跨时段 wall time 更稳定。
 - ACC 的残差阈值和迭代上限应按用途选择：独立能带需要更严格，VASP 初始化可以
   更宽松。
-- 当前力命令采用中心有限差分，尚未实现解析力。
+- 中心有限差分只保留为验证 oracle。原生 Ewald、局域势和广义非局域 PAW
+  解析导数已经实现；augmentation、NLCC 与固定密度 Harris 修正完成前不能宣称
+  获得生产可用的总力。
 
 ## 7. 结论
 
@@ -341,12 +345,13 @@ DeePAW-HALF 已形成从学习密度到平面波电子结构的三条可用路�
 - **加速自洽**：HALF 把环境感知的初始波函数直接送入 VASP；HfO₂ 的 SCF LOOP
   从 16 降至 4，MP-85 的平均 LOOP 从 25.365 降至 11.435（2.218×），
   CsPbBr₃ 上 ACC 又把大基组初始化的总作业时间降低 6.75 倍。
-- **能量和力**：HALF 无需先运行 SCF 即可计算 Harris 总能量与原子力；Si 验证
-  与 HAPPY 分别达到 $3.425\times10^{-12}$ eV/cell 和
-  $2.238\times10^{-9}$ eV/Angstrom 一致性，力计算加速 45.31 倍。
+- **能量与解析力**：HALF 无需先运行 SCF 即可计算 Harris 总能量；Ewald、局域势
+  与广义 PAW 投影子力已经通过导数测试。其余 PAW/Harris 分量必须补齐，并与
+  VASP 逐项比较后，才能给出总力精度和速度结论。
 
 因此 HALF 不只是 HAPPY 的 Fortran/CUDA 复刻，也是一层可复用的“密度—电子结构”
-接口：向上连接 DeepAW 密度模型，向下可输出能带、能量、力和波函数，也可为
+接口：向上连接 DeepAW 密度模型，向下可输出能带、能量和波函数，正在补齐原生
+解析力，也可为
 VASP 提供更好的 SCF 起点。
 
 ## 8. 数据与复现记录

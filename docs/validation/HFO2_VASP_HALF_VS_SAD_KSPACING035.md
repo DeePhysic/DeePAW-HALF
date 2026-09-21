@@ -1,4 +1,4 @@
-# DeePAW-HALF: band structures, energies, forces, and accelerated VASP SCF
+# DeePAW-HALF: band structures, energies, analytic-force development, and accelerated VASP SCF
 
 ## Abstract
 
@@ -14,16 +14,19 @@ capabilities:
    directly into VASP's wavefunction memory, replacing SAD/random initial
    orbitals. VASP then follows its normal `ALGO=All` SCF path with fewer
    electronic iterations.
-3. **DeepAW → HALF → energy and forces**: HALF evaluates the Harris total
-   energy and finite-difference atomic forces directly from the learned
-   density, providing a one-shot energy/force path without a preceding SCF
-   calculation.
+3. **DeepAW → HALF → energy and analytic-force development**: HALF evaluates
+   the Harris total energy directly from the learned density. Its native
+   Hellmann--Feynman implementation currently contains the Ewald, reciprocal
+   local, and generalized PAW `D-epsilon Q` derivatives. The former
+   finite-difference result is retained only as a derivative oracle; it is not
+   a production total-force implementation.
 
 For HfO2, the standalone HALF bands have a **0.840 meV** mean absolute
 difference from VASP and the sampled gap differs by **0.557 meV**. For Si,
-the energy and force paths reproduce HAPPY within $3.425\times10^{-12}$
-eV/cell and $2.238\times10^{-9}$ eV/Angstrom, and the CUDA force workflow is
-**45.31x faster**. In VASP SCF, HALF initialization reduces the electronic iterations from 16 to 4
+the energy path reproduces HAPPY within $3.425\times10^{-12}$ eV/cell. The
+previous $2.238\times10^{-9}$ eV/Angstrom finite-difference comparison and
+**45.31x** timing are validation-oracle results, not claims for the unfinished
+analytic total force. In VASP SCF, HALF initialization reduces the electronic iterations from 16 to 4
 and gives an end-to-end speedup of **1.38x** in the primary comparison. Across an 85-material
 benchmark, mean SCF iterations fall from 25.365 to 11.435, a **2.218x mean-loop
 speedup**. For a larger 20-atom CsPbBr3 case, the matrix-free ACC solver
@@ -372,8 +375,10 @@ foundation for VASP initial wavefunctions.
   are more stable than wall times measured in different periods.
 - ACC tolerance and iteration limits should follow the task: standalone bands
   need tighter convergence, while VASP initialization can stop earlier.
-- The current force command uses central finite differences; analytic forces
-  are not yet implemented.
+- Central finite differences are retained only as a validation oracle. Native
+  analytic Ewald, local-potential, and generalized nonlocal PAW derivatives
+  are implemented; augmentation, NLCC, and fixed-density Harris corrections
+  remain before a production total force can be claimed.
 
 ## 7. Conclusion
 
@@ -388,14 +393,16 @@ plane-wave electronic structure:
   directly into VASP. HfO2 SCF loops fall from 16 to 4; across MP-85, mean
   loops fall from 25.365 to 11.435 (2.218x); and ACC reduces the large-basis
   CsPbBr3 job time by 6.75x relative to dense HALF initialization.
-- **Energy and forces:** HALF evaluates the Harris total energy and atomic
-  forces without a preceding SCF run. In the validated Si case it reproduces
-  HAPPY to $3.425\times10^{-12}$ eV/cell and $2.238\times10^{-9}$
-  eV/Angstrom, with a 45.31x force-workflow speedup.
+- **Energy and analytic forces:** HALF evaluates the Harris total energy
+  without a preceding SCF run. Analytic Ewald, local, and generalized PAW
+  projector-force components are derivative-tested; the remaining PAW/Harris
+  components must be completed and compared term by term with VASP before a
+  total-force accuracy or speed claim is made.
 
 HALF is therefore more than a Fortran/CUDA reproduction of HAPPY. It is a
 reusable density-to-electronic-structure layer: DeepAW supplies density, while
-HALF produces bands, energies, forces, and wavefunctions directly or gives
+HALF produces bands, energies, and wavefunctions directly, is gaining a native
+analytic-force path, or gives
 VASP a substantially better SCF starting point.
 
 ## 8. Data and reproducibility records

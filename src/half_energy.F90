@@ -5,7 +5,7 @@ module half_energy
   use half_kpoints,only:kpoint_set_t
   implicit none
   private
-  public::compute_occupations,ewald_energy,read_vasp_eigenval
+  public::compute_occupations,ewald_energy,ewald_forces,read_vasp_eigenval
 contains
   subroutine read_vasp_eigenval(path,set,eigenvalues,nelect)
     character(len=*),intent(in)::path
@@ -146,6 +146,54 @@ contains
     if(present(real_energy))real_energy=re;if(present(reciprocal_energy))reciprocal_energy=ge
     if(present(self_energy))self_energy=se;if(present(background_energy))background_energy=be
   end subroutine
+
+  subroutine ewald_forces(crystal,charges,forces,eta,tolerance)
+    ! Analytic ion-ion Hellmann-Feynman force associated with ewald_energy.
+    ! The self and neutralizing-background terms are position independent.
+    type(crystal_t),intent(in)::crystal
+    real(dp),intent(in)::charges(:)
+    real(dp),intent(out)::forces(:,:)
+    real(dp),intent(in),optional::eta,tolerance
+    real(dp)::alpha,tol,scale,rcut,gcut,smin_r,smin_g,positions(crystal%nions,3)
+    real(dp)::rv(3),gv(3),d(3),dist,gn,phase,sr,si,prefactor,screen
+    integer::rb,gb,n1,n2,n3,i,j
+    if(size(charges)/=crystal%nions.or.size(forces,1)/=crystal%nions.or.size(forces,2)/=3) &
+      error stop 'HALF: Ewald force dimensions do not match the crystal'
+    tol=1e-11_dp;if(present(tolerance))tol=tolerance
+    if(tol<=0.or.tol>=1)error stop 'HALF: Ewald tolerance must lie between zero and one'
+    alpha=sqrt(pi)/crystal%volume**(1.0_dp/3.0_dp);if(present(eta))alpha=eta
+    if(alpha<=0.or.alpha/=alpha)error stop 'HALF: Ewald eta must be positive and finite'
+    scale=sqrt(-log(tol));rcut=scale/alpha;gcut=2*alpha*scale
+    smin_r=smallest_singular(crystal%lattice);smin_g=smallest_singular(crystal%reciprocal)
+    rb=ceiling(rcut/smin_r)+1;gb=ceiling(gcut/smin_g)+1
+    positions=matmul(crystal%positions,crystal%lattice);forces=0.0_dp
+    do i=1,crystal%nions
+      do j=1,crystal%nions
+        do n1=-rb,rb;do n2=-rb,rb;do n3=-rb,rb
+          rv=matmul([real(n1,dp),real(n2,dp),real(n3,dp)],crystal%lattice)
+          d=positions(i,:)-positions(j,:)+rv;dist=sqrt(sum(d*d))
+          if(dist>1e-13_dp.and.dist<=rcut)then
+            screen=erfc(alpha*dist)/(dist**3)+2*alpha*exp(-(alpha*dist)**2)/(sqrt(pi)*dist**2)
+            forces(i,:)=forces(i,:)+felect*charges(i)*charges(j)*screen*d
+          end if
+        end do;end do;end do
+      end do
+    end do
+    do n1=-gb,gb;do n2=-gb,gb;do n3=-gb,gb
+      gv=matmul([real(n1,dp),real(n2,dp),real(n3,dp)],crystal%reciprocal);gn=sqrt(sum(gv*gv))
+      if(gn>1e-13_dp.and.gn<=gcut)then
+        sr=0.0_dp;si=0.0_dp
+        do j=1,crystal%nions
+          phase=dot_product(gv,positions(j,:));sr=sr+charges(j)*cos(phase);si=si-charges(j)*sin(phase)
+        end do
+        prefactor=4*pi*felect/crystal%volume*exp(-gn*gn/(4*alpha*alpha))/(gn*gn)
+        do i=1,crystal%nions
+          phase=dot_product(gv,positions(i,:))
+          forces(i,:)=forces(i,:)+prefactor*charges(i)*(sr*sin(phase)+si*cos(phase))*gv
+        end do
+      end if
+    end do;end do;end do
+  end subroutine ewald_forces
 
   real(dp) function smallest_singular(matrix)result(value)
     real(dp),intent(in)::matrix(3,3)

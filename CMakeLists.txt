@@ -54,6 +54,7 @@ set(HALF_CORE_SOURCES
   src/half_kpoints.F90
   src/half_paw.F90
   src/half_energy.F90
+  src/half_forces.F90
   src/half_artifacts.F90
   src/half_artifacts.c
   src/half_library.F90
@@ -69,7 +70,7 @@ endif()
 if(HALF_HAVE_MKL)
   list(APPEND HALF_CORE_SOURCES
     src/half_fft.F90 src/half_uspp.F90 src/half_xc.F90
-    src/half_potential.F90 src/half_dense_solver.F90)
+    src/half_potential.F90 src/half_local_forces.F90 src/half_dense_solver.F90)
 endif()
 if(HALF_HAVE_HDF5)
   list(APPEND HALF_CORE_SOURCES src/half_vaspwave.F90 src/half_hdf5_bridge.c)

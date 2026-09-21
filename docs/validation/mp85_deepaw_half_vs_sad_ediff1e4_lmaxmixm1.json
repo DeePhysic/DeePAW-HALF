@@ -1,0 +1,44 @@
+{
+  "date_verified": "2026-09-21",
+  "benchmark": "MP-85 DeePAW-HALF versus VASP SAD",
+  "systems": 85,
+  "shared_settings": {
+    "EDIFF_eV": 0.0001,
+    "ENCUT_eV_default": 520,
+    "ENCUT_eV_basis_boundary_retries": 521,
+    "KSPACING_Angstrom_inverse": 0.35,
+    "ALGO": "All",
+    "LMAXMIX": -1,
+    "ISPIN": 1,
+    "LHALF_API": false
+  },
+  "deepaw_half": {
+    "completed": 85,
+    "ediff_reached": 85,
+    "normal_termination": 85,
+    "wavefunction_initialization_markers": 85,
+    "total_scf_loops": 972,
+    "mean_scf_loops": 11.435294117647059
+  },
+  "vasp_sad": {
+    "completed": 85,
+    "ediff_reached": 85,
+    "normal_termination": 85,
+    "total_scf_loops": 2156,
+    "mean_scf_loops": 25.36470588235294
+  },
+  "comparison": {
+    "mean_loop_speedup_ratio_of_means": 2.2181069958847734,
+    "mean_loop_reduction_percent": 54.916512059369204,
+    "definition": "mean(SAD LOOP) / mean(HALF LOOP)"
+  },
+  "source_csv_sha256": {
+    "deepaw_half": "8eac7bce2e65fe328c7bb1b0f038a73377cf194ffd9ccb1770d9081d753f3def",
+    "vasp_sad": "14c817476f275ebc0dc5ef805b0702d5960c7061767a7c4215f0bd31487d91dd"
+  },
+  "notes": [
+    "The HALF run used precomputed DeepAW CHGCAR files and did not call the density API.",
+    "All 85 vasp.out files contain both the DeePAW-HALF initialization banner and at least one initialized-k-point record.",
+    "HfO2 and XeF2 used the independently validated 521 eV retry because the VASP/HALF plane-wave boundary differed at exactly 520 eV."
+  ]
+}

@@ -258,9 +258,9 @@ def test_si_finite_difference_force_parity_record():
     assert record["max_abs_force_error_eV_per_Angstrom"] < 1e-8
     assert record["speedup"] > 40.0
     cli = (ROOT / "app/half_cli.F90").read_text().lower()
-    assert "case('--finite-difference-force-check')" in cli
-    assert "case('--forces');call fail" in cli
-    assert "finite_difference_validation_oracle" in cli
+    assert "case('--forces');do_forces=.true." in cli
+    assert "analytic_paw_harris" in cli
+    assert "never in the production cli" in cli
     assert "evaluate_free_energy" in cli
 
 
@@ -272,12 +272,25 @@ def test_analytic_hellmann_feynman_force_components_are_native_fortran():
     assert "subroutine ewald_forces" in energy
     assert "dij_atom(iat,:,:)-eigenvalues(ib)*paw(it)%qij" in nonlocal_force
     assert "ddij_atom" in nonlocal_force
+    assert "augmentation_forces" in nonlocal_force
     assert "subroutine local_ionic_forces" in local_force
     assert "subroutine nlcc_forces" in local_force
     assert "nonlocal_force_max_error" in check
     assert "ewald_force_max_error" in check
     force_check = (ROOT / "app/half_force_check.F90").read_text().lower()
     assert "augmentation_dd_max_error" in force_check
+
+
+def test_potcar_augmentation_density_is_used_by_analytic_force_path():
+    uspp = (ROOT / "src/half_uspp.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "subroutine accumulate_augmentation_occupancy" in uspp
+    assert "subroutine add_augmentation_density" in uspp
+    assert "potcar%wae" in uspp and "potcar%wps" in uspp
+    assert "call add_augmentation_density" in cli
+    assert "force_augmentation" in cli
+    assert "call local_ionic_forces(rho_out" in cli
+    assert "complete output density" in cli
 
 
 def test_si_automatic_band_path_parity_record():

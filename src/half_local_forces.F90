@@ -1,11 +1,12 @@
 module half_local_forces
   use half_kinds,only:dp
-  use half_constants,only:pi,felect
-  use half_types,only:crystal_t,charge_grid_t,potcar_t
-  use half_fft,only:fft3_forward
+  use half_constants,only:pi,felect,edeps
+  use half_types,only:crystal_t,charge_grid_t,potcar_t,plane_wave_basis_t
+  use half_fft,only:fft3_forward,fft3_backward
+  use half_potential,only:build_veff_lda,build_veff_pbe
   implicit none
   private
-  public::local_ionic_forces,nlcc_forces
+  public::local_ionic_forces,nlcc_forces,accumulate_smooth_density,harris_correction_forces
 contains
   subroutine local_ionic_forces(charge,potcars,crystal,forces,energy)
     ! VASP FORLOC in a full complex FFT representation.  The input density
@@ -98,6 +99,105 @@ contains
     end do
   end subroutine nlcc_forces
 
+  subroutine accumulate_smooth_density(basis,eigenvectors,occupations,kweight,shape,density_f)
+    type(plane_wave_basis_t),intent(in)::basis
+    complex(dp),intent(in)::eigenvectors(:,:)
+    real(dp),intent(in)::occupations(:),kweight
+    integer,intent(in)::shape(3)
+    real(dp),intent(inout)::density_f(:)
+    complex(dp),allocatable,target::grid_g(:),grid_r(:)
+    real(dp),allocatable::density_c(:)
+    integer::n,ib,ig,i1,i2,i3,source,destination
+    n=product(shape)
+    if(size(density_f)/=n.or.size(eigenvectors,1)/=basis%npw.or.size(eigenvectors,2)<size(occupations)) &
+      error stop 'HALF: wave-density dimensions are inconsistent'
+    allocate(grid_g(n),grid_r(n),density_c(n));density_c=0.0_dp
+    do ib=1,size(occupations)
+      if(occupations(ib)==0.0_dp)cycle
+      grid_g=(0.0_dp,0.0_dp)
+      do ig=1,basis%npw;grid_g(basis%fft_index(ig))=eigenvectors(ig,ib);end do
+      call fft3_backward(shape,grid_g,grid_r)
+      density_c=density_c+kweight*occupations(ib)*abs(grid_r)**2
+    end do
+    do i1=0,shape(1)-1;do i2=0,shape(2)-1;do i3=0,shape(3)-1
+      source=i1*shape(2)*shape(3)+i2*shape(3)+i3+1
+      destination=i1+shape(1)*(i2+shape(2)*i3)+1
+      density_f(destination)=density_f(destination)+density_c(source)
+    end do;end do;end do
+  end subroutine accumulate_smooth_density
+
+  subroutine harris_correction_forces(input_density,output_density,potcars,crystal,use_pbe,forces)
+    type(charge_grid_t),intent(in)::input_density,output_density
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    logical,intent(in)::use_pbe
+    real(dp),intent(out)::forces(:,:)
+    type(charge_grid_t)::plus_density,minus_density
+    real(dp),allocatable::delta_f(:),vplus(:),vminus(:),dummy(:),response(:),delta_c(:)
+    complex(dp),allocatable,target::work(:),freq(:),vh_g(:),vh_r(:)
+    real(dp)::eh,exc,exv,t,q(3),g2
+    integer::n,i,i1,i2,i3,n1,n2,n3,idx
+    n=size(input_density%values)
+    if(size(output_density%values)/=n.or.any(input_density%shape/=output_density%shape)) &
+      error stop 'HALF: Harris input/output density grids differ'
+    allocate(delta_f(n),response(n),delta_c(n),work(n),freq(n),vh_g(n),vh_r(n))
+    delta_f=output_density%values-input_density%values;t=1.0e-4_dp
+    plus_density%shape=input_density%shape;minus_density%shape=input_density%shape
+    allocate(plus_density%values(n),minus_density%values(n))
+    plus_density%values=input_density%values+t*delta_f;minus_density%values=input_density%values-t*delta_f
+    if(use_pbe)then
+      call build_veff_pbe(plus_density,potcars,crystal,dummy,eh,exc,exv,vplus)
+      call build_veff_pbe(minus_density,potcars,crystal,dummy,eh,exc,exv,vminus)
+    else
+      call build_veff_lda(plus_density,potcars,crystal,dummy,eh,exc,exv,vplus)
+      call build_veff_lda(minus_density,potcars,crystal,dummy,eh,exc,exv,vminus)
+    end if
+    response=(vplus-vminus)/(2*t)
+    call reorder(delta_f,input_density%shape,delta_c);work=cmplx(delta_c,0.0_dp,dp)
+    call fft3_forward(input_density%shape,work,freq);freq=freq/real(n,dp);idx=0
+    do i1=0,input_density%shape(1)-1;n1=fft_integer(i1,input_density%shape(1))
+      do i2=0,input_density%shape(2)-1;n2=fft_integer(i2,input_density%shape(2))
+        do i3=0,input_density%shape(3)-1;n3=fft_integer(i3,input_density%shape(3));idx=idx+1
+          q=matmul([real(n1,dp),real(n2,dp),real(n3,dp)],crystal%reciprocal);g2=dot_product(q,q)
+          if(g2>1.0e-12_dp)then;vh_g(idx)=edeps*freq(idx)/(g2*crystal%volume);else;vh_g(idx)=(0.0_dp,0.0_dp);end if
+        end do
+      end do
+    end do
+    call fft3_backward(input_density%shape,vh_g,vh_r)
+    call reorder_c_to_f(real(vh_r,dp),input_density%shape,delta_f);response=response+delta_f
+    call atomic_radial_density_forces(response,potcars,crystal,input_density%shape,.false.,forces)
+  end subroutine harris_correction_forces
+
+  subroutine atomic_radial_density_forces(potential,potcars,crystal,shape,use_core,forces)
+    real(dp),intent(in)::potential(:);type(potcar_t),intent(in)::potcars(:);type(crystal_t),intent(in)::crystal
+    integer,intent(in)::shape(3);logical,intent(in)::use_core;real(dp),intent(out)::forces(:,:)
+    complex(dp),allocatable,target::work(:),potential_g(:)
+    real(dp),allocatable::m2(:),radial_values(:)
+    real(dp)::q(3),g2,gn,radial,phase,rpos(3),term;integer::n,idx,i1,i2,i3,n1,n2,n3,it,iat,ion0
+    n=size(potential);allocate(work(n),potential_g(n));work=cmplx(potential,0.0_dp,dp)
+    call fft3_forward(shape,work,potential_g);potential_g=potential_g/real(n,dp);forces=0.0_dp
+    do it=1,size(potcars)
+      ion0=sum(crystal%counts(:it-1))
+      if(use_core)then
+        if(.not.potcars(it)%has_core)cycle;radial_values=potcars(it)%pspcor
+      else
+        if(.not.allocated(potcars(it)%psprho))cycle;radial_values=potcars(it)%psprho
+      end if
+      allocate(m2(size(radial_values)));call spline_second(radial_values,potcars(it)%psp_gmax,m2)
+      do iat=1,crystal%counts(it);rpos=matmul(crystal%positions(ion0+iat,:),crystal%lattice);idx=0
+        do i1=0,shape(1)-1;n1=fft_integer(i1,shape(1));do i2=0,shape(2)-1;n2=fft_integer(i2,shape(2))
+          do i3=0,shape(3)-1;n3=fft_integer(i3,shape(3));idx=idx+1
+            q=matmul([real(n1,dp),real(n2,dp),real(n3,dp)],crystal%reciprocal);g2=dot_product(q,q);if(g2<=1e-12_dp)cycle
+            gn=sqrt(g2);if(gn>potcars(it)%psp_gmax-3*potcars(it)%psp_gmax/real(size(m2),dp))cycle
+            radial=spline_eval(radial_values,m2,potcars(it)%psp_gmax,gn);phase=dot_product(q,rpos)
+            term=radial*aimag(conjg(potential_g(idx))*cmplx(cos(phase),-sin(phase),dp))
+            forces(ion0+iat,:)=forces(ion0+iat,:)-q*term
+          end do;end do
+        end do
+      end do;deallocate(m2,radial_values)
+    end do
+  end subroutine atomic_radial_density_forces
+
   subroutine reorder(input,shape,output)
     real(dp),intent(in)::input(:);integer,intent(in)::shape(3);real(dp),intent(out)::output(:)
     integer::i1,i2,i3,source,destination
@@ -106,6 +206,14 @@ contains
       destination=i1*shape(2)*shape(3)+i2*shape(3)+i3+1;output(destination)=input(source)
     end do;end do;end do
   end subroutine reorder
+  subroutine reorder_c_to_f(input,shape,output)
+    real(dp),intent(in)::input(:);integer,intent(in)::shape(3);real(dp),intent(out)::output(:)
+    integer::i1,i2,i3,source,destination
+    do i1=0,shape(1)-1;do i2=0,shape(2)-1;do i3=0,shape(3)-1
+      source=i1*shape(2)*shape(3)+i2*shape(3)+i3+1
+      destination=i1+shape(1)*(i2+shape(2)*i3)+1;output(destination)=input(source)
+    end do;end do;end do
+  end subroutine reorder_c_to_f
   pure integer function fft_integer(index0,n)result(value)
     integer,intent(in)::index0,n
     if(index0<=(n-1)/2)then;value=index0;else;value=index0-n;end if

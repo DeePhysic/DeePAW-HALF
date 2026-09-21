@@ -6,7 +6,8 @@ module half_forces
   private
   public::add_nonlocal_paw_forces
 contains
-  subroutine add_nonlocal_paw_forces(basis,paw,eigenvalues,occupations,kweight,eigenvectors,forces)
+  subroutine add_nonlocal_paw_forces(basis,paw,eigenvalues,occupations,kweight,eigenvectors,forces, &
+      projector_forces,augmentation_forces)
     ! Analytic non-local PAW/USPP force for a generalized eigenproblem:
     !
     !   F_I = -sum_n f_n w_k <psi_n|dH_I-eps_n dS_I|psi_n>
@@ -19,12 +20,20 @@ contains
     real(dp),intent(in)::eigenvalues(:),occupations(:),kweight
     complex(dp),intent(in)::eigenvectors(:,:)
     real(dp),intent(inout)::forces(:,:)
+    real(dp),intent(inout),optional::projector_forces(:,:),augmentation_forces(:,:)
     complex(dp),allocatable::c(:),dc(:,:),metric_c(:)
     real(dp),allocatable::metric(:,:)
+    real(dp)::term
     integer::it,iat,ion0,ib,a,b,ig,alpha,nlm
     if(size(eigenvectors,1)/=basis%npw.or.size(eigenvectors,2)<size(eigenvalues).or. &
        size(occupations)/=size(eigenvalues).or.size(forces,2)/=3) &
       error stop 'HALF: non-local force dimensions are inconsistent'
+    if(present(projector_forces))then
+      if(any(shape(projector_forces)/=shape(forces)))error stop 'HALF: projector-force dimensions are inconsistent'
+    end if
+    if(present(augmentation_forces))then
+      if(any(shape(augmentation_forces)/=shape(forces)))error stop 'HALF: augmentation-force dimensions are inconsistent'
+    end if
     ion0=0
     do it=1,size(paw)
       nlm=paw(it)%nlm
@@ -46,11 +55,15 @@ contains
           metric=paw(it)%dij_atom(iat,:,:)-eigenvalues(ib)*paw(it)%qij
           metric_c=matmul(metric,c)
           do alpha=1,3
-            forces(ion0+iat,alpha)=forces(ion0+iat,alpha)-2.0_dp*kweight*occupations(ib)* &
-              real(dot_product(metric_c,dc(:,alpha)),dp)
+            term=-2.0_dp*kweight*occupations(ib)*real(dot_product(metric_c,dc(:,alpha)),dp)
+            forces(ion0+iat,alpha)=forces(ion0+iat,alpha)+term
+            if(present(projector_forces))projector_forces(ion0+iat,alpha)=projector_forces(ion0+iat,alpha)+term
             if(allocated(paw(it)%ddij_atom))then
-              forces(ion0+iat,alpha)=forces(ion0+iat,alpha)-kweight*occupations(ib)* &
-                real(dot_product(c,matmul(paw(it)%ddij_atom(iat,:,:,alpha),c)),dp)
+              term=-kweight*occupations(ib)*real(dot_product(c, &
+                matmul(paw(it)%ddij_atom(iat,:,:,alpha),c)),dp)
+              forces(ion0+iat,alpha)=forces(ion0+iat,alpha)+term
+              if(present(augmentation_forces))augmentation_forces(ion0+iat,alpha)= &
+                augmentation_forces(ion0+iat,alpha)+term
             end if
           end do
         end do

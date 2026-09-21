@@ -1,0 +1,39 @@
+{
+  "date": "2026-09-21",
+  "host": "RTX PRO 6000",
+  "backend": "CUDA Fortran, dense EVD",
+  "force_method": "analytic_paw_harris",
+  "kpoint_policy": "full Gamma-centred mesh; no symmetry reduction for vector-force validation",
+  "si": {
+    "encut_eV": 520,
+    "kpoints": 54,
+    "input_electrons": 32.0,
+    "smooth_wave_density_electrons": 33.8419015,
+    "potcar_augmentation_electrons": -1.84190385,
+    "final_output_electrons": 31.9999976,
+    "max_abs_paw_augmentation_force_eV_per_Angstrom": 0.006577522,
+    "max_abs_total_force_eV_per_Angstrom": 0.049863899756837984,
+    "total_force_sum_eV_per_Angstrom": [-0.0008497448447421088, -0.000604671697687663, -0.0011535452557286815],
+    "wall_seconds": 188.22,
+    "result": "/data/limusen/deepaw_half_force_compare/Si/half_forces_potcar_aug_v2.json"
+  },
+  "hfo2": {
+    "encut_eV": 521,
+    "kpoints": 64,
+    "input_electrons": 87.9999998,
+    "smooth_wave_density_electrons": 71.9332561,
+    "potcar_augmentation_electrons": 16.0667537,
+    "final_output_electrons": 88.0000098,
+    "max_abs_paw_augmentation_force_eV_per_Angstrom": 0.7031433,
+    "max_abs_total_force_eV_per_Angstrom": 0.29396606388794844,
+    "total_force_sum_eV_per_Angstrom": [0.028028809941277766, 0.018485230771793468, -0.052707554997059924],
+    "wall_seconds": 234.74,
+    "result": "/data/limusen/deepaw_half_force_compare/HfO2/half_forces_potcar_aug_v2.json"
+  },
+  "notes": [
+    "The local ionic derivative couples to the complete output density, including POTCAR augmentation.",
+    "The separately reported paw_aug component is the explicit derivative of the atom-centred augmentation coupling dD_ij/dR.",
+    "The two contributions are distinct and both are included in the total force.",
+    "Total-force parity against a finite difference of the identical HALF functional remains a separate validation gate."
+  ]
+}

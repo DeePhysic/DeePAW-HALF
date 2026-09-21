@@ -7,8 +7,108 @@ module half_uspp
   use half_fft,only:fft3_forward,fft3_backward
   implicit none
   private
-  public::build_uspp_dij_cpu
+  public::build_uspp_dij_cpu,augmentation_occupancy_t,initialize_augmentation_occupancy, &
+    accumulate_augmentation_occupancy,add_augmentation_density
+  type::augmentation_occupancy_t
+    real(dp),allocatable::matrix(:,:,:)
+  end type
 contains
+  subroutine initialize_augmentation_occupancy(paw,occupancy)
+    type(paw_species_t),intent(in)::paw(:)
+    type(augmentation_occupancy_t),allocatable,intent(out)::occupancy(:)
+    integer::it
+    allocate(occupancy(size(paw)))
+    do it=1,size(paw)
+      allocate(occupancy(it)%matrix(paw(it)%natoms,paw(it)%nlm,paw(it)%nlm));occupancy(it)%matrix=0.0_dp
+    end do
+  end subroutine
+
+  subroutine accumulate_augmentation_occupancy(paw,eigenvectors,occupations,kweight,occupancy)
+    type(paw_species_t),intent(in)::paw(:)
+    complex(dp),intent(in)::eigenvectors(:,:)
+    real(dp),intent(in)::occupations(:),kweight
+    type(augmentation_occupancy_t),intent(inout)::occupancy(:)
+    complex(dp),allocatable::c(:)
+    integer::it,iat,ib,a,b,ig,nlm
+    do it=1,size(paw)
+      nlm=paw(it)%nlm;allocate(c(nlm))
+      do iat=1,paw(it)%natoms;do ib=1,size(occupations)
+        if(occupations(ib)==0.0_dp)cycle;c=(0.0_dp,0.0_dp)
+        do a=1,nlm;do ig=1,size(eigenvectors,1)
+          c(a)=c(a)+conjg(paw(it)%projectors(iat,a,ig))*eigenvectors(ig,ib)
+        end do;end do
+        do b=1,nlm;do a=1,nlm
+          occupancy(it)%matrix(iat,a,b)=occupancy(it)%matrix(iat,a,b)+ &
+            kweight*occupations(ib)*real(conjg(c(a))*c(b),dp)
+        end do;end do
+      end do;end do
+      deallocate(c)
+    end do
+  end subroutine
+
+  subroutine add_augmentation_density(potcars,crystal,shape,occupancy,density_f,integrated_charge)
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    integer(i32),intent(in)::shape(3)
+    type(augmentation_occupancy_t),intent(in)::occupancy(:)
+    real(dp),intent(inout)::density_f(:)
+    real(dp),intent(out),optional::integrated_charge
+    integer::it,iat,nlm,lmax,naug,nrad,pairs,ich,l,m,a,b,k,ir,i1,i2,i3,index,ion0
+    integer,allocatable::chan(:),lv(:),mv(:),laug(:),maug(:)
+    real(dp),allocatable::rw(:),multipole(:,:),coeff(:),root1(:),root2(:),c1(:),c2(:)
+    real(dp)::moment,frac(3),df(3),cart(3),r,theta,phi,g,value,total_before,total_after
+    if(size(density_f)/=product(shape).or.size(occupancy)/=size(potcars)) &
+      error stop 'HALF: augmentation-density dimensions are inconsistent'
+    total_before=sum(density_f)/real(size(density_f),dp);ion0=0
+    do it=1,size(potcars)
+      nlm=0;lmax=0
+      do ich=1,potcars(it)%channels;nlm=nlm+2*potcars(it)%lps(ich)+1;lmax=max(lmax,2*potcars(it)%lps(ich));end do
+      naug=(lmax+1)*(lmax+1);nrad=size(potcars(it)%rgrid);pairs=nlm*nlm
+      allocate(chan(nlm),lv(nlm),mv(nlm),laug(naug),maug(naug),rw(nrad),multipole(pairs,naug), &
+        coeff(naug),root1(0:lmax),root2(0:lmax),c1(0:lmax),c2(0:lmax))
+      a=0;do ich=1,potcars(it)%channels;do m=-potcars(it)%lps(ich),potcars(it)%lps(ich)
+        a=a+1;chan(a)=ich;lv(a)=potcars(it)%lps(ich);mv(a)=m
+      end do;end do
+      call radial_weights(potcars(it)%rgrid,rw);multipole=0.0_dp;k=0
+      do l=0,lmax
+        call bessel_root(l,1,root1(l));call bessel_root(l,2,root2(l))
+        call compensation_coefficients(l,potcars(it)%paw_rmax,root1(l),root2(l),c1(l),c2(l))
+        do m=-l,l;k=k+1;laug(k)=l;maug(k)=m;end do
+      end do
+      do b=1,nlm;do a=1,nlm;k=0
+        do l=0,lmax;do m=-l,l;k=k+1
+          if(abs(lv(a)-lv(b))<=l.and.l<=lv(a)+lv(b).and.mod(lv(a)+lv(b)+l,2)==0)then
+            moment=sum(rw*(potcars(it)%wae(:,chan(a))*potcars(it)%wae(:,chan(b))- &
+              potcars(it)%wps(:,chan(a))*potcars(it)%wps(:,chan(b)))*potcars(it)%rgrid**l)
+            multipole((b-1)*nlm+a,k)=gaunt_numeric(lv(a),mv(a),lv(b),mv(b),l,m)*moment
+          end if
+        end do;end do
+      end do;end do
+      do iat=1,crystal%counts(it)
+        coeff=0.0_dp
+        do k=1,naug;do b=1,nlm;do a=1,nlm
+          coeff(k)=coeff(k)+occupancy(it)%matrix(iat,a,b)*multipole((b-1)*nlm+a,k)
+        end do;end do;end do
+        do i3=0,shape(3)-1;do i2=0,shape(2)-1;do i1=0,shape(1)-1
+          frac=[real(i1,dp)/shape(1),real(i2,dp)/shape(2),real(i3,dp)/shape(3)]
+          df=frac-crystal%positions(ion0+iat,:);df=df-anint(df);cart=matmul(df,crystal%lattice);r=sqrt(sum(cart*cart))
+          if(r<=potcars(it)%paw_rmax)then
+            if(r>1.0e-14_dp)then;theta=acos(max(-1.0_dp,min(1.0_dp,cart(3)/r)));phi=atan2(cart(2),cart(1))
+            else;theta=0.0_dp;phi=0.0_dp;end if
+            value=0.0_dp
+            do k=1,naug;l=laug(k);g=c1(l)*sph_bessel(l,root1(l)*r/potcars(it)%paw_rmax)+ &
+                c2(l)*sph_bessel(l,root2(l)*r/potcars(it)%paw_rmax)
+              value=value+coeff(k)*g*ylm(l,maug(k),cos(theta),phi)
+            end do
+            index=i1+shape(1)*(i2+shape(2)*i3)+1;density_f(index)=density_f(index)+crystal%volume*value
+          end if
+        end do;end do;end do
+      end do
+      ion0=ion0+crystal%counts(it);deallocate(chan,lv,mv,laug,maug,rw,multipole,coeff,root1,root2,c1,c2)
+    end do
+    total_after=sum(density_f)/real(size(density_f),dp)
+    if(present(integrated_charge))integrated_charge=total_after-total_before
+  end subroutine add_augmentation_density
   subroutine build_uspp_dij_cpu(veff,shape,potcars,crystal,paw)
     real(dp),intent(in)::veff(:)
     integer(i32),intent(in)::shape(3)

@@ -1,5 +1,14 @@
 # Validation contract
 
+## POTCAR augmentation density in analytic forces
+
+The standalone analytic-force path reconstructs PAW onsite occupations from
+all occupied k-point wavefunctions, builds the AE-minus-PS augmentation density
+from POTCAR radial data, and reports its explicit `dD/dR` force separately.
+Full-mesh Si (54 k points) and HfO2 (64 k points) checks close the output
+electron count to within `1.0e-5 e`; the detailed record is
+[`validation/potcar_augmentation_force_si_hfo2.json`](validation/potcar_augmentation_force_si_hfo2.json).
+
 HAPPY is the numerical oracle for HALF. Comparisons use identical CHGCAR,
 POTCAR, XC, ENCUT, k points and band counts.
 

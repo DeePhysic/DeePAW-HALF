@@ -6,16 +6,19 @@ program half_cli
   use half_basis, only: build_plane_wave_basis
   use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh,generate_cubic_band_path
   use half_paw, only: paw_species_t, build_paw_operators
-  use half_energy, only: compute_occupations,ewald_energy,read_vasp_eigenval
+  use half_energy, only: compute_occupations,ewald_energy,ewald_forces,read_vasp_eigenval
   use half_artifacts, only: write_bands_artifacts,write_energy_npz
   use half_math,only:inverse3
   use half_cpu, only: cpu_density_mean
   use half_parallel, only: parallel_initialize,parallel_finalize,parallel_abort,parallel_rank,parallel_size, &
     parallel_root,parallel_owns,parallel_sum,parallel_min
 #ifdef HALF_CLI_HAVE_MKL
-  use half_uspp, only: build_uspp_dij_cpu
+  use half_uspp, only: build_uspp_dij_cpu,augmentation_occupancy_t,initialize_augmentation_occupancy, &
+    accumulate_augmentation_occupancy,add_augmentation_density
   use half_potential, only: build_veff_lda, build_veff_pbe
   use half_dense_solver, only: solve_dense_gamma
+  use half_local_forces,only:local_ionic_forces,nlcc_forces,accumulate_smooth_density,harris_correction_forces
+  use half_forces,only:add_nonlocal_paw_forces
 #endif
 #ifdef HALF_CLI_CUDA
   use half_cuda_solver, only: solve_dense_gamma_cuda_full
@@ -24,6 +27,9 @@ program half_cli
   use half_vaspwave,only:wave_block_t,write_vaspwave_h5
 #endif
   implicit none
+  type::force_wave_block_t
+    complex(dp),allocatable::coefficients(:,:)
+  end type
   character(len=1024) :: invocation, command
   integer :: argument_offset
 
@@ -701,12 +707,12 @@ contains
   subroutine command_energy(offset)
     integer,intent(in)::offset
     type(crystal_t)::crystal
-    type(charge_grid_t)::rho
+    type(charge_grid_t)::rho,rho_smooth,rho_out
     type(plane_wave_basis_t)::basis
     type(potcar_t),allocatable::potcars(:)
     type(paw_species_t),allocatable::paw(:)
     type(kpoint_set_t)::set,reference_set
-    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),occupation(:,:),charges(:),reference_eigenvalues(:,:)
+    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),occupation(:,:),charges(:),reference_eigenvalues(:,:),vxc_input(:)
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
     real(dp)::encut,kspacing,symprec,sigma,nelect,density_electrons,mu,band_energy,entropy_term,reference_nelect
@@ -714,12 +720,17 @@ contains
     real(dp)::ewald,ewald_real,ewald_recip,ewald_self,ewald_background,atomic_reference,local_g0
     real(dp)::paw_atomic,internal_energy,free_energy
     real(dp)::force_step,displaced_energies(2),inverse_lattice(3,3),delta_cart(3)
-    real(dp),allocatable::forces(:,:)
+    real(dp),allocatable::forces(:,:),force_ewald(:,:),force_local(:,:),force_nonlocal(:,:),force_projector(:,:), &
+      force_augmentation(:,:),force_nlcc(:,:),force_harris(:,:)
     type(crystal_t)::displaced
     integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,reference_path
     character(len=16)::xc,backend,solver,actual_backend
     logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference
+    type(plane_wave_basis_t),allocatable::force_bases(:)
+    type(force_wave_block_t),allocatable::force_waves(:)
+    type(augmentation_occupancy_t),allocatable::augmentation_occupancy(:)
+    real(dp)::augmentation_charge
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)
     type(wave_block_t),allocatable::waves(:)
@@ -764,8 +775,8 @@ contains
         if(trim(solver)/='evd'.and.trim(solver)/='evj'.and.trim(solver)/='evx'.and.trim(solver)/='acc') &
           call fail('--solver must be evd, evj, evx, or acc')
       case('--no-uspp-dij');use_uspp=.false.
-      case('--forces');call fail('--forces is reserved for the complete analytic PAW/Harris force; it never displaces atoms and is not available until FORDEP/FORHAR validation is complete')
-      case('--finite-difference-force-check');do_forces=.true.
+      case('--forces');do_forces=.true.
+      case('--finite-difference-force-check');call fail('finite differences are available only in the half-force-check validation executable, never in the production CLI')
       case('--force-step');call option_value(i,narg,'--force-step',value);read(value,*,iostat=ios)force_step
         if(ios/=0.or.force_step<=0)call fail('invalid --force-step value')
       case('--paw-atomic-double-counting');call option_value(i,narg,'--paw-atomic-double-counting',value);read(value,*,iostat=ios)paw_atomic
@@ -811,9 +822,13 @@ contains
     if(trim(actual_backend)=='cpu'.and.trim(solver)/='evd')call fail('the selected solver is available only with CUDA')
     if(len_trim(hdf5_path)>0.and.trim(solver)=='evj')call fail('vaspwave.h5 export is unavailable with --solver evj')
     if(parallel_size()>1.and.trim(actual_backend)/='cpu')call fail('MPI k-point distribution is supported by the CPU backend only')
+    if(parallel_size()>1.and.do_forces)call fail('analytic forces currently require one MPI rank')
     if(parallel_size()>1.and.len_trim(hdf5_path)>0)call fail('vaspwave.h5 export currently requires one MPI rank')
 #ifndef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)call fail('this HALF build has no HDF5 support')
+#endif
+#ifndef HALF_CLI_HAVE_MKL
+    if(do_forces)call fail('analytic forces require a build with oneMKL/FFTW support')
 #endif
     allocate(eigenvalues(set%nk,nbands),plane_waves(set%nk));eigenvalues=0.0_dp;plane_waves=0_i64
     eh=0;exc=0;exv=0;smin=huge(1.0_dp)
@@ -827,6 +842,7 @@ contains
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)allocate(wave_bases(set%nk),waves(set%nk))
 #endif
+    if(do_forces)allocate(force_bases(set%nk),force_waves(set%nk))
     do ik=1,set%nk
       if(.not.parallel_owns(ik))cycle
       call build_plane_wave_basis(crystal,rho%shape,encut,set%points(ik,:),basis);plane_waves(ik)=basis%npw
@@ -835,7 +851,7 @@ contains
 #ifdef HALF_CLI_CUDA
       if(trim(actual_backend)=='cuda')then
         if(ik==1)then
-          if(len_trim(hdf5_path)>0)then
+          if(len_trim(hdf5_path)>0.or.do_forces)then
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,vectors,target_bands=nbands)
           else
@@ -843,7 +859,7 @@ contains
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,target_bands=nbands)
           end if
         else
-          if(len_trim(hdf5_path)>0)then
+          if(len_trim(hdf5_path)>0.or.do_forces)then
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands)
           else
@@ -856,7 +872,7 @@ contains
 #ifdef HALF_CLI_HAVE_MKL
         call build_paw_operators(potcars,crystal,basis,paw)
         if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
-        if(len_trim(hdf5_path)>0)then;call solve_dense_gamma(veff,basis,paw,values,k_smin,smax,vectors)
+        if(len_trim(hdf5_path)>0.or.do_forces)then;call solve_dense_gamma(veff,basis,paw,values,k_smin,smax,vectors)
         else;call solve_dense_gamma(veff,basis,paw,values,k_smin,smax);end if
 #endif
 #ifdef HALF_CLI_CUDA
@@ -867,6 +883,7 @@ contains
 #ifdef HALF_CLI_HAVE_HDF5
       if(len_trim(hdf5_path)>0)then;wave_bases(ik)=basis;waves(ik)%coefficients=vectors(:,:nbands);end if
 #endif
+      if(do_forces)then;force_bases(ik)=basis;force_waves(ik)%coefficients=vectors(:,:nbands);end if
       write(0,'(A,I0,A,I0,A,I0,A,ES14.6)')'HALF energy: rank ',parallel_rank(),' k point ',ik,'/',set%nk,' E1_eV=',values(1)
     end do
     if(.not.use_reference)call parallel_sum(eigenvalues)
@@ -888,16 +905,46 @@ contains
     if(have_paw_atomic)internal_energy=internal_energy+paw_atomic
     free_energy=internal_energy+entropy_term
     if(do_forces)then
-      allocate(forces(crystal%nions,3));inverse_lattice=inverse3(crystal%lattice)
-      do iat=1,crystal%nions;do i=1,3;do ion=1,2
-        displaced=crystal;delta_cart=0.0_dp;delta_cart(i)=merge(-force_step,force_step,ion==1)
-        displaced%positions(iat,:)=modulo(displaced%positions(iat,:)+matmul(delta_cart,inverse_lattice),1.0_dp)
-        call evaluate_free_energy(displaced,rho,potcars,encut,kspacing,kpoints_path,full_mesh,symprec,nbands,sigma,xc, &
-          actual_backend,solver,use_uspp,atomic_reference,paw_atomic,have_paw_atomic,displaced_energies(ion))
+#ifdef HALF_CLI_HAVE_MKL
+      allocate(force_ewald(crystal%nions,3),force_local(crystal%nions,3),force_nonlocal(crystal%nions,3), &
+        force_projector(crystal%nions,3),force_augmentation(crystal%nions,3),force_nlcc(crystal%nions,3), &
+        force_harris(crystal%nions,3),forces(crystal%nions,3))
+      rho_smooth%shape=rho%shape;allocate(rho_smooth%values(size(rho%values)));rho_smooth%values=0.0_dp
+      do ik=1,set%nk
+        call accumulate_smooth_density(force_bases(ik),force_waves(ik)%coefficients,occupation(ik,:),set%weights(ik), &
+          rho%shape,rho_smooth%values)
       end do
-      forces(iat,i)=-(displaced_energies(2)-displaced_energies(1))/(2.0_dp*force_step)
-      if(parallel_root())write(0,'(A,I0,A,I0,A,ES16.8)')'HALF finite-difference oracle: atom ',iat,' axis ',i,' force_eV_per_A=',forces(iat,i)
-      end do;end do
+      if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv,vxc_input)
+      else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc,exv,vxc_input);end if
+      force_nonlocal=0.0_dp;force_projector=0.0_dp;force_augmentation=0.0_dp
+      do ik=1,set%nk
+        call build_paw_operators(potcars,crystal,force_bases(ik),paw)
+        if(ik==1)call initialize_augmentation_occupancy(paw,augmentation_occupancy)
+        if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
+        call accumulate_augmentation_occupancy(paw,force_waves(ik)%coefficients,occupation(ik,:),set%weights(ik), &
+          augmentation_occupancy)
+        call add_nonlocal_paw_forces(force_bases(ik),paw,eigenvalues(ik,:),occupation(ik,:),set%weights(ik), &
+          force_waves(ik)%coefficients,force_nonlocal,force_projector,force_augmentation)
+      end do
+      rho_out%shape=rho%shape;allocate(rho_out%values(size(rho%values)));rho_out%values=rho_smooth%values
+      call add_augmentation_density(potcars,crystal,rho%shape,augmentation_occupancy,rho_out%values,augmentation_charge)
+      write(0,'(A,4ES18.8)')'HALF analytic density input/smooth/augmentation/final=',rho%electron_count(), &
+        rho_out%electron_count()-augmentation_charge,augmentation_charge,rho_out%electron_count()
+      call ewald_forces(crystal,charges,force_ewald)
+      ! d/dR_I of the PAW product contains two distinct terms.  Moving the
+      ! local ionic potential couples to the complete output density,
+      ! including POTCAR augmentation.  Moving Q_ij^I at fixed Veff gives the
+      ! separate dD_ij/dR_I term accumulated in force_augmentation below.
+      call local_ionic_forces(rho_out,potcars,crystal,force_local)
+      call nlcc_forces(vxc_input,potcars,crystal,rho%shape,force_nlcc)
+      call harris_correction_forces(rho,rho_out,potcars,crystal,trim(xc)=='pbe',force_harris)
+      forces=force_ewald+force_local+force_nonlocal+force_nlcc+force_harris
+      do iat=1,crystal%nions
+        write(0,'(A,I0,6(A,3ES14.6))')'HALF analytic force atom ',iat,' total=',forces(iat,:), &
+          ' ewald=',force_ewald(iat,:),' local=',force_local(iat,:),' projector=',force_projector(iat,:), &
+          ' paw_aug=',force_augmentation(iat,:),' nlcc=',force_nlcc(iat,:),' harris=',force_harris(iat,:)
+      end do
+#endif
     else
       allocate(forces(0,0))
     end if
@@ -928,8 +975,7 @@ contains
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
-    write(unit,'(A)')'         --forces  (analytic PAW/Harris force; unavailable until all terms validate)'
-    write(unit,'(A)')'         --finite-difference-force-check --force-step ANGSTROM  (validation oracle only)'
+    write(unit,'(A)')'         --forces  (standalone analytic PAW/Harris force; never displaces atoms)'
     write(unit,'(A)')'         --atomic-reference-energy EV --paw-atomic-double-counting EV'
   end subroutine
 
@@ -1029,8 +1075,8 @@ contains
     write(unit,'(A,ES24.16,A)')'  "minimum_overlap_eigenvalue": ',smin,','
     write(unit,'(A,ES24.16,A)')'  "internal_energy_eV": ',internal,',';write(unit,'(A,ES24.16,A)')'  "free_energy_eV": ',free,','
     if(have_forces)then
-      write(unit,'(A)')'  "force_method": "finite_difference_validation_oracle",'
-      write(unit,'(A,ES24.16,A)')'  "force_step_Angstrom": ',force_step,',';write(unit,'(A)')'  "forces_eV_per_Angstrom": ['
+      write(unit,'(A)')'  "force_method": "analytic_paw_harris",'
+      write(unit,'(A)')'  "force_step_Angstrom": null,';write(unit,'(A)')'  "forces_eV_per_Angstrom": ['
       do iat=1,size(forces,1)
         write(unit,'(A,3(ES24.16,:,A))',advance='no')'    [',forces(iat,1),', ',forces(iat,2),', ',forces(iat,3),']'
         if(iat<size(forces,1))then;write(unit,'(A)')',';else;write(unit,'(A)')'';end if

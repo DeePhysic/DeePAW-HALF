@@ -18,8 +18,10 @@ QDEP、任意 k 点、多 k 点能带、spglib
 保留为解析力的数值 oracle，不再作为正式力功能。原生解析力目前已经实现
 Ewald、倒空间局域势以及
 广义 PAW `D-epsilon Q` Hellmann--Feynman 导数，以及 NLCC/`FORCOR` partial-core
-导数；augmentation 与固定密度 Harris 修正尚在补齐，因此当前不得把它表述为
-可用于生产的总力。原生
+导数。现在还会从 POTCAR 的 AE/PS partial waves 与补偿多极矩重建输出态的
+augmentation density，通过 `dD_ij/dR` 计入其显式位移力，并把带 augmentation
+的输出密度用于固定密度 Harris 响应。独立 CLI 的 `--forces` 全程不移动原子；
+总力与同一泛函的数值导数仍在继续验证。原生
 `vaspwave.h5` 输出以及 HDF5 电荷/结构/内嵌 POTCAR 输入已经支持。
 
 PAW 无矩阵算符、全带约束最小化、残差预条件、S 度量正交化、重启式
@@ -76,14 +78,53 @@ eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用�
 部分芯密度，不会重复加入 Hartree 密度。`DION` 是 POTCAR 固定 onsite 项，
 `QDEP` 才给出势依赖的 MIMIC_US 校正；`VH(G=0)` 是势规范并设为零。
 
+计算力时，HALF 从各 k 点波函数重建 PAW onsite 占据矩阵与 POTCAR
+augmentation density：
+
+$$
+P_{ij}^{I}=\sum_{n\mathbf k}w_{\mathbf k}f_{n\mathbf k}
+\langle\widetilde\psi_{n\mathbf k}|\beta_i^I\rangle
+\langle\beta_j^I|\widetilde\psi_{n\mathbf k}\rangle,
+\qquad
+\rho_{\mathrm{aug}}(\mathbf r)=\sum_{Iij}P_{ij}^{I}
+Q_{ij}^{I}(\mathbf r-\mathbf R_I).
+$$
+
+$Q_{ij}^{I}$ 的多极矩来自 POTCAR 的 AE−PS partial waves 与双球贝塞尔补偿
+函数。令
+$\rho_{\mathrm{out}}=\widetilde\rho_{\mathrm{wave}}+\rho_{\mathrm{aug}}$，
+局域势力和显式 augmentation 力分别为
+
+$$
+\mathbf F_I^{\mathrm{loc}}=-\int\rho_{\mathrm{out}}(\mathbf r)
+\frac{\partial V_{\mathrm{loc}}^I}{\partial\mathbf R_I}\,d^3r,
+\qquad
+\mathbf F_I^{\mathrm{aug}}=-\sum_{n\mathbf k}w_{\mathbf k}f_{n\mathbf k}
+\mathbf c_{n\mathbf k}^{\dagger}
+\frac{\partial D^I}{\partial\mathbf R_I}\mathbf c_{n\mathbf k},
+$$
+
+其中
+
+$$
+\frac{\partial D_{ij}^{I}}{\partial\mathbf R_I}
+=\int V_{\mathrm{eff}}(\mathbf r)
+\frac{\partial Q_{ij}^{I}(\mathbf r-\mathbf R_I)}
+{\partial\mathbf R_I}\,d^3r.
+$$
+
+这是 PAW 耦合乘积两侧的不同导数，二者都必须保留；CLI 将后一项单列为
+`paw_aug`。
+
 ### HALF 当前实际实现的范围
 
 CPU 与 CUDA 路径现已实现上式完整的 Gamma 点 MIMIC_US 项；`--uspp-dij` 用于启用势依赖
 校正。GPU 先对周期有效势进行三次 B 样条预滤波，再围绕每个原子在球面网格取样，
 投影到实球谐函数，并用 VASP 的双球贝塞尔补偿函数完成径向积分，最后与 AE−PS
 多极矩收缩得到每个原子的 $D_{ij}^I$。显式多 k 点能带和对称性约化总能量已经
-实现；H/S 组装、矩阵应用和波函数导出也已实现。有限差分力仅用于验证，解析
-PAW 总力完成并通过 VASP 分项验证后才会开放为正式功能。单个非 Gamma k 点可用
+实现；H/S 组装、矩阵应用和波函数导出也已实现。解析 `--forces` 会重建 POTCAR
+augmentation occupancy 与 augmentation density；有限差分只保留为验证 oracle。
+单个非 Gamma k 点可用
 `--kpoint KX KY KZ`。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 
@@ -195,10 +236,10 @@ half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
   --vaspwave-h5 vaspwave.h5 --output-prefix energy
 
-# 仅供开发验证的有限差分 oracle，绝不是生产力路径
+# 独立 HALF 解析 PAW/Harris 力；不移动原子
 half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
-  --finite-difference-force-check --force-step 0.001 --output-prefix force_check
+  --forces --output-prefix forces
 
 # 也可在显式网格上读取匹配的 VASP EIGENVAL
 half energy CHGCAR.smooth POTCAR \

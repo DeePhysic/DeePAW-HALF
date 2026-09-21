@@ -57,9 +57,12 @@ old central finite-difference force path is retained only as a numerical
 oracle. A native analytic force implementation
 now contains the Ewald, reciprocal-space local, and generalized PAW
 `D-epsilon Q` Hellmann-Feynman derivatives, including the NLCC/`FORCOR`
-partial-core derivative; augmentation and fixed-density
-Harris corrections are still being completed and must not yet be presented as
-a production total force. Native `vaspwave.h5` output and HDF5
+partial-core derivative. It also reconstructs the output PAW augmentation
+density from the POTCAR AE/PS partial waves and compensation multipoles,
+contracts its explicit displacement derivative through `dD_ij/dR`, and uses
+the augmented output density in the fixed-density Harris response. The
+standalone `--forces` path never moves atoms; total-force parity validation is
+still in progress. Native `vaspwave.h5` output and HDF5
 charge/structure/embedded-POTCAR input are supported. Dense H/S assembly,
 matrix application, and k-point solution are exposed through `libhalf`.
 
@@ -123,6 +126,44 @@ used by NLCC only; it is not added to the Hartree density. `DION` is the frozen
 onsite term from POTCAR, whereas `QDEP` supplies the potential-dependent
 MIMIC_US contribution. `VH(G=0)` is a potential gauge and is set to zero.
 
+For forces, HALF reconstructs the PAW onsite occupation matrix and POTCAR
+augmentation density,
+
+$$
+P_{ij}^{I}=\sum_{n\mathbf k}w_{\mathbf k}f_{n\mathbf k}
+\langle\widetilde\psi_{n\mathbf k}|\beta_i^I\rangle
+\langle\beta_j^I|\widetilde\psi_{n\mathbf k}\rangle,
+\qquad
+\rho_{\mathrm{aug}}(\mathbf r)=\sum_{Iij}P_{ij}^{I}
+Q_{ij}^{I}(\mathbf r-\mathbf R_I).
+$$
+
+The $Q_{ij}^{I}$ multipoles are built from POTCAR AE-minus-PS partial waves
+and two-Bessel compensation shapes. With
+$\rho_{\mathrm{out}}=\widetilde\rho_{\mathrm{wave}}+\rho_{\mathrm{aug}}$,
+the local and explicit augmentation forces are
+
+$$
+\mathbf F_I^{\mathrm{loc}}=-\int\rho_{\mathrm{out}}(\mathbf r)
+\frac{\partial V_{\mathrm{loc}}^I}{\partial\mathbf R_I}\,d^3r,
+\qquad
+\mathbf F_I^{\mathrm{aug}}=-\sum_{n\mathbf k}w_{\mathbf k}f_{n\mathbf k}
+\mathbf c_{n\mathbf k}^{\dagger}
+\frac{\partial D^I}{\partial\mathbf R_I}\mathbf c_{n\mathbf k},
+$$
+
+where
+
+$$
+\frac{\partial D_{ij}^{I}}{\partial\mathbf R_I}
+=\int V_{\mathrm{eff}}(\mathbf r)
+\frac{\partial Q_{ij}^{I}(\mathbf r-\mathbf R_I)}
+{\partial\mathbf R_I}\,d^3r.
+$$
+
+These are different derivatives of the PAW coupling and both are required.
+The CLI reports the latter separately as `paw_aug`.
+
 ### What HALF implements today
 
 HALF now evaluates the full arbitrary-k MIMIC_US expression above on CPU and CUDA.
@@ -132,8 +173,9 @@ concentric angular grids around every atom, projected onto real spherical
 harmonics, radially integrated against VASP's two-Bessel compensation
 functions, and contracted with the AE-minus-PS multipole moments. Explicit
 multi-point bands and symmetry-reduced fixed-density energies are implemented;
-matrix application and wavefunction export are implemented. Finite-difference
-forces are validation-only while the analytic PAW force is completed. The authoritative status is
+matrix application and wavefunction export are implemented. The analytic
+`--forces` path reconstructs POTCAR augmentation occupancies and density,
+while finite differences remain a validation oracle only. The authoritative status is
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md).
 
 For the implemented DION problem, `S` is positive definite and the generalized

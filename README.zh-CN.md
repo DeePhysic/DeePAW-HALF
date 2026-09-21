@@ -25,8 +25,9 @@ augmentation density，通过 `dD_ij/dR` 计入其显式位移力，并把带 au
 导数收缩。球形原子 PAW double counting
 也会由 POTCAR 的 AE/PS partial waves、原子占据、core density、`DEXC` 与补偿
 电荷自动重建，不读取 CHGCAR augmentation 尾部，也不依赖 VASP 输出数值。
-独立 CLI 的 `--forces` 全程不移动原子；相对严格固定密度 VASP 基准，Si/HfO2
-力分量 MAE 已达到 `6.99e-6/1.01e-3 eV/Angstrom`。原生
+独立 CLI 的 `--forces` 全程不移动原子；相对 `LMAXMIX=-1` 的完全自洽 VASP，
+Si/HfO2 的能量差为 `-1.360/+9.837 meV/atom`，力分量 MAE 为
+`0.414/10.988 meV/Angstrom`。原生
 `vaspwave.h5` 输出以及 HDF5 电荷/结构/内嵌 POTCAR 输入已经支持。
 
 PAW 无矩阵算符、全带约束最小化、残差预条件、S 度量正交化、重启式
@@ -34,6 +35,8 @@ Rayleigh-Ritz、复杂度以及 VASP 直接内存接入的完整推导见
 [Harris 无矩阵全带加速原理与推导](docs/HARRIS_ACC_THEORY.zh-CN.md)。
 L 通道、Harris Hartree+XC 响应及 Si/HfO2 力验证见
 [Harris 力的 L 通道与密度响应优化](docs/validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md)。
+项目对外采用的完全自洽 VASP 对比见
+[HALF 能量和力与完全自洽 VASP 的对比](docs/validation/HALF_VS_VASP_SCF_ENERGY_FORCE.zh-CN.md)。
 
 ## 数值模型：从固定密度到本征值
 

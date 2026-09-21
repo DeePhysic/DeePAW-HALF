@@ -69,8 +69,9 @@ moving POTCAR `PSPRHO`. Spherical atomic PAW double counting is rebuilt
 automatically from POTCAR AE/PS partial waves, atomic occupancies, core density,
 `DEXC`, and compensation charge rather than from a CHGCAR augmentation tail or
 a VASP output value. The standalone `--forces` path never moves atoms. Against
-strict frozen-density VASP oracles, the Si/HfO2 force-component MAEs are now
-`6.99e-6/1.01e-3 eV/Angstrom`. Native `vaspwave.h5` output and HDF5
+fully self-consistent VASP with `LMAXMIX=-1`, the Si/HfO2 energy differences
+are `-1.360/+9.837 meV/atom` and the force-component MAEs are
+`0.414/10.988 meV/Angstrom`. Native `vaspwave.h5` output and HDF5
 charge/structure/embedded-POTCAR input are supported. Dense H/S assembly,
 matrix application, and k-point solution are exposed through `libhalf`.
 
@@ -81,6 +82,8 @@ Rayleigh-Ritz update, complexity, and direct VASP handoff is given in
 The L-channel diagnostics, complete Harris Hartree+XC response, and Si/HfO2
 force validation are documented in
 [Harris-force L-channel and density-response optimization](docs/validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md).
+The project-level comparison against fully self-consistent VASP is
+[HALF energy and force versus fully self-consistent VASP](docs/validation/HALF_VS_VASP_SCF_ENERGY_FORCE.md).
 
 ## Numerical model, derived step by step
 

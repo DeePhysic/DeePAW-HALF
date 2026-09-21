@@ -309,11 +309,11 @@ half energy CHGCAR.deepaw POTCAR \
   --forces --output-prefix si_energy_force
 ```
 
-相对严格固定密度的 VASP `ICHARG=11` oracle，当前 Si 与 HfO2 的力分量 MAE
-分别为 `6.99e-6` 和 `1.007e-3 eV/Angstrom`。这是 VASP 确实保留 Harris
-收敛修正的同定义对比；普通单步 `ICHARG=1` 不满足这一条件。完整公式、$L$
-通道诊断和原始数据位置见
-[`HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md`](HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md)。
+相对 `LMAXMIX=-1` 的完全自洽 VASP，Si/HfO2 的能量差分别为
+`-1.360/+9.837 meV/atom`，力分量 MAE 为 `0.414/10.988 meV/Angstrom`。
+这是项目对外采用的精度比较；固定密度计算只保留为实现回归。完整结果和原始
+数据位置见
+[`HALF_VS_VASP_SCF_ENERGY_FORCE.zh-CN.md`](HALF_VS_VASP_SCF_ENERGY_FORCE.zh-CN.md)。
 
 ### 4.3 与已有机器学习势报道结果的对比
 
@@ -322,13 +322,21 @@ DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著�
 
 | 方法 | 已报道能量结果 | 已报道力结果 |
 |---|---:|---:|
-| DeePAW-HALF，当前 Si/HfO2 验证 | 相对初始 VASP MIMIC_US 状态绝对能量差 2.59/7.17 meV/atom | 相对固定密度 VASP `ICHARG=11` 的分量 MAE 为 0.00699/1.007 meV/Angstrom |
+| DeePAW-HALF，当前 Si/HfO2 验证 | 相对完全自洽 VASP `LMAXMIX=-1` 的差为 -1.360/+9.837 meV/atom | 相对同一自洽参照的分量 MAE 为 0.414/10.988 meV/Angstrom |
 | [M3GNet](https://doi.org/10.1038/s43588-022-00349-3) | MAE 35 meV/atom | MAE 72 meV/Angstrom |
 | [CHGNet](https://doi.org/10.1038/s42256-023-00716-3) | MAE 30 meV/atom | MAE 77 meV/Angstrom |
 | [MACE-MP-0 medium](https://doi.org/10.1063/5.0297006) | MAE 20 meV/atom | MAE 45 meV/Angstrom |
 
 这些结果表明，DeePAW-HALF 已形成从学习密度到能带、能量、力和波函数的完整
 电子结构路径；需要完全自洽结果时，还可以把初始波函数直接交给 VASP。
+
+### 4.4 能量/力优化能否减少 VASP SCF LOOP
+
+`EATOM`、atomic PAW 能量记账和解析力响应都在本征求解之后计算。优化它们不会
+改变 $H$、$S$、HALF 本征矢或传给 VASP 的波函数，因此不能直接减少 SCF
+LOOP。POTCAR 插值进入 $V_{\mathrm{eff}}$，可能小幅改善初始子空间。要显著减少
+LOOP，需要改善 DeepAW 密度、PAW SETDIJ/局域势一致性和占据子空间残差，并用
+完全相同的 VASP 输入重新做 MP-85 受控 A/B 测试。
 
 ## 5. 三项功能之间的关系
 
@@ -356,8 +364,8 @@ DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著�
   更宽松。
 - 中心有限差分只保留为验证 oracle。原生 Ewald、局域势、广义非局域 PAW、
   augmentation、NLCC 与完整固定密度 Hartree+XC Harris 响应均已实现。相对
-  严格固定密度 VASP `ICHARG=11`，Si/HfO2 力分量 MAE 分别为
-  `6.99e-6` 和 `1.007e-3 eV/Angstrom`。
+  完全自洽 VASP `LMAXMIX=-1`，Si/HfO2 力分量 MAE 分别为
+  `0.414` 和 `10.988 meV/Angstrom`。
 
 ## 7. 结论
 
@@ -370,9 +378,9 @@ DeePAW-HALF 已形成从学习密度到平面波电子结构的三条可用路�
   从 16 降至 4，MP-85 的平均 LOOP 从 25.365 降至 11.435（2.218×），
   CsPbBr₃ 上 ACC 又把大基组初始化的总作业时间降低 6.75 倍。
 - **能量与解析力**：HALF 无需先运行 SCF 即可计算 Harris 总能量；Ewald、局域势
-  及 POTCAR augmentation 等正式力分量均为解析实现。相对固定密度 VASP
-  `ICHARG=11`，Si/HfO2 的力分量 MAE 分别为 `6.99e-6` 和
-  `1.007e-3 eV/Angstrom`。
+  及 POTCAR augmentation 等正式力分量均为解析实现。相对完全自洽 VASP
+  `LMAXMIX=-1`，Si/HfO2 的能量差为 `-1.360/+9.837 meV/atom`，力分量
+  MAE 为 `0.414/10.988 meV/Angstrom`。
 
 因此 DeePAW-HALF 是一层可复用的“密度—电子结构”接口：向上连接 DeepAW
 密度模型，向下可输出能带、能量、解析力和波函数，也可为
@@ -396,6 +404,8 @@ VASP 提供更好的 SCF 起点。
   [`si_total_energy_parity.json`](si_total_energy_parity.json)
 - Si 有限差分力一致性与性能：
   [`si_force_parity.json`](si_force_parity.json)
+- HALF 能量/力与完全自洽 VASP 对比：
+  [`half_vs_vasp_scf_energy_force.json`](half_vs_vasp_scf_energy_force.json)
 
 English version:
 [`HFO2_VASP_HALF_VS_SAD_KSPACING035.md`](HFO2_VASP_HALF_VS_SAD_KSPACING035.md).

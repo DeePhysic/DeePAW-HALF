@@ -1,0 +1,45 @@
+{
+  "reference": "fully self-consistent VASP with LMAXMIX=-1",
+  "common": {
+    "xc": "PBE",
+    "kspacing_per_A": 0.35,
+    "ispin": 1,
+    "ismear": 0,
+    "sigma_eV": 0.02,
+    "vasp_ediff_eV": 0.0001,
+    "vasp_algo": "All"
+  },
+  "systems": {
+    "Si": {
+      "atoms": 8,
+      "encut_eV": 520,
+      "half_energy_eV_per_cell": -43.306622750489744,
+      "vasp_scf_energy_eV_per_cell": -43.29574233,
+      "half_minus_vasp_eV_per_cell": -0.010880420489744,
+      "half_minus_vasp_meV_per_atom": -1.360052561218,
+      "force_component_mae_meV_per_A": 0.413883951611,
+      "force_component_rmse_meV_per_A": 0.519719838039,
+      "force_component_max_meV_per_A": 0.912781131820,
+      "half_max_force_norm_meV_per_A": 0.015774682466,
+      "vasp_max_force_norm_meV_per_A": 1.095779631130
+    },
+    "HfO2": {
+      "atoms": 12,
+      "encut_eV": 521,
+      "half_energy_eV_per_cell": -121.88444076167572,
+      "vasp_scf_energy_eV_per_cell": -122.00248190,
+      "half_minus_vasp_eV_per_cell": 0.11804113832428,
+      "half_minus_vasp_meV_per_atom": 9.836761527023,
+      "force_component_mae_meV_per_A": 10.988281733307,
+      "force_component_rmse_meV_per_A": 14.565795293834,
+      "force_component_max_meV_per_A": 28.153871267953,
+      "half_max_force_norm_meV_per_A": 95.310139650109,
+      "vasp_max_force_norm_meV_per_A": 122.190413854770
+    }
+  },
+  "data": {
+    "half": "/data/limusen/deepaw_half_force_compare/final_vasp_interp_gpu",
+    "vasp_scf_si": "/data/limusen/deepawchgs/020_mp-149_Si",
+    "vasp_scf_hfo2": "/data/limusen/deepawchgs_retry_encut521/054_mp-352_HfO2"
+  }
+}

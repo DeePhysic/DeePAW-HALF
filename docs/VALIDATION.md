@@ -1,5 +1,16 @@
 # Validation contract
 
+## Project-level energy and force accuracy
+
+Accuracy claims use only fully self-consistent VASP with `LMAXMIX=-1` as the
+reference. For Si/HfO2, HALF differs by `-1.360/+9.837 meV/atom` in total
+energy and has force-component MAEs of `0.414/10.988 meV/Angstrom`. See
+[`validation/HALF_VS_VASP_SCF_ENERGY_FORCE.md`](validation/HALF_VS_VASP_SCF_ENERGY_FORCE.md)
+and its
+[`machine-readable record`](validation/half_vs_vasp_scf_energy_force.json).
+Frozen-density VASP calculations below are implementation regressions only;
+they are not used as project-level physical-accuracy comparisons.
+
 ## POTCAR augmentation density in analytic forces
 
 The standalone analytic-force path reconstructs PAW onsite occupations from

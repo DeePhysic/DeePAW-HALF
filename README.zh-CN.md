@@ -247,8 +247,9 @@ VASP adapter 还会把晶格、分数坐标、物种编号和致密电荷网格�
 [VASP 6.6.0 接入实测](docs/VASP_INTEGRATION.zh-CN.md)。独立调用示例见
 [C 示例](examples/api/half_c_example.c)，VASP 侧桥接模块见
 [`examples/vasp/half_vasp_init.F`](examples/vasp/half_vasp_init.F)。
-从 DeepAW 密度直接重建能带、HALF 介入 VASP 加速 SCF 的完整文章，以及 HfO₂
-逐点能带验证、MP-85 平均迭代加速和大基组 ACC 加速结果见
+从 DeepAW 密度直接重建能带、计算能量和力、HALF 介入 VASP 加速 SCF 的完整文章，
+以及与已报道机器学习势的对比、HfO₂ 逐点能带验证、MP-85 平均迭代加速和大基组
+ACC 加速结果见
 [验证与性能报告](docs/validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md)。
 
 在私有分支 `deepaw-half-acc` 中，VASP 6.6.0 完整源码位于

@@ -339,10 +339,10 @@ See [the API guide](docs/API.md), the
 [tested VASP 6.6.0 integration](docs/VASP_INTEGRATION.md), the standalone
 [C example](examples/api/half_c_example.c), and the original
 [VASP-side adapter module](examples/vasp/half_vasp_init.F).
-The combined article on direct DeepAW-to-band-structure reconstruction and
-HALF-initialized VASP SCF acceleration includes pointwise band validation,
-HfO2 HALF-versus-SAD results, the MP-85 mean iteration speedup, and
-large-basis ACC scaling in the
+The combined article on direct DeepAW-to-band-structure reconstruction,
+energy/force evaluation, and HALF-initialized VASP SCF acceleration includes
+pointwise band validation, comparisons with reported machine-learning
+potentials, the MP-85 mean iteration speedup, and large-basis ACC scaling in the
 [validation report](docs/validation/HFO2_VASP_HALF_VS_SAD_KSPACING035.md).
 
 The private `deepaw-half-acc` branch vendors the complete VASP 6.6.0

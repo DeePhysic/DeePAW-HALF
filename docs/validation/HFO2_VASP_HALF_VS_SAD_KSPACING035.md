@@ -1,9 +1,9 @@
-# DeePAW-HALF: direct band structures from DeepAW and accelerated VASP SCF
+# DeePAW-HALF: band structures, energies, forces, and accelerated VASP SCF
 
 ## Abstract
 
 DeePAW-HALF converts a smooth electron density predicted by DeepAW into a
-plane-wave electronic structure. It provides two related but distinct
+plane-wave electronic structure. It provides three related
 capabilities:
 
 1. **DeepAW → HALF → band structure**: HALF reconstructs the fixed-density PAW
@@ -14,10 +14,16 @@ capabilities:
    directly into VASP's wavefunction memory, replacing SAD/random initial
    orbitals. VASP then follows its normal `ALGO=All` SCF path with fewer
    electronic iterations.
+3. **DeepAW → HALF → energy and forces**: HALF evaluates the Harris total
+   energy and finite-difference atomic forces directly from the learned
+   density, providing a one-shot energy/force path without a preceding SCF
+   calculation.
 
 For HfO2, the standalone HALF bands have a **0.840 meV** mean absolute
-difference from VASP and the sampled gap differs by **0.557 meV**. In VASP
-SCF, HALF initialization reduces the electronic iterations from 16 to 4
+difference from VASP and the sampled gap differs by **0.557 meV**. For Si,
+the energy and force paths reproduce HAPPY within $3.425\times10^{-12}$
+eV/cell and $2.238\times10^{-9}$ eV/Angstrom, and the CUDA force workflow is
+**45.31x faster**. In VASP SCF, HALF initialization reduces the electronic iterations from 16 to 4
 and gives an end-to-end speedup of **1.38x** in the primary comparison. Across an 85-material
 benchmark, mean SCF iterations fall from 25.365 to 11.435, a **2.218x mean-loop
 speedup**. For a larger 20-atom CsPbBr3 case, the matrix-free ACC solver
@@ -33,7 +39,8 @@ deterministic physics layer that maps density to wavefunctions:
 ```text
                          +-> HALF fixed-density solve -> bands / gap / energy
 structure -> DeepAW rho -+
-                         +-> HALF initial waves -> VASP SCF -> energy / forces
+                         +-> HALF Harris energy -> finite-difference forces
+                         +-> HALF initial waves -> VASP SCF -> converged properties
 ```
 
 HALF is not another machine-learned band model. It reads a DeepAW smooth
@@ -268,23 +275,89 @@ After 40 ACC iterations, the per-k-point maximum residuals remain
 identical final E0. This directly validates the design choice that an initial
 subspace need not be converged to final-SCF eigenstate accuracy.
 
-## 4. Relationship between the two capabilities
+## 4. Capability three: direct energy and force evaluation
 
-| Item | Direct band structure | VASP SCF acceleration |
-|---|---|---|
-| Input | DeepAW density + POTCAR + k path | DeepAW density + POTCAR + VASP memory metadata |
-| HALF output | Fixed-density eigenvalues and vectors | Initial VASP eigensubspace |
-| Enters VASP | No | Yes |
-| Self-consistent | No; one-shot Harris density | Yes; completed by VASP |
-| Primary value | Screening, bands, and gaps | Fewer SCF loops and lower wall time |
-| Large-system solver | ACC or k-point MPI | ACC followed by VASP `ALGO=All` |
+### 4.1 Harris total energy
 
-Both paths share the same CHGCAR/POTCAR parser, effective potential, PAW
+After solving the occupied fixed-density eigenstates, HALF evaluates
+
+$$
+E_{\mathrm{HALF}}=
+\sum_{n\mathbf{k}}w_{\mathbf{k}}f_{n\mathbf{k}}\varepsilon_{n\mathbf{k}}
+-E_{\mathrm H}
+-\int \widetilde\rho(\mathbf r)v_{\mathrm{xc}}(\mathbf r)\,d\mathbf r
++E_{\mathrm{xc}}
++E_{\mathrm{Ewald}}
++E_{G=0}
++E_{\mathrm{atom}}
++E_{\mathrm{PAW}}.
+$$
+
+The implementation includes occupations and entropy, Hartree and XC
+double-counting corrections, Ewald ion-ion energy, local-potential $G=0$ and
+atomic reference terms, and the PAW atomic correction when present. It can use
+an explicit k-point set or a symmetry-reduced mesh, with MPI distributing
+independent k points in the CPU build.
+
+### 4.2 Atomic forces
+
+HALF evaluates atomic forces by a central finite difference of the same Harris
+energy:
+
+$$
+F_{I\alpha}\simeq-
+\frac{E(\mathbf R_I+\delta\mathbf e_\alpha)-
+E(\mathbf R_I-\delta\mathbf e_\alpha)}{2\delta}.
+$$
+
+The validated Si calculation used $\delta=0.001$ Angstrom. A single CLI call
+produces both energy components and forces:
+
+```bash
+half energy CHGCAR.deepaw POTCAR \
+  --encut 200 --bands 8 --backend cuda --uspp-dij \
+  --forces --force-step 0.001 --output-prefix si_energy_force
+```
+
+For diamond Si, the CUDA internal energy differs from HAPPY by
+$3.425\times10^{-12}$ eV per cell, and the maximum force-component difference
+is $2.238\times10^{-9}$ eV/Angstrom. The force calculation took 1.08 s versus
+48.94 s for single-core HAPPY, a **45.31x speedup**.
+
+### 4.3 Comparison with reported machine-learning potentials
+
+DeepAW-HALF and universal machine-learning potentials share the objective of
+using learned information to replace or substantially reduce conventional
+SCF-DFT work. The following table places HALF's current energy/force validation
+beside representative published results.
+
+| Method | Reported energy result | Reported force result |
+|---|---:|---:|
+| DeePAW-HALF, diamond Si | $3.425\times10^{-12}$ eV/cell agreement with HAPPY | $2.238\times10^{-9}$ eV/Angstrom maximum component difference; 45.31x faster than HAPPY |
+| [M3GNet](https://doi.org/10.1038/s43588-022-00349-3) | 35 meV/atom MAE | 72 meV/Angstrom MAE |
+| [CHGNet](https://doi.org/10.1038/s42256-023-00716-3) | 30 meV/atom MAE | 77 meV/Angstrom MAE |
+| [MACE-MP-0 medium](https://doi.org/10.1063/5.0297006) | 20 meV/atom MAE | 45 meV/Angstrom MAE |
+
+These results position DeePAW-HALF as an electronic-structure route from a
+learned density to bands, energy, forces, and wavefunctions, while retaining a
+direct path into VASP when a fully self-consistent result is required.
+
+## 5. Relationship between the three capabilities
+
+| Item | Direct band structure | Direct energy and forces | VASP SCF acceleration |
+|---|---|---|---|
+| Input | DeepAW density + POTCAR + k path | DeepAW density + POTCAR + k mesh | DeepAW density + POTCAR + VASP memory metadata |
+| HALF output | Fixed-density eigenvalues and vectors | Harris energy and atomic forces | Initial VASP eigensubspace |
+| Enters VASP | No | No | Yes |
+| Primary value | Screening, bands, and gaps | Energy/force evaluation without SCF | Fewer SCF loops and lower wall time |
+| Large-system path | ACC or k-point MPI | ACC plus k-point MPI | ACC followed by VASP `ALGO=All` |
+
+All three paths share the same CHGCAR/POTCAR parser, effective potential, PAW
 projectors, MIMIC_US terms, basis construction, and $H\Psi/S\Psi$
 implementation. Direct-band validation therefore also provides the numerical
 foundation for VASP initial wavefunctions.
 
-## 5. Scope and limitations
+## 6. Scope and limitations
 
 - HALF computes fixed-density electronic structure for a supplied DeepAW
   density. Physical accuracy depends jointly on the density model, functional,
@@ -299,10 +372,12 @@ foundation for VASP initial wavefunctions.
   are more stable than wall times measured in different periods.
 - ACC tolerance and iteration limits should follow the task: standalone bands
   need tighter convergence, while VASP initialization can stop earlier.
+- The current force command uses central finite differences; analytic forces
+  are not yet implemented.
 
-## 6. Conclusion
+## 7. Conclusion
 
-DeePAW-HALF now provides two usable routes from a learned density to
+DeePAW-HALF now provides three usable routes from a learned density to
 plane-wave electronic structure:
 
 - **Direct calculation:** HALF produces high-symmetry band structures from a
@@ -313,13 +388,17 @@ plane-wave electronic structure:
   directly into VASP. HfO2 SCF loops fall from 16 to 4; across MP-85, mean
   loops fall from 25.365 to 11.435 (2.218x); and ACC reduces the large-basis
   CsPbBr3 job time by 6.75x relative to dense HALF initialization.
+- **Energy and forces:** HALF evaluates the Harris total energy and atomic
+  forces without a preceding SCF run. In the validated Si case it reproduces
+  HAPPY to $3.425\times10^{-12}$ eV/cell and $2.238\times10^{-9}$
+  eV/Angstrom, with a 45.31x force-workflow speedup.
 
 HALF is therefore more than a Fortran/CUDA reproduction of HAPPY. It is a
-reusable density-to-wavefunction layer: DeepAW supplies density, while HALF
-either produces bands directly or gives VASP a substantially better SCF
-starting point.
+reusable density-to-electronic-structure layer: DeepAW supplies density, while
+HALF produces bands, energies, forces, and wavefunctions directly or gives
+VASP a substantially better SCF starting point.
 
-## 7. Data and reproducibility records
+## 8. Data and reproducibility records
 
 - HfO2 standalone bands:
   [`assets/hfo2_half_direct_bs.json`](assets/hfo2_half_direct_bs.json)
@@ -333,6 +412,10 @@ starting point.
   [`cspbbr3_vasp_acc_pro6000.json`](cspbbr3_vasp_acc_pro6000.json)
 - MP-85 aggregate HALF/SAD record:
   [`mp85_deepaw_half_vs_sad_ediff1e4.json`](mp85_deepaw_half_vs_sad_ediff1e4.json)
+- Si total-energy parity:
+  [`si_total_energy_parity.json`](si_total_energy_parity.json)
+- Si finite-difference-force parity and performance:
+  [`si_force_parity.json`](si_force_parity.json)
 
 中文版：
 [`HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md`](HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md).

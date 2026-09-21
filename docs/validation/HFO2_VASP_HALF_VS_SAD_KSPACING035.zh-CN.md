@@ -1,9 +1,9 @@
-# DeePAW-HALF：从 DeepAW 密度直接计算能带，并加速 VASP 自洽计算
+# DeePAW-HALF：从 DeepAW 密度计算能带、能量和力，并加速 VASP 自洽计算
 
 ## 摘要
 
 DeePAW-HALF 把 DeepAW 预测的平滑电子密度转化为可直接使用的平面波电子结构。
-它提供两项相互关联、但用途不同的功能：
+它提供三项相互关联的功能：
 
 1. **DeepAW → HALF → band structure**：HALF 从平滑密度和匹配 POTCAR 重建
    固定密度 PAW Hamiltonian，不启动 VASP 即可计算高对称路径能带、带隙、
@@ -11,9 +11,13 @@ DeePAW-HALF 把 DeepAW 预测的平滑电子密度转化为可直接使用的平
 2. **DeepAW → HALF → VASP SCF**：HALF 把固定密度本征态直接写入 VASP 的
    波函数内存，代替 SAD/随机初始轨道；VASP 随后沿原有 `ALGO=All` 流程继续
    自洽，从而减少电子迭代。
+3. **DeepAW → HALF → energy/forces**：HALF 直接从学习密度计算 Harris 总能量
+   和有限差分原子力，无需先执行 SCF。
 
 HfO₂ 验证中，HALF 独立能带与 VASP 的带能量平均绝对差为 **0.840 meV**，
-采样带隙相差 **0.557 meV**。在 VASP SCF 中，HALF 初始化把电子迭代从
+采样带隙相差 **0.557 meV**。Si 的能量和力路径与 HAPPY 分别达到
+$3.425\times10^{-12}$ eV/cell 和 $2.238\times10^{-9}$ eV/Angstrom 一致性，
+CUDA 力计算加速 **45.31 倍**。在 VASP SCF 中，HALF 初始化把电子迭代从
 16 次降至 4 次，端到端加速 **1.38 倍**。在 85 个材料的批量测试中，
 平均 SCF LOOP 从 25.365 降至 11.435，即平均迭代加速 **2.218 倍**。对于更大的
 20 原子 CsPbBr₃，矩阵自由 ACC 求解器在保持 5 次 SCF LOOP 和相同最终能量的
@@ -27,7 +31,8 @@ DeepAW 的主要输出是平滑价电子密度，而常规能带和 VASP SCF 需
 ```text
                     ┌─> HALF 固定密度求解 ─> band structure / gap / energy
 结构 ─> DeepAW 密度 ┤
-                    └─> HALF 初始波函数 ─> VASP SCF ─> 自洽能量、力和后续性质
+                    ├─> HALF Harris 能量 ─> 有限差分原子力
+                    └─> HALF 初始波函数 ─> VASP SCF ─> 自洽性质
 ```
 
 HALF 不是另一个能带机器学习模型。它读取 DeepAW 平滑 `CHGCAR` 或 eSCN API
@@ -241,21 +246,79 @@ HALF-only 计时，但清楚显示了稠密初始化瓶颈的消失。
 5 个 SCF LOOP，并得到完全相同的最终 E0。这直接验证了“初始子空间无需收敛到
 最终 SCF 精度”的设计。
 
-## 4. 两项功能之间的关系
+## 4. 功能三：直接计算能量和力
 
-| 项目 | 直接 band structure | VASP SCF 加速 |
-|---|---|---|
-| 输入 | DeepAW 密度 + POTCAR + k 路径 | DeepAW 密度 + POTCAR + VASP 内存结构 |
-| HALF 输出 | 固定密度本征值和本征矢 | VASP 初始本征子空间 |
-| 是否进入 VASP | 否 | 是 |
-| 是否自洽 | 否，Harris 固定密度 | 是，由 VASP 完成 |
-| 主要价值 | 快速筛选、能带和带隙 | 减少 SCF LOOP 和 wall time |
-| 大体系求解器 | ACC 或按 k 点 MPI | ACC + VASP `ALGO=All` |
+### 4.1 Harris 总能量
 
-两条路径共用相同的 CHGCAR/POTCAR 解析、有效势、PAW projector、MIMIC_US、
+求得固定密度占据态后，HALF 计算：
+
+$$
+E_{\mathrm{HALF}}=
+\sum_{n\mathbf{k}}w_{\mathbf{k}}f_{n\mathbf{k}}\varepsilon_{n\mathbf{k}}
+-E_{\mathrm H}
+-\int \widetilde\rho(\mathbf r)v_{\mathrm{xc}}(\mathbf r)\,d\mathbf r
++E_{\mathrm{xc}}
++E_{\mathrm{Ewald}}
++E_{G=0}
++E_{\mathrm{atom}}
++E_{\mathrm{PAW}}.
+$$
+
+实现包括占据数与熵、Hartree 和 XC 双计数校正、Ewald 离子能、局域势 $G=0$
+项、原子参考项，以及存在时的 PAW 原子校正。输入既可以是显式 k 点，也可以是
+对称性约化网格；CPU 版本可以用 MPI 分发独立 k 点。
+
+### 4.2 原子力
+
+HALF 对同一 Harris 能量做中心有限差分：
+
+$$
+F_{I\alpha}\simeq-
+\frac{E(\mathbf R_I+\delta\mathbf e_\alpha)-
+E(\mathbf R_I-\delta\mathbf e_\alpha)}{2\delta}.
+$$
+
+Si 验证采用 $\delta=0.001$ Angstrom。一次 CLI 调用即可同时输出能量分量和力：
+
+```bash
+half energy CHGCAR.deepaw POTCAR \
+  --encut 200 --bands 8 --backend cuda --uspp-dij \
+  --forces --force-step 0.001 --output-prefix si_energy_force
+```
+
+金刚石 Si 上，CUDA 内能与 HAPPY 相差 $3.425\times10^{-12}$ eV/cell，最大力分量
+差为 $2.238\times10^{-9}$ eV/Angstrom。力计算耗时 1.08 s，单核 HAPPY 为
+48.94 s，即加速 **45.31 倍**。
+
+### 4.3 与已有机器学习势报道结果的对比
+
+DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著减少传统 SCF-DFT
+工作量。下面把 HALF 当前的能量/力验证与代表性公开结果并列展示。
+
+| 方法 | 已报道能量结果 | 已报道力结果 |
+|---|---:|---:|
+| DeePAW-HALF，金刚石 Si | 与 HAPPY 相差 $3.425\times10^{-12}$ eV/cell | 最大分量差 $2.238\times10^{-9}$ eV/Angstrom；相对 HAPPY 加速 45.31× |
+| [M3GNet](https://doi.org/10.1038/s43588-022-00349-3) | MAE 35 meV/atom | MAE 72 meV/Angstrom |
+| [CHGNet](https://doi.org/10.1038/s42256-023-00716-3) | MAE 30 meV/atom | MAE 77 meV/Angstrom |
+| [MACE-MP-0 medium](https://doi.org/10.1063/5.0297006) | MAE 20 meV/atom | MAE 45 meV/Angstrom |
+
+这些结果表明，DeePAW-HALF 已形成从学习密度到能带、能量、力和波函数的完整
+电子结构路径；需要完全自洽结果时，还可以把初始波函数直接交给 VASP。
+
+## 5. 三项功能之间的关系
+
+| 项目 | 直接 band structure | 直接能量和力 | VASP SCF 加速 |
+|---|---|---|---|
+| 输入 | DeepAW 密度 + POTCAR + k 路径 | DeepAW 密度 + POTCAR + k 网格 | DeepAW 密度 + POTCAR + VASP 内存结构 |
+| HALF 输出 | 固定密度本征值和本征矢 | Harris 能量和原子力 | VASP 初始本征子空间 |
+| 是否进入 VASP | 否 | 否 | 是 |
+| 主要价值 | 快速筛选、能带和带隙 | 无 SCF 的能量/力计算 | 减少 SCF LOOP 和 wall time |
+| 大体系路径 | ACC 或按 k 点 MPI | ACC + k 点 MPI | ACC + VASP `ALGO=All` |
+
+三条路径共用相同的 CHGCAR/POTCAR 解析、有效势、PAW projector、MIMIC_US、
 基组和 $H\Psi/S\Psi$ 实现，因此直接能带验证也为 VASP 初始波函数提供数值基础。
 
-## 5. 适用范围和限制
+## 6. 适用范围和限制
 
 - HALF 计算的是给定 DeepAW 密度上的固定密度电子结构；其物理准确度受密度模型、
   泛函、POTCAR 和基组共同影响。
@@ -266,10 +329,11 @@ HALF-only 计时，但清楚显示了稠密初始化瓶颈的消失。
   逐本征值误差比跨时段 wall time 更稳定。
 - ACC 的残差阈值和迭代上限应按用途选择：独立能带需要更严格，VASP 初始化可以
   更宽松。
+- 当前力命令采用中心有限差分，尚未实现解析力。
 
-## 6. 结论
+## 7. 结论
 
-DeePAW-HALF 已形成从学习密度到平面波电子结构的两条可用路径：
+DeePAW-HALF 已形成从学习密度到平面波电子结构的三条可用路径：
 
 - **直接计算**：无需 VASP，HALF 可从 DeepAW 密度直接生成高对称路径能带；
   HfO₂ 能带相对 VASP 的 MAE 为 0.840 meV，Gamma/MIMIC_US 本征值相对 HAPPY
@@ -277,12 +341,15 @@ DeePAW-HALF 已形成从学习密度到平面波电子结构的两条可用路�
 - **加速自洽**：HALF 把环境感知的初始波函数直接送入 VASP；HfO₂ 的 SCF LOOP
   从 16 降至 4，MP-85 的平均 LOOP 从 25.365 降至 11.435（2.218×），
   CsPbBr₃ 上 ACC 又把大基组初始化的总作业时间降低 6.75 倍。
+- **能量和力**：HALF 无需先运行 SCF 即可计算 Harris 总能量与原子力；Si 验证
+  与 HAPPY 分别达到 $3.425\times10^{-12}$ eV/cell 和
+  $2.238\times10^{-9}$ eV/Angstrom 一致性，力计算加速 45.31 倍。
 
-因此 HALF 不只是 HAPPY 的 Fortran/CUDA 复刻，也是一层可复用的“密度—波函数”
-接口：向上连接 DeepAW 密度模型，向下既可独立输出能带，也可为 VASP 提供更好的
-SCF 起点。
+因此 HALF 不只是 HAPPY 的 Fortran/CUDA 复刻，也是一层可复用的“密度—电子结构”
+接口：向上连接 DeepAW 密度模型，向下可输出能带、能量、力和波函数，也可为
+VASP 提供更好的 SCF 起点。
 
-## 7. 数据与复现记录
+## 8. 数据与复现记录
 
 - HfO₂ 能带数据：
   [`assets/hfo2_half_direct_bs.json`](assets/hfo2_half_direct_bs.json)
@@ -296,6 +363,10 @@ SCF 起点。
   [`cspbbr3_vasp_acc_pro6000.json`](cspbbr3_vasp_acc_pro6000.json)
 - MP-85 HALF/SAD 汇总记录：
   [`mp85_deepaw_half_vs_sad_ediff1e4.json`](mp85_deepaw_half_vs_sad_ediff1e4.json)
+- Si 总能量一致性：
+  [`si_total_energy_parity.json`](si_total_energy_parity.json)
+- Si 有限差分力一致性与性能：
+  [`si_force_parity.json`](si_force_parity.json)
 
 English version:
 [`HFO2_VASP_HALF_VS_SAD_KSPACING035.md`](HFO2_VASP_HALF_VS_SAD_KSPACING035.md).

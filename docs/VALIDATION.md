@@ -9,6 +9,21 @@ Full-mesh Si (54 k points) and HfO2 (64 k points) checks close the output
 electron count to within `1.0e-5 e`; the detailed record is
 [`validation/potcar_augmentation_force_si_hfo2.json`](validation/potcar_augmentation_force_si_hfo2.json).
 
+The current force functional treats the DeepAW smooth input density as frozen.
+Its Harris response therefore contains only the XC-kernel contraction caused
+by translating the POTCAR core density; it does not translate `PSPRHO` and has
+no Hartree response. Atomic PAW double counting is reconstructed from POTCAR
+and is independent of the CHGCAR augmentation tail. The latest direct Si/HfO2
+numbers and the remaining variational-consistency work are recorded below.
+
+A direct comparison against non-converged VASP `LMAXMIX=-1` MIMIC_US energy
+and forces is recorded in
+[`validation/HARRIS_VASP_MIMIC_US_ENERGY_FORCE.zh-CN.md`](validation/HARRIS_VASP_MIMIC_US_ENERGY_FORCE.zh-CN.md).
+It identifies unresolved PAW onsite energy and force differences; no agreement
+claim is made until those terms close quantitatively.
+The corresponding machine-readable values are in
+[`validation/harris_vasp_mimic_us_energy_force.json`](validation/harris_vasp_mimic_us_energy_force.json).
+
 HAPPY is the numerical oracle for HALF. Comparisons use identical CHGCAR,
 POTCAR, XC, ENCUT, k points and band counts.
 

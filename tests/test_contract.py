@@ -15,6 +15,7 @@ def test_expected_project_surface_exists():
         "src/half_basis.F90",
         "src/half_kpoints.F90",
         "src/half_energy.F90",
+        "src/half_paw_atomic_energy.F90",
         "src/half_parallel.F90",
         "src/half_library.F90",
         "src/half_c_api.F90",
@@ -363,6 +364,23 @@ def test_physical_constants_follow_happy_definition():
     assert "autoa = 0.529177249_dp" in source
     assert "rytoev = 13.605826_dp" in source
     assert "hsqdtm = rytoev*autoa*autoa" in source
+
+
+def test_potcar_atomic_double_counting_and_frozen_density_force_are_native():
+    atomic = (ROOT / "src/half_paw_atomic_energy.F90").read_text().lower()
+    local = (ROOT / "src/half_local_forces.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "compute_paw_atomic_double_counting" in atomic
+    assert "p%qato" in atomic
+    assert "p%wae" in atomic and "p%wps" in atomic
+    assert "p%dexccore" in atomic
+    assert "call compute_paw_atomic_double_counting" in cli
+    harris = local.split("subroutine harris_correction_forces", 1)[1].split(
+        "end subroutine harris_correction_forces", 1
+    )[0]
+    assert "atomic_radial_density_forces" in harris
+    assert ".true.,forces" in harris
+    assert "edeps" not in harris
 
 
 def test_si_reference_input_contract():

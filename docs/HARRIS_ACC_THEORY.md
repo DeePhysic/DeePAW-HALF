@@ -122,9 +122,9 @@ $$
 
 Therefore the bands are coupled through one common variational subspace. A
 band block is an execution unit for FFTs and contractions, not an independent
-eigenproblem. This is the same essential distinction as VASP `ALGO=All`:
-execution is blocked, while optimization and orthogonality remain global over
-all requested bands.
+eigenproblem. Execution is blocked to control memory traffic and increase GPU
+occupancy, while optimization and orthogonality remain global over all
+requested bands.
 
 ## 4. Matrix-free application of H and S
 
@@ -302,7 +302,7 @@ For that reason HALF permits either a loose residual tolerance or termination
 at the iteration limit. This is an explicit accuracy/performance tradeoff, not
 a claim that the returned states are final SCF orbitals. In the validated
 20-atom CsPbBr3 case, 40 ACC iterations ended with per-k-point maximum
-residuals from 0.022 to 0.410 eV. Nevertheless, ACC and dense VASP_LIKE both
+residuals from 0.022 to 0.410 eV. Nevertheless, ACC and the dense baseline both
 required five VASP SCF loops and reached the same reported final energy.
 
 ## 7. Complexity and memory

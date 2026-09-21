@@ -8,7 +8,6 @@
     "ENCUT_eV_basis_boundary_retries": 521,
     "KSPACING_Angstrom_inverse": 0.35,
     "ALGO": "All",
-    "LMAXMIX": -1,
     "ISPIN": 1,
     "LHALF_API": false
   },

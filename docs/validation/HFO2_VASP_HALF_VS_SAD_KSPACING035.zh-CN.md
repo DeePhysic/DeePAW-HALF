@@ -14,7 +14,7 @@ DeePAW-HALF 把 DeepAW 预测的平滑电子密度转化为可直接使用的平
 
 HfO₂ 验证中，HALF 独立能带与 VASP 的带能量平均绝对差为 **0.840 meV**，
 采样带隙相差 **0.557 meV**。在 VASP SCF 中，HALF 初始化把电子迭代从
-16 次降至 4–5 次，端到端加速 **1.38–1.80 倍**。在 85 个材料的批量测试中，
+16 次降至 4 次，端到端加速 **1.38 倍**。在 85 个材料的批量测试中，
 平均 SCF LOOP 从 25.365 降至 11.435，即平均迭代加速 **2.218 倍**。对于更大的
 20 原子 CsPbBr₃，矩阵自由 ACC 求解器在保持 5 次 SCF LOOP 和相同最终能量的
 同时，把总耗时从 1861.0 s 降到 275.5 s，即 **6.75 倍加速**。
@@ -178,25 +178,14 @@ HALF_MODE  = ACC
 测试使用 VASP 6.6.0 full-complex `vasp_std`、`KSPACING=0.35`、36 个不可约
 k 点、`PREC=High`（实际 ENCUT=500 eV）、`ALGO=All`、`EDIFF=1E-4`、ISPIN=1。
 
-#### `LMAXPAW=-1`
-
 | 指标 | DeePAW-HALF | VASP SAD | HALF 效果 |
 |---|---:|---:|---:|
 | SCF LOOP | **4** | 16 | 减少 75%，迭代数加速 4.0× |
 | 端到端 wall time | **193.44 s** | 266.96 s | **1.38×**，节省 27.54% |
 | 最终 TOTEN | -121.101882671 eV | -121.101878858 eV | 相差 3.813 µeV/cell |
 
-#### VASP 默认 LMAX
-
-| 指标 | DeePAW-HALF | VASP SAD | HALF 效果 |
-|---|---:|---:|---:|
-| SCF LOOP | **5** | 16 | 减少 68.75%，迭代数加速 3.2× |
-| 端到端 wall time | **145.76 s** | 262.70 s | **1.80×**，节省 44.51% |
-| 最终 TOTEN | -121.040359303 eV | -121.040376497 eV | 相差 17.194 µeV/cell |
-
-两组结果说明 HALF 改变的是到达自洽解的路径，而不是最终 VASP 解。不同 LMAX
-设置之间的单次 wall time 会受到节点负载和缓存影响，因此跨设置比较应优先使用
-SCF LOOP；同一设置内的 HALF/SAD 才是对应的端到端对照。
+微电子伏量级的最终能量差说明 HALF 改变的是到达自洽解的路径，而不是最终
+VASP 解。
 
 Si 的独立 eSCN 验证也得到相同趋势：HALF 从 eSCN 密度生成轨道后用了 4 个
 SCF LOOP，而原基准 SAD 为 12 个；同机 SAD 复跑为 11 个，`LOOP+` 时间从
@@ -206,7 +195,7 @@ SCF LOOP，而原基准 SAD 为 12 个；同机 SAD 复跑为 11 个，`LOOP+` �
 
 更大范围的测试包含 85 个 Materials Project 结构，使用预先生成的 DeepAW
 CHGCAR，设置为 `LHALF_API=.FALSE.`、`EDIFF=1E-4`、`KSPACING=0.35`、
-`ALGO=All`、`LMAXMIX=-1` 和 ISPIN=1。HALF 与 SAD 两组都达到 85/85 收敛并
+`ALGO=All` 和 ISPIN=1。HALF 与 SAD 两组都达到 85/85 收敛并
 正常结束；85 个 HALF `vasp.out` 均包含初始化横幅和 k 点初始化记录。
 
 | 85 个材料的汇总 | DeePAW-HALF | VASP SAD | HALF 效果 |
@@ -241,7 +230,7 @@ $N_{\mathrm{PL}}=20640$--$20780$；两份稠密 complex128 H/S 本身就需要�
 
 | HALF 初始化方案 | VASP 总耗时 | SCF LOOP | 最终 E0 |
 |---|---:|---:|---:|
-| 稠密 `VASP_LIKE` | 1861.047 s | 5 | -63.791680 eV |
+| 稠密基线 | 1861.047 s | 5 | -63.791680 eV |
 | 矩阵自由 `ACC` | **275.522 s** | 5 | -63.791680 eV |
 
 ACC 总体加速 **6.75×**。扣除 VASP `LOOP+` 后，HALF 初始化及其他外围阶段由
@@ -286,7 +275,7 @@ DeePAW-HALF 已形成从学习密度到平面波电子结构的两条可用路�
   HfO₂ 能带相对 VASP 的 MAE 为 0.840 meV，Gamma/MIMIC_US 本征值相对 HAPPY
   达到约 $10^{-11}$ eV 一致性。
 - **加速自洽**：HALF 把环境感知的初始波函数直接送入 VASP；HfO₂ 的 SCF LOOP
-  从 16 降至 4–5，MP-85 的平均 LOOP 从 25.365 降至 11.435（2.218×），
+  从 16 降至 4，MP-85 的平均 LOOP 从 25.365 降至 11.435（2.218×），
   CsPbBr₃ 上 ACC 又把大基组初始化的总作业时间降低 6.75 倍。
 
 因此 HALF 不只是 HAPPY 的 Fortran/CUDA 复刻，也是一层可复用的“密度—波函数”
@@ -305,10 +294,8 @@ SCF 起点。
   [`hfo2_cuda_uspp_parity.json`](hfo2_cuda_uspp_parity.json)
 - CsPbBr₃ ACC/VASP 记录：
   [`cspbbr3_vasp_acc_pro6000.json`](cspbbr3_vasp_acc_pro6000.json)
-- Si eSCN/HALF/SAD 记录：
-  [`si_escn_half_vs_sad_ediff1e4_lmaxmixm1.json`](si_escn_half_vs_sad_ediff1e4_lmaxmixm1.json)
 - MP-85 HALF/SAD 汇总记录：
-  [`mp85_deepaw_half_vs_sad_ediff1e4_lmaxmixm1.json`](mp85_deepaw_half_vs_sad_ediff1e4_lmaxmixm1.json)
+  [`mp85_deepaw_half_vs_sad_ediff1e4.json`](mp85_deepaw_half_vs_sad_ediff1e4.json)
 
 English version:
 [`HFO2_VASP_HALF_VS_SAD_KSPACING035.md`](HFO2_VASP_HALF_VS_SAD_KSPACING035.md).

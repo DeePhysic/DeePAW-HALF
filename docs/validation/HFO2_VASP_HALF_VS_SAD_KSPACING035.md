@@ -17,8 +17,8 @@ capabilities:
 
 For HfO2, the standalone HALF bands have a **0.840 meV** mean absolute
 difference from VASP and the sampled gap differs by **0.557 meV**. In VASP
-SCF, HALF initialization reduces the electronic iterations from 16 to 4--5
-and gives an end-to-end speedup of **1.38--1.80x**. Across an 85-material
+SCF, HALF initialization reduces the electronic iterations from 16 to 4
+and gives an end-to-end speedup of **1.38x** in the primary comparison. Across an 85-material
 benchmark, mean SCF iterations fall from 25.365 to 11.435, a **2.218x mean-loop
 speedup**. For a larger 20-atom CsPbBr3 case, the matrix-free ACC solver
 preserves five SCF loops and the same final energy while reducing total time
@@ -197,27 +197,14 @@ The VASP 6.6.0 full-complex `vasp_std` benchmark uses `KSPACING=0.35`, 36
 irreducible k points, `PREC=High` (actual ENCUT 500 eV), `ALGO=All`,
 `EDIFF=1E-4`, and ISPIN=1.
 
-#### `LMAXPAW=-1`
-
 | Metric | DeePAW-HALF | VASP SAD | HALF effect |
 |---|---:|---:|---:|
 | SCF loops | **4** | 16 | 75% fewer; 4.0x iteration reduction |
 | End-to-end wall time | **193.44 s** | 266.96 s | **1.38x**; 27.54% less |
 | Final TOTEN | -121.101882671 eV | -121.101878858 eV | 3.813 micro-eV/cell |
 
-#### Default VASP LMAX
-
-| Metric | DeePAW-HALF | VASP SAD | HALF effect |
-|---|---:|---:|---:|
-| SCF loops | **5** | 16 | 68.75% fewer; 3.2x iteration reduction |
-| End-to-end wall time | **145.76 s** | 262.70 s | **1.80x**; 44.51% less |
-| Final TOTEN | -121.040359303 eV | -121.040376497 eV | 17.194 micro-eV/cell |
-
-These results show that HALF changes the route to convergence rather than the
-final VASP solution. Single-run wall times across the two different LMAX
-settings are affected by node load and cache state, so the cross-setting
-ablation should emphasize iteration counts. HALF and SAD wall times within
-the same setting are the corresponding end-to-end comparisons.
+The micro-eV final-energy difference shows that HALF changes the route to
+convergence rather than the final VASP solution.
 
 An independent Si eSCN validation shows the same trend: HALF-generated waves
 required four SCF loops, versus 12 for the original SAD baseline. A
@@ -228,7 +215,7 @@ same-machine SAD rerun took 11 loops, and `LOOP+` time fell from 2.4036 to
 
 The broader benchmark covers 85 Materials Project structures and uses
 precomputed DeepAW CHGCAR densities, `LHALF_API=.FALSE.`, `EDIFF=1E-4`,
-`KSPACING=0.35`, `ALGO=All`, `LMAXMIX=-1`, and ISPIN=1. Both HALF and SAD
+`KSPACING=0.35`, `ALGO=All`, and ISPIN=1. Both HALF and SAD
 sets reached EDIFF and terminated normally for all 85 structures. Every HALF
 `vasp.out` contains the initialization banner and initialized-k-point records.
 
@@ -267,7 +254,7 @@ complex128 H/S matrices alone require about 13.8 GB.
 
 | HALF initialization | Total VASP time | SCF loops | Final E0 |
 |---|---:|---:|---:|
-| Dense `VASP_LIKE` | 1861.047 s | 5 | -63.791680 eV |
+| Dense baseline | 1861.047 s | 5 | -63.791680 eV |
 | Matrix-free `ACC` | **275.522 s** | 5 | -63.791680 eV |
 
 ACC gives a **6.75x total speedup**. After subtracting VASP's `LOOP+`, HALF
@@ -323,7 +310,7 @@ plane-wave electronic structure:
   VASP, while Gamma/MIMIC_US eigenvalues agree with HAPPY at about
   $10^{-11}$ eV.
 - **SCF acceleration:** HALF injects environment-aware initial wavefunctions
-  directly into VASP. HfO2 SCF loops fall from 16 to 4--5; across MP-85, mean
+  directly into VASP. HfO2 SCF loops fall from 16 to 4; across MP-85, mean
   loops fall from 25.365 to 11.435 (2.218x); and ACC reduces the large-basis
   CsPbBr3 job time by 6.75x relative to dense HALF initialization.
 
@@ -344,10 +331,8 @@ starting point.
   [`hfo2_cuda_uspp_parity.json`](hfo2_cuda_uspp_parity.json)
 - CsPbBr3 ACC/VASP record:
   [`cspbbr3_vasp_acc_pro6000.json`](cspbbr3_vasp_acc_pro6000.json)
-- Si eSCN/HALF/SAD record:
-  [`si_escn_half_vs_sad_ediff1e4_lmaxmixm1.json`](si_escn_half_vs_sad_ediff1e4_lmaxmixm1.json)
 - MP-85 aggregate HALF/SAD record:
-  [`mp85_deepaw_half_vs_sad_ediff1e4_lmaxmixm1.json`](mp85_deepaw_half_vs_sad_ediff1e4_lmaxmixm1.json)
+  [`mp85_deepaw_half_vs_sad_ediff1e4.json`](mp85_deepaw_half_vs_sad_ediff1e4.json)
 
 中文版：
 [`HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md`](HFO2_VASP_HALF_VS_SAD_KSPACING035.zh-CN.md).

@@ -270,6 +270,7 @@ def test_analytic_hellmann_feynman_force_components_are_native_fortran():
     assert "subroutine ewald_forces" in energy
     assert "dij_atom(iat,:,:)-eigenvalues(ib)*paw(it)%qij" in nonlocal_force
     assert "subroutine local_ionic_forces" in local_force
+    assert "subroutine nlcc_forces" in local_force
     assert "nonlocal_force_max_error" in check
     assert "ewald_force_max_error" in check
 

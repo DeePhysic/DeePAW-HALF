@@ -17,8 +17,9 @@ QDEP、任意 k 点、多 k 点能带、spglib
 各分量在 Python 与 Fortran 实现之间的差小于 `4e-12 eV`。旧的中心差分力只
 保留为解析力的数值 oracle，不再作为正式力功能。原生解析力目前已经实现
 Ewald、倒空间局域势以及
-广义 PAW `D-epsilon Q` Hellmann--Feynman 导数；augmentation、NLCC 与固定密度
-Harris 修正尚在补齐，因此当前不得把它表述为可用于生产的总力。原生
+广义 PAW `D-epsilon Q` Hellmann--Feynman 导数，以及 NLCC/`FORCOR` partial-core
+导数；augmentation 与固定密度 Harris 修正尚在补齐，因此当前不得把它表述为
+可用于生产的总力。原生
 `vaspwave.h5` 输出以及 HDF5 电荷/结构/内嵌 POTCAR 输入已经支持。
 
 PAW 无矩阵算符、全带约束最小化、残差预条件、S 度量正交化、重启式

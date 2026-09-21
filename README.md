@@ -56,7 +56,8 @@ across the Python and Fortran implementations to better than `4e-12 eV`. The
 old central finite-difference force path is retained only as a numerical
 oracle. A native analytic force implementation
 now contains the Ewald, reciprocal-space local, and generalized PAW
-`D-epsilon Q` Hellmann-Feynman derivatives; augmentation, NLCC, and fixed-density
+`D-epsilon Q` Hellmann-Feynman derivatives, including the NLCC/`FORCOR`
+partial-core derivative; augmentation and fixed-density
 Harris corrections are still being completed and must not yet be presented as
 a production total force. Native `vaspwave.h5` output and HDF5
 charge/structure/embedded-POTCAR input are supported. Dense H/S assembly,

@@ -5,7 +5,7 @@ module half_local_forces
   use half_fft,only:fft3_forward
   implicit none
   private
-  public::local_ionic_forces
+  public::local_ionic_forces,nlcc_forces
 contains
   subroutine local_ionic_forces(charge,potcars,crystal,forces,energy)
     ! VASP FORLOC in a full complex FFT representation.  The input density
@@ -53,6 +53,50 @@ contains
     end do
     if(present(energy))energy=total_energy
   end subroutine local_ionic_forces
+
+  subroutine nlcc_forces(vxc,potcars,crystal,shape,forces)
+    ! VASP FORCOR/FORHAR(LPAR=.TRUE.) in a full complex FFT layout:
+    ! F_I = - integral v_xc(r) d n_core,I(r-R_I)/dR_I dr.
+    ! CHGCAR/core arrays store Omega*n, so the integral is a grid average.
+    real(dp),intent(in)::vxc(:)
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    integer,intent(in)::shape(3)
+    real(dp),intent(out)::forces(:,:)
+    complex(dp),allocatable,target::work(:),vxc_g(:)
+    real(dp),allocatable::m2(:)
+    real(dp)::q(3),g2,gn,radial,phase,rpos(3),term
+    integer::n,idx,i1,i2,i3,n1,n2,n3,it,iat,ion0
+    n=size(vxc)
+    if(n/=product(shape).or.size(forces,1)/=crystal%nions.or.size(forces,2)/=3) &
+      error stop 'HALF: NLCC force dimensions do not match the FFT grid/crystal'
+    allocate(work(n),vxc_g(n));work=cmplx(vxc,0.0_dp,dp);call fft3_forward(shape,work,vxc_g)
+    vxc_g=vxc_g/real(n,dp);forces=0.0_dp
+    do it=1,size(potcars)
+      ion0=sum(crystal%counts(:it-1));if(.not.potcars(it)%has_core)cycle
+      allocate(m2(size(potcars(it)%pspcor)));call spline_second(potcars(it)%pspcor,potcars(it)%psp_gmax,m2)
+      do iat=1,crystal%counts(it)
+        rpos=matmul(crystal%positions(ion0+iat,:),crystal%lattice);idx=0
+        do i1=0,shape(1)-1
+          n1=fft_integer(i1,shape(1))
+          do i2=0,shape(2)-1
+            n2=fft_integer(i2,shape(2))
+            do i3=0,shape(3)-1
+              n3=fft_integer(i3,shape(3));idx=idx+1
+              q=matmul([real(n1,dp),real(n2,dp),real(n3,dp)],crystal%reciprocal);g2=dot_product(q,q)
+              if(g2<=1.0e-12_dp)cycle
+              gn=sqrt(g2);if(gn>potcars(it)%psp_gmax-3*potcars(it)%psp_gmax/real(size(m2),dp))cycle
+              radial=spline_eval(potcars(it)%pspcor,m2,potcars(it)%psp_gmax,gn)
+              phase=dot_product(q,rpos)
+              term=radial*aimag(conjg(vxc_g(idx))*cmplx(cos(phase),-sin(phase),dp))
+              forces(ion0+iat,:)=forces(ion0+iat,:)-q*term
+            end do
+          end do
+        end do
+      end do
+      deallocate(m2)
+    end do
+  end subroutine nlcc_forces
 
   subroutine reorder(input,shape,output)
     real(dp),intent(in)::input(:);integer,intent(in)::shape(3);real(dp),intent(out)::output(:)

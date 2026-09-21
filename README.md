@@ -1,19 +1,21 @@
 # DeePAW–HALF
 
-**HALF** is the CPU/CUDA Fortran implementation of the fixed-density electronic-
-structure reconstruction performed by DeePAW–HAPPY. The project name expands
-to **H**arris **A**ssociative **L**inearized Augmented Plane Wave **F**ortran.
+**HALF** is DeePAW's fixed-density electronic-structure reconstruction method.
+It is available as Python, CPU Fortran, and GPU/CUDA Fortran implementations.
+The project name expands to **H**arris **A**ssociative **L**inearized Augmented
+Plane Wave **F**ortran.
 
-The scientific contract is intentionally the same as HAPPY:
+All three implementations share the same scientific workflow:
 
 ```text
 structure -> DeepAW -> smooth CHGCAR -> HALF -> H(k), S(k), bands, waves, energy
 ```
 
-HALF is not a new learned Hamiltonian. It reconstructs the local potential and
-linearized PAW/USPP-like operator from the predicted smooth density and the
-matching VASP PAW dataset. HAPPY remains the executable numerical oracle while
-the port is developed.
+DeePAW-HALF is not a new learned Hamiltonian. It reconstructs the local
+potential and linearized PAW/USPP-like operator from the predicted smooth
+density and the matching VASP PAW dataset. Agreement among the Python, CPU
+Fortran, and GPU/CUDA Fortran implementations provides internal numerical
+cross-validation.
 
 ## Current milestone
 
@@ -23,7 +25,7 @@ library interface:
 - VASP CHGCAR structure and smooth-grid reader that stops after exactly
   `NGX*NGY*NGZ` values;
 - lattice, reciprocal-lattice and plane-wave basis data models;
-- Gamma-point plane-wave selection using HAPPY's cutoff convention;
+- Gamma-point plane-wave selection using the DeePAW-HALF cutoff convention;
 - smooth-electron-count validation;
 - multi-dataset text POTCAR parsing;
 - complete-grid Hartree, ionic, NLCC, LDA and PBE potentials on CPU and GPU;
@@ -39,18 +41,20 @@ library interface:
 - optional CPU MPI distribution over independent k points;
 - CUDA 12.4 and CUDA 13.0 build presets;
 - a correctness-checked backend benchmark;
-- a unified `half` CLI, HAPPY-compatible command aliases, and parity-oriented
+- a unified `half` CLI, legacy-compatible command aliases, and parity-oriented
   tests;
 - installable `libhalf.so` with a versioned C ABI, portable Fortran bindings,
   CMake/pkg-config metadata, and runtime CPU/CUDA backend selection.
 
-The CUDA MIMIC_US path reproduces HAPPY for both Si (725 plane waves) and HfO2
-(3407 plane waves): the tested eigenvalues agree to about `1e-11 eV` or better.
+The GPU/CUDA MIMIC_US implementation agrees with the Python implementation for
+both Si (725 plane waves) and HfO2 (3407 plane waves): the tested eigenvalues
+agree to about `1e-11 eV` or better.
 Explicit multi-k bands, Gamma-centered full/irreducible spglib meshes,
 occupations, Ewald and the fixed-density Harris total energy are also native
-Fortran features. The Si total energy and every reported component agree with
-HAPPY to better than `4e-12 eV`. The old central finite-difference force path
-is retained only as a numerical oracle. A native analytic force implementation
+Fortran features. The Si total energy and every reported component agree
+across the Python and Fortran implementations to better than `4e-12 eV`. The
+old central finite-difference force path is retained only as a numerical
+oracle. A native analytic force implementation
 now contains the Ewald, reciprocal-space local, and generalized PAW
 `D-epsilon Q` Hellmann-Feynman derivatives; augmentation, NLCC, and fixed-density
 Harris corrections are still being completed and must not yet be presented as
@@ -65,18 +69,17 @@ Rayleigh-Ritz update, complexity, and direct VASP handoff is given in
 
 ## Numerical model, derived step by step
 
-HAPPY's target model, and HALF's long-term porting target, is a
-**fixed-density** reconstruction: it reads the smooth valence density
-`rho~(r)` from `CHGCAR` and does not run an SCF cycle. At a chosen cutoff, the
-wavefunction is expanded in plane waves `|k+G>` and the following generalized
-Hermitian problem is solved:
+The DeePAW-HALF model is a **fixed-density** reconstruction: it reads the
+smooth valence density `rho~(r)` from `CHGCAR` and does not run an SCF cycle.
+At a chosen cutoff, the wavefunction is expanded in plane waves `|k+G>` and
+the following generalized Hermitian problem is solved:
 
 $$
 H(\mathbf{k})\,\mathbf{c}_n
 =\varepsilon_n S(\mathbf{k})\,\mathbf{c}_n .
 $$
 
-For the full HAPPY `MIMIC_US` operator, the dense matrices have the form
+For the full DeePAW-HALF `MIMIC_US` operator, the dense matrices have the form
 
 $$
 H_{\mathbf G\mathbf G'}(\mathbf k)=
@@ -112,7 +115,7 @@ D_{ij}^I=D_{ij}^{I,\mathrm{ION}}
 +\int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r-\mathbf R_I)\,d^3r.
 $$
 
-Here `rho~_G` is HAPPY's electron-number-normalized density coefficient,
+Here `rho~_G` is the electron-number-normalized density coefficient,
 `Omega` is the cell volume, and `e^2` is the electrostatic conversion factor
 in the eV/angstrom convention. `rho_core` is the POTCAR partial-core density
 used by NLCC only; it is not added to the Hartree density. `DION` is the frozen
@@ -164,12 +167,13 @@ BLAS/OpenMP thread controls were set to one.
 
 | implementation | resource | wall time |
 | --- | --- | ---: |
-| HALF CUDA (`--uspp-dij`) | RTX PRO 6000 | 1.696 s median |
-| HALF CPU Fortran (`--uspp-dij`) | one logical CPU | 43.790 s |
-| HAPPY Python (`--uspp-dij`) | one logical CPU | 64.23 s |
+| DeePAW-HALF GPU/CUDA Fortran (`--uspp-dij`) | RTX PRO 6000 | 1.696 s median |
+| DeePAW-HALF CPU Fortran (`--uspp-dij`) | one logical CPU | 43.790 s |
+| DeePAW-HALF Python (`--uspp-dij`) | one logical CPU | 64.23 s |
 
-The numerically equivalent CPU Fortran result is `1.47x` faster than HAPPY;
-CUDA is `37.87x` faster than HAPPY and `25.82x` faster than CPU Fortran. Its
+The CPU Fortran implementation is `1.47x` faster than the Python
+implementation; GPU/CUDA Fortran is `37.87x` faster than Python and `25.82x`
+faster than CPU Fortran. Its
 five fresh-process samples have a `1.696 s` median, split into
 `0.258 s` potential construction, `0.349 s` H/S assembly including QDEP, and
 `1.061 s` cuSOLVER time. The earlier 4090 DION-only measurement remains
@@ -233,7 +237,7 @@ cmake --build --preset cuda13-release
 
 ## Command-line interface
 
-The unified CLI follows the argument style of HAPPY while allowing explicit
+The unified CLI preserves the established argument style while allowing explicit
 CPU/CUDA backend selection:
 
 ```bash
@@ -318,7 +322,7 @@ option list.
 `bands --output-prefix NAME` writes `NAME.json`, `NAME.csv`, `NAME.npz`, and a
 dependency-free `NAME.png` plot.  The report includes VBM, CBM, sampled gap,
 Gamma direct gap, path distance, basis size, and overlap diagnostics.
-`energy --output-prefix NAME` writes JSON plus a HAPPY-compatible NPZ containing
+`energy --output-prefix NAME` writes JSON plus a legacy-compatible NPZ containing
 k points, weights, eigenvalues, occupations, and forces.
 
 ## Library API and VASP integration
@@ -383,7 +387,8 @@ example:
 
 ## Accuracy policy
 
-Every production module is accepted only after comparison with HAPPY on the
-same input. Default tolerances and the required observables are documented in
+Every production module is accepted only after cross-implementation comparison
+on the same input. Default tolerances and the required observables are
+documented in
 [`docs/VALIDATION.md`](docs/VALIDATION.md). Performance work begins only after
 the corresponding numerical row passes.

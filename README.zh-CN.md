@@ -1,19 +1,22 @@
 # DeePAW–HALF
 
 **HALF**（**H**arris **A**ssociative **L**inearized **A**ugmented **P**lane
-**W**ave **F**ortran）是 DeePAW–HAPPY 的 CPU/CUDA Fortran 固定密度电子结构
-重建实现。它不是新的机器学习哈密顿量：输入是 DeepAW 或 VASP 产生的平滑
-`CHGCAR` 密度以及匹配的 PAW `POTCAR`，输出为固定密度下的本征值与验证报告。
+**W**ave **F**ortran）是 DeePAW 的固定密度电子结构重建方法，包含 Python、
+CPU Fortran 和 GPU/CUDA Fortran 三种实现。它不是新的机器学习哈密顿量：输入是
+DeepAW 或 VASP 产生的平滑 `CHGCAR` 密度以及匹配的 PAW `POTCAR`，输出为固定
+密度下的本征值与验证报告。
 
 ```text
 结构 -> DeepAW -> 平滑 CHGCAR -> HALF -> H(k), S(k), 能带/本征值
 ```
 
-HAPPY 是移植过程中的数值 oracle。当前 CUDA Gamma/MIMIC_US 固定密度路径已在
-Si 与 HfO2 上通过逐本征值验证；CPU QDEP、任意 k 点、多 k 点能带、spglib
+三种实现之间的相互一致性构成内部数值交叉验证。当前 GPU/CUDA Fortran
+Gamma/MIMIC_US 固定密度路径已在 Si 与 HfO2 上通过逐本征值验证；CPU Fortran
+QDEP、任意 k 点、多 k 点能带、spglib
 不可约 k 网格、占据数、Ewald 和 Harris 固定密度总能量也已闭合。Si 总能量及
-各分量与 HAPPY 的差小于 `4e-12 eV`。旧的中心差分力只保留为解析力的数值
-oracle，不再作为正式力功能。原生解析力目前已经实现 Ewald、倒空间局域势以及
+各分量在 Python 与 Fortran 实现之间的差小于 `4e-12 eV`。旧的中心差分力只
+保留为解析力的数值 oracle，不再作为正式力功能。原生解析力目前已经实现
+Ewald、倒空间局域势以及
 广义 PAW `D-epsilon Q` Hellmann--Feynman 导数；augmentation、NLCC 与固定密度
 Harris 修正尚在补齐，因此当前不得把它表述为可用于生产的总力。原生
 `vaspwave.h5` 输出以及 HDF5 电荷/结构/内嵌 POTCAR 输入已经支持。
@@ -24,7 +27,7 @@ Rayleigh-Ritz、复杂度以及 VASP 直接内存接入的完整推导见
 
 ## 数值模型：从固定密度到本征值
 
-HAPPY 的目标模型、也是 HALF 的长期移植目标，是**固定密度**重建：它读取
+DeePAW-HALF 采用**固定密度**重建：它读取
 `CHGCAR` 中的平滑价电子密度 `rho~(r)`，不做自洽场（SCF）迭代。在给定 ENCUT
 下，波函数用平面波 `|k+G>` 展开，并求解：
 
@@ -33,7 +36,7 @@ H(\mathbf{k})\,\mathbf{c}_n
 =\varepsilon_n S(\mathbf{k})\,\mathbf{c}_n .
 $$
 
-对于完整的 HAPPY `MIMIC_US` 算符，稠密矩阵为：
+对于完整的 DeePAW-HALF `MIMIC_US` 算符，稠密矩阵为：
 
 $$
 H_{\mathbf G\mathbf G'}(\mathbf k)=
@@ -67,7 +70,7 @@ D_{ij}^I=D_{ij}^{I,\mathrm{ION}}
 +\int V_{\mathrm{eff}}(\mathbf r)Q_{ij}^{I,\mathrm{DEP}}(\mathbf r-\mathbf R_I)\,d^3r.
 $$
 
-这里 `rho~_G` 是 HAPPY 的电子数归一化密度系数，`Omega` 是胞体积，`e^2` 是
+这里 `rho~_G` 是电子数归一化密度系数，`Omega` 是胞体积，`e^2` 是
 eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用于 NLCC 的
 部分芯密度，不会重复加入 Hartree 密度。`DION` 是 POTCAR 固定 onsite 项，
 `QDEP` 才给出势依赖的 MIMIC_US 校正；`VH(G=0)` 是势规范并设为零。
@@ -229,7 +232,7 @@ HfO2 的 36-k 点 CPU 实测中，1/2/4 ranks 分别为
 `bands --output-prefix NAME` 同时生成 `NAME.json`、`NAME.csv`、`NAME.npz` 与
 无外部绘图库依赖的 `NAME.png`，其中包含 VBM、CBM、采样带隙、Gamma 直接带隙、
 路径距离、基组规模和重叠矩阵诊断。`energy --output-prefix NAME` 生成 JSON 与
-HAPPY 风格 NPZ，后者包含 k 点、权重、本征值、占据数和力。
+兼容旧格式的 NPZ，后者包含 k 点、权重、本征值、占据数和力。
 
 ## 库 API 与 VASP 接入
 
@@ -287,12 +290,12 @@ Gamma 点，对应 3407×3407 的 complex128 广义本征问题。CPU 测试将�
 
 | 实现 | 资源 | wall time |
 | --- | --- | ---: |
-| HALF CUDA（`--uspp-dij`） | RTX PRO 6000 | 1.696 s 中位数 |
-| HALF CPU Fortran（`--uspp-dij`） | 单逻辑核 | 43.790 s |
-| HAPPY Python（`--uspp-dij`） | 单逻辑核 | 64.23 s |
+| DeePAW-HALF GPU/CUDA Fortran（`--uspp-dij`） | RTX PRO 6000 | 1.696 s 中位数 |
+| DeePAW-HALF CPU Fortran（`--uspp-dij`） | 单逻辑核 | 43.790 s |
+| DeePAW-HALF Python（`--uspp-dij`） | 单逻辑核 | 64.23 s |
 
-数值等价的 CPU Fortran 比 HAPPY 快 **1.47×**；CUDA 比 HAPPY 快 **37.87×**，
-比 CPU Fortran 快 **25.82×**。五次 CUDA 新进程运行的
+CPU Fortran 实现比 Python 实现快 **1.47×**；GPU/CUDA Fortran 比 Python
+实现快 **37.87×**，比 CPU Fortran 快 **25.82×**。五次 CUDA 新进程运行的
 中位数为 `1.696 s`，其中有效势 `0.258 s`、包含 QDEP 的 H/S 组装 `0.349 s`、
 cuSOLVER `1.061 s`。更早的 4090 数据是 DION-only 历史记录，不再作为
 MIMIC_US 加速比引用。完整原始时间、环境和约束见
@@ -300,7 +303,8 @@ MIMIC_US 加速比引用。完整原始时间、环境和约束见
 
 ## 验证状态
 
-- Si Gamma/MIMIC_US：与 HAPPY 的前 8 条本征值最大偏差约 `3e-12 eV`。
+- Si Gamma/MIMIC_US：Python 与 GPU/CUDA Fortran 实现的前 8 条本征值最大
+  偏差约 `3e-12 eV`。
 - HfO2 Gamma/MIMIC_US：60 条本征值最大偏差约 `7.9e-12 eV`。
 - band path/k 网格、总能量/力与 `vaspwave.h5` 已有逐项验证记录。
 

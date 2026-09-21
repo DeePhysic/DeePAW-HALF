@@ -16,7 +16,7 @@ DeePAW-HALF 把 DeepAW 预测的平滑电子密度转化为可直接使用的平
    `D-epsilon Q` 导数。原先的有限差分结果只保留作导数 oracle，不是生产总力。
 
 HfO₂ 验证中，HALF 独立能带与 VASP 的带能量平均绝对差为 **0.840 meV**，
-采样带隙相差 **0.557 meV**。Si 的能量路径与 HAPPY 达到
+采样带隙相差 **0.557 meV**。Si 的 CUDA 与 Python 实现达到
 $3.425\times10^{-12}$ eV/cell 一致性。原先 $2.238\times10^{-9}$ eV/Angstrom
 和 **45.31 倍** 是有限差分 oracle 的验证结果，不是尚未完成的解析总力性能。
 在 VASP SCF 中，HALF 初始化把电子迭代从
@@ -38,8 +38,8 @@ DeepAW 的主要输出是平滑价电子密度，而常规能带和 VASP SCF 需
 ```
 
 HALF 不是另一个能带机器学习模型。它读取 DeepAW 平滑 `CHGCAR` 或 eSCN API
-密度，以及与元素、赝势版本严格匹配的 VASP PAW `POTCAR`，然后重建与 HAPPY
-一致的固定密度 PAW/MIMIC_US 算符。
+密度，以及与元素、赝势版本严格匹配的 VASP PAW `POTCAR`，然后重建
+DeePAW-HALF 固定密度 PAW/MIMIC_US 算符。
 
 给定 DeepAW 密度 $\widetilde\rho_0$，HALF 只构造一次 Hamiltonian：
 
@@ -119,20 +119,20 @@ VBM 对齐。
 这里验证的是“给定平滑密度后”的电子结构重建精度；最终物理精度还取决于
 DeepAW 密度、POTCAR 匹配、泛函和基组设置。
 
-### 2.4 与 Python HAPPY 的速度和数值一致性
+### 2.4 不同实现的速度和数值一致性
 
 HfO₂ Gamma/MIMIC_US 基准采用 520 eV、3407 个平面波和 60 条能带。全部程序
 使用相同 CHGCAR、POTCAR、PBE 和 complex128 精度。
 
-| 实现 | 硬件/并行 | 时间 | 相对 HAPPY |
+| DeePAW-HALF 实现 | 硬件/并行 | 时间 | 相对速度 |
 |---|---|---:|---:|
-| HAPPY Python | 单逻辑 CPU | 64.23 s | 1.00× |
-| HALF CPU Fortran | 单逻辑 CPU | 43.790 s | 1.47× |
-| HALF CUDA Fortran | RTX PRO 6000 | 1.696 s | **37.87×** |
+| Python 实现 | 单逻辑 CPU | 64.23 s | 1.00× |
+| CPU Fortran 实现 | 单逻辑 CPU | 43.790 s | 1.47× |
+| CUDA Fortran 实现 | RTX PRO 6000 | 1.696 s | **37.87×** |
 
-HALF CUDA 的 60 条本征值与 HAPPY 最大相差
+CUDA 实现的 60 条本征值与 Python 实现最大相差
 $7.80\times10^{-12}$ eV，RMS 差为 $2.31\times10^{-12}$ eV。该结果证明
-CUDA 加速没有改变 HAPPY 数值模型。此处是单 k 点算符基准，不等同于 100 k 点
+CUDA 加速没有改变 DeePAW-HALF 数值模型。此处是单 k 点算符基准，不等同于 100 k 点
 整条能带路径的端到端计时。
 
 ### 2.5 命令行入口
@@ -288,8 +288,8 @@ half energy CHGCAR.deepaw POTCAR \
   --forces --force-step 0.001 --output-prefix si_energy_force
 ```
 
-金刚石 Si 上，CUDA 内能与 HAPPY 相差 $3.425\times10^{-12}$ eV/cell，最大力分量
-差为 $2.238\times10^{-9}$ eV/Angstrom。力计算耗时 1.08 s，单核 HAPPY 为
+金刚石 Si 上，CUDA 与 Python 实现的内能相差 $3.425\times10^{-12}$ eV/cell，
+最大力分量差为 $2.238\times10^{-9}$ eV/Angstrom。力计算耗时 1.08 s，单核 Python 实现为
 48.94 s，即加速 **45.31 倍**。
 
 ### 4.3 与已有机器学习势报道结果的对比
@@ -299,7 +299,7 @@ DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著�
 
 | 方法 | 已报道能量结果 | 已报道力结果 |
 |---|---:|---:|
-| DeePAW-HALF，金刚石 Si | 与 HAPPY 相差 $3.425\times10^{-12}$ eV/cell | 最大分量差 $2.238\times10^{-9}$ eV/Angstrom；相对 HAPPY 加速 45.31× |
+| DeePAW-HALF，金刚石 Si | 内部实现相差 $3.425\times10^{-12}$ eV/cell | 最大分量差 $2.238\times10^{-9}$ eV/Angstrom；实现加速 45.31× |
 | [M3GNet](https://doi.org/10.1038/s43588-022-00349-3) | MAE 35 meV/atom | MAE 72 meV/Angstrom |
 | [CHGNet](https://doi.org/10.1038/s42256-023-00716-3) | MAE 30 meV/atom | MAE 77 meV/Angstrom |
 | [MACE-MP-0 medium](https://doi.org/10.1063/5.0297006) | MAE 20 meV/atom | MAE 45 meV/Angstrom |
@@ -340,7 +340,7 @@ DeepAW-HALF 与通用机器学习势都利用机器学习结果代替或显著�
 DeePAW-HALF 已形成从学习密度到平面波电子结构的三条可用路径：
 
 - **直接计算**：无需 VASP，HALF 可从 DeepAW 密度直接生成高对称路径能带；
-  HfO₂ 能带相对 VASP 的 MAE 为 0.840 meV，Gamma/MIMIC_US 本征值相对 HAPPY
+  HfO₂ 能带相对 VASP 的 MAE 为 0.840 meV，两个独立 Gamma/MIMIC_US 实现
   达到约 $10^{-11}$ eV 一致性。
 - **加速自洽**：HALF 把环境感知的初始波函数直接送入 VASP；HfO₂ 的 SCF LOOP
   从 16 降至 4，MP-85 的平均 LOOP 从 25.365 降至 11.435（2.218×），
@@ -349,8 +349,8 @@ DeePAW-HALF 已形成从学习密度到平面波电子结构的三条可用路�
   与广义 PAW 投影子力已经通过导数测试。其余 PAW/Harris 分量必须补齐，并与
   VASP 逐项比较后，才能给出总力精度和速度结论。
 
-因此 HALF 不只是 HAPPY 的 Fortran/CUDA 复刻，也是一层可复用的“密度—电子结构”
-接口：向上连接 DeepAW 密度模型，向下可输出能带、能量和波函数，正在补齐原生
+因此 DeePAW-HALF 是一层可复用的“密度—电子结构”接口：向上连接 DeepAW
+密度模型，向下可输出能带、能量和波函数，正在补齐原生
 解析力，也可为
 VASP 提供更好的 SCF 起点。
 
@@ -362,7 +362,7 @@ VASP 提供更好的 SCF 起点。
   [`assets/hfo2_half_vasp_band_comparison.json`](assets/hfo2_half_vasp_band_comparison.json)
 - HfO₂ HALF/SAD SCF 原始记录：
   [`hfo2_vasp_half_vs_sad_kspacing035.json`](hfo2_vasp_half_vs_sad_kspacing035.json)
-- HfO₂ CUDA/HAPPY 一致性与速度：
+- HfO₂ 跨实现一致性与速度：
   [`hfo2_cuda_uspp_parity.json`](hfo2_cuda_uspp_parity.json)
 - CsPbBr₃ ACC/VASP 记录：
   [`cspbbr3_vasp_acc_pro6000.json`](cspbbr3_vasp_acc_pro6000.json)

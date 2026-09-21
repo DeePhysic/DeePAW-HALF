@@ -23,7 +23,8 @@ capabilities:
 
 For HfO2, the standalone HALF bands have a **0.840 meV** mean absolute
 difference from VASP and the sampled gap differs by **0.557 meV**. For Si,
-the energy path reproduces HAPPY within $3.425\times10^{-12}$ eV/cell. The
+the CUDA and Python implementations agree within
+$3.425\times10^{-12}$ eV/cell. The
 previous $2.238\times10^{-9}$ eV/Angstrom finite-difference comparison and
 **45.31x** timing are validation-oracle results, not claims for the unfinished
 analytic total force. In VASP SCF, HALF initialization reduces the electronic iterations from 16 to 4
@@ -48,8 +49,8 @@ structure -> DeepAW rho -+
 
 HALF is not another machine-learned band model. It reads a DeepAW smooth
 `CHGCAR` or eSCN API density and a VASP PAW `POTCAR` with exactly matching
-elements and datasets, then reconstructs the same fixed-density PAW/MIMIC_US
-operator used by HAPPY.
+elements and datasets, then reconstructs the DeePAW-HALF fixed-density
+PAW/MIMIC_US operator.
 
 For a DeepAW density $\widetilde\rho_0$, HALF constructs the Hamiltonian once,
 
@@ -133,21 +134,21 @@ VASP executable. This validates electronic-structure reconstruction for a
 given smooth density. Ultimate physical accuracy also depends on the DeepAW
 density, POTCAR compatibility, XC functional, and basis settings.
 
-### 2.4 Numerical parity and speed versus Python HAPPY
+### 2.4 Numerical parity and implementation speed
 
 The HfO2 Gamma/MIMIC_US benchmark uses 520 eV, 3407 plane waves, and 60 bands.
 All paths use the same CHGCAR, POTCAR, PBE functional, and complex128 precision.
 
-| Implementation | Hardware/parallelism | Time | Relative to HAPPY |
+| DeePAW-HALF implementation | Hardware/parallelism | Time | Relative time |
 |---|---|---:|---:|
-| HAPPY Python | one logical CPU | 64.23 s | 1.00x |
-| HALF CPU Fortran | one logical CPU | 43.790 s | 1.47x |
-| HALF CUDA Fortran | RTX PRO 6000 | 1.696 s | **37.87x** |
+| Python implementation | one logical CPU | 64.23 s | 1.00x |
+| CPU Fortran implementation | one logical CPU | 43.790 s | 1.47x |
+| CUDA Fortran implementation | RTX PRO 6000 | 1.696 s | **37.87x** |
 
-The 60 HALF CUDA eigenvalues differ from HAPPY by at most
+The 60 CUDA eigenvalues differ from the Python implementation by at most
 $7.80\times10^{-12}$ eV, with an RMS difference of
-$2.31\times10^{-12}$ eV. CUDA acceleration therefore preserves the HAPPY
-numerical model. This is a single-k-point operator benchmark, not an
+$2.31\times10^{-12}$ eV. CUDA acceleration therefore preserves the
+DeePAW-HALF numerical model. This is a single-k-point operator benchmark, not an
 end-to-end timing for the 100-point path.
 
 ### 2.5 CLI entry point
@@ -322,10 +323,11 @@ half energy CHGCAR.deepaw POTCAR \
   --forces --force-step 0.001 --output-prefix si_energy_force
 ```
 
-For diamond Si, the CUDA internal energy differs from HAPPY by
+For diamond Si, the CUDA and Python internal energies differ by
 $3.425\times10^{-12}$ eV per cell, and the maximum force-component difference
 is $2.238\times10^{-9}$ eV/Angstrom. The force calculation took 1.08 s versus
-48.94 s for single-core HAPPY, a **45.31x speedup**.
+48.94 s for the single-core Python implementation, a **45.31x implementation
+speedup**.
 
 ### 4.3 Comparison with reported machine-learning potentials
 
@@ -336,7 +338,7 @@ beside representative published results.
 
 | Method | Reported energy result | Reported force result |
 |---|---:|---:|
-| DeePAW-HALF, diamond Si | $3.425\times10^{-12}$ eV/cell agreement with HAPPY | $2.238\times10^{-9}$ eV/Angstrom maximum component difference; 45.31x faster than HAPPY |
+| DeePAW-HALF, diamond Si | $3.425\times10^{-12}$ eV/cell internal parity | $2.238\times10^{-9}$ eV/Angstrom maximum component difference; 45.31x implementation speedup |
 | [M3GNet](https://doi.org/10.1038/s43588-022-00349-3) | 35 meV/atom MAE | 72 meV/Angstrom MAE |
 | [CHGNet](https://doi.org/10.1038/s42256-023-00716-3) | 30 meV/atom MAE | 77 meV/Angstrom MAE |
 | [MACE-MP-0 medium](https://doi.org/10.1063/5.0297006) | 20 meV/atom MAE | 45 meV/Angstrom MAE |
@@ -387,7 +389,7 @@ plane-wave electronic structure:
 
 - **Direct calculation:** HALF produces high-symmetry band structures from a
   DeepAW density without VASP. HfO2 bands have a 0.840 meV MAE relative to
-  VASP, while Gamma/MIMIC_US eigenvalues agree with HAPPY at about
+  VASP, while the independent Gamma/MIMIC_US implementations agree at about
   $10^{-11}$ eV.
 - **SCF acceleration:** HALF injects environment-aware initial wavefunctions
   directly into VASP. HfO2 SCF loops fall from 16 to 4; across MP-85, mean
@@ -399,9 +401,9 @@ plane-wave electronic structure:
   components must be completed and compared term by term with VASP before a
   total-force accuracy or speed claim is made.
 
-HALF is therefore more than a Fortran/CUDA reproduction of HAPPY. It is a
-reusable density-to-electronic-structure layer: DeepAW supplies density, while
-HALF produces bands, energies, and wavefunctions directly, is gaining a native
+DeePAW-HALF is a reusable density-to-electronic-structure layer: DeepAW
+supplies density, while HALF produces bands, energies, and wavefunctions
+directly, is gaining a native
 analytic-force path, or gives
 VASP a substantially better SCF starting point.
 
@@ -413,7 +415,7 @@ VASP a substantially better SCF starting point.
   [`assets/hfo2_half_vasp_band_comparison.json`](assets/hfo2_half_vasp_band_comparison.json)
 - HfO2 HALF/SAD SCF record:
   [`hfo2_vasp_half_vs_sad_kspacing035.json`](hfo2_vasp_half_vs_sad_kspacing035.json)
-- HfO2 CUDA/HAPPY parity and performance:
+- HfO2 cross-implementation parity and performance:
   [`hfo2_cuda_uspp_parity.json`](hfo2_cuda_uspp_parity.json)
 - CsPbBr3 ACC/VASP record:
   [`cspbbr3_vasp_acc_pro6000.json`](cspbbr3_vasp_acc_pro6000.json)

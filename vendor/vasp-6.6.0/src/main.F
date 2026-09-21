@@ -2921,7 +2921,8 @@ GPOMP IFXW2 !$OMP TARGET ENTER DATA MAP(ALWAYS,ALLOC:HAMILTONIAN%COULOMB_POT)
          W%CELTOT=0
          CALL START_TIMING("G")
          IF (INFO%LHALF_INIT) THEN
-           IF (INFO%ICHARG/=1) CALL vtutor%error("LHALF_INIT requires ICHARG=1")
+           IF (INFO%ICHARG/=1 .AND. INFO%ICHARG<10) &
+                CALL vtutor%error("LHALF_INIT requires ICHARG=1 or fixed-charge ICHARG>=10")
            IF (IO%IU0>=0) WRITE(TIU0,*)'initializing wavefunctions with DeePAW-HALF'
            CALL HALF_INITIALIZE_WAVEFUNCTIONS(WDES,W,INFO%ENMAX, &
                 DIR_APP(1:DIR_LEN)//'CHGCAR',DIR_APP(1:DIR_LEN)//'POTCAR', &

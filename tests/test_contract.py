@@ -97,6 +97,7 @@ def test_private_vasp_one_click_build_is_wired():
     assert "INFO%LHALF_API" in vasp_main
     assert "INFO%HALF_MODE" in vasp_main
     assert "INFO%HALF_ESCN_URL" in vasp_main
+    assert "INFO%ICHARG/=1 .AND. INFO%ICHARG<10" in vasp_main
     assert "'LHALF_API'" in vasp_reader
     assert "'HALF_MODE'" in vasp_reader
     assert "'HALF_ESCN_URL'" in vasp_reader
@@ -250,6 +251,7 @@ def test_native_hdf5_input_and_vaspwave_output_are_enabled():
 
 
 def test_si_finite_difference_force_parity_record():
+    # Kept only as an independent numerical oracle for analytic-force tests.
     import json
 
     record = json.loads((ROOT / "docs/validation/si_force_parity.json").read_text())
@@ -258,6 +260,18 @@ def test_si_finite_difference_force_parity_record():
     cli = (ROOT / "app/half_cli.F90").read_text().lower()
     assert "case('--forces')" in cli
     assert "evaluate_free_energy" in cli
+
+
+def test_analytic_hellmann_feynman_force_components_are_native_fortran():
+    energy = (ROOT / "src/half_energy.F90").read_text().lower()
+    nonlocal_force = (ROOT / "src/half_forces.F90").read_text().lower()
+    local_force = (ROOT / "src/half_local_forces.F90").read_text().lower()
+    check = (ROOT / "app/half_energy_check.F90").read_text().lower()
+    assert "subroutine ewald_forces" in energy
+    assert "dij_atom(iat,:,:)-eigenvalues(ib)*paw(it)%qij" in nonlocal_force
+    assert "subroutine local_ionic_forces" in local_force
+    assert "nonlocal_force_max_error" in check
+    assert "ewald_force_max_error" in check
 
 
 def test_si_automatic_band_path_parity_record():

@@ -58,9 +58,11 @@ else()
   message(STATUS "HALF HDF5 disabled: set HALF_HDF5_ROOT for vaspwave.h5 support")
 endif()
 find_path(HALF_SPGLIB_INCLUDE_DIR spglib.h
-  HINTS "${HALF_SPGLIB_ROOT}/include")
+  HINTS "${HALF_SPGLIB_ROOT}"
+  PATH_SUFFIXES include)
 find_library(HALF_SPGLIB_LIBRARY NAMES symspg
-  HINTS "${HALF_SPGLIB_ROOT}/lib")
+  HINTS "${HALF_SPGLIB_ROOT}"
+  PATH_SUFFIXES lib lib64)
 if(HALF_SPGLIB_INCLUDE_DIR AND HALF_SPGLIB_LIBRARY)
   set(HALF_HAVE_SPGLIB TRUE)
   message(STATUS "HALF spglib: ${HALF_SPGLIB_LIBRARY}")

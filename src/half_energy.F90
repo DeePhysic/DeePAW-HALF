@@ -38,11 +38,12 @@ contains
     set%weights=set%weights/sum(set%weights);set%multiplicities=1;nelect=real(nelectron,dp)
   end subroutine
 
-  subroutine compute_occupations(eigenvalues,weights,nelect,sigma,occupation,chemical_potential,band_energy,entropy_term)
+  subroutine compute_occupations(eigenvalues,weights,nelect,sigma,occupation,chemical_potential,band_energy,entropy_term,ismear)
     real(dp),intent(in)::eigenvalues(:,:),weights(:),nelect,sigma
     real(dp),allocatable,intent(out)::occupation(:,:)
     real(dp),intent(out)::chemical_potential,band_energy,entropy_term
-    integer::nk,nb,nstates,s,i,j,position,stop,ik,ib
+    integer,intent(in),optional::ismear
+    integer::nk,nb,nstates,s,i,j,position,stop,ik,ib,smearing
     integer,allocatable::order(:),state_k(:),state_b(:)
     real(dp),allocatable::energy(:)
     real(dp)::remaining,level,tolerance,capacity,fraction,filled,lo,hi,mid,count_e,x,p
@@ -51,6 +52,8 @@ contains
     if(abs(sum(weights)-1.0_dp)>1e-10_dp)error stop 'HALF: k-point weights must sum to one'
     if(nelect< -1e-12_dp.or.nelect>2.0_dp*nb+1e-12_dp)error stop 'HALF: electrons do not fit in requested bands'
     if(sigma<0.or.sigma/=sigma)error stop 'HALF: sigma must be finite and non-negative'
+    smearing=0;if(present(ismear))smearing=ismear
+    if(smearing/=-1.and.smearing/=0)error stop 'HALF: supported ISMEAR values are -1 and 0'
     allocate(occupation(nk,nb));occupation=0.0_dp
     if(sigma==0.0_dp)then
       nstates=nk*nb;allocate(order(nstates),state_k(nstates),state_b(nstates),energy(nstates));s=0
@@ -88,10 +91,16 @@ contains
     end do
     chemical_potential=0.5_dp*(lo+hi);entropy_term=0.0_dp
     do ik=1,nk;do ib=1,nb
-      x=max(-700.0_dp,min(700.0_dp,(eigenvalues(ik,ib)-chemical_potential)/sigma))
-      p=1.0_dp/(1.0_dp+exp(x));occupation(ik,ib)=2.0_dp*p
-      p=max(1e-300_dp,min(1.0_dp-1e-16_dp,p))
-      entropy_term=entropy_term+2.0_dp*sigma*weights(ik)*(p*log(p)+(1-p)*log(1-p))
+      x=(eigenvalues(ik,ib)-chemical_potential)/sigma
+      if(smearing==0)then
+        occupation(ik,ib)=erfc(x)
+        if(abs(x)<20.0_dp)entropy_term=entropy_term-sigma*weights(ik)*exp(-x*x)/sqrt(pi)
+      else
+        x=max(-700.0_dp,min(700.0_dp,x))
+        p=1.0_dp/(1.0_dp+exp(x));occupation(ik,ib)=2.0_dp*p
+        p=max(1e-300_dp,min(1.0_dp-1e-16_dp,p))
+        entropy_term=entropy_term+2.0_dp*sigma*weights(ik)*(p*log(p)+(1-p)*log(1-p))
+      end if
     end do;end do
     band_energy=sum(spread(weights,2,nb)*occupation*eigenvalues)
   contains
@@ -99,8 +108,13 @@ contains
       real(dp),intent(in)::mu;integer::jk,jb;real(dp)::xx
       value=0
       do jk=1,nk;do jb=1,nb
-        xx=max(-700.0_dp,min(700.0_dp,(eigenvalues(jk,jb)-mu)/sigma))
-        value=value+weights(jk)*2.0_dp/(1.0_dp+exp(xx))
+        xx=(eigenvalues(jk,jb)-mu)/sigma
+        if(smearing==0)then
+          value=value+weights(jk)*erfc(xx)
+        else
+          xx=max(-700.0_dp,min(700.0_dp,xx))
+          value=value+weights(jk)*2.0_dp/(1.0_dp+exp(xx))
+        end if
       end do;end do
     end function
   end subroutine

@@ -724,7 +724,7 @@ contains
     real(dp),allocatable::forces(:,:),force_ewald(:,:),force_local(:,:),force_nonlocal(:,:),force_projector(:,:), &
       force_augmentation(:,:),force_nlcc(:,:),force_harris(:,:)
     type(crystal_t)::displaced
-    integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status
+    integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status,ismear
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,reference_path
     character(len=16)::xc,backend,solver,actual_backend
     logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference
@@ -748,7 +748,7 @@ contains
 #else
     narg=command_argument_count();if(narg<offset+2)then;call print_energy_help(0);call fail('energy requires CHARGE and POTENTIAL');end if
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
-    encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.0_dp;nbands=0
+    encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.0_dp;nbands=0;ismear=0
     xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';output_prefix='energy';hdf5_path='';reference_path=''
     use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.
     paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;i=offset+3
@@ -763,6 +763,8 @@ contains
         if(ios/=0.or.symprec<=0)call fail('invalid --symprec value')
       case('--sigma');call option_value(i,narg,'--sigma',value);read(value,*,iostat=ios)sigma
         if(ios/=0.or.sigma<0)call fail('invalid --sigma value')
+      case('--ismear');call option_value(i,narg,'--ismear',value);read(value,*,iostat=ios)ismear
+        if(ios/=0.or.(ismear/=-1.and.ismear/=0))call fail('--ismear must be -1 (Fermi-Dirac) or 0 (Gaussian)')
       case('--bands');call option_value(i,narg,'--bands',value);read(value,*,iostat=ios)nbands
         if(ios/=0.or.nbands<1)call fail('invalid --bands value')
       case('--kpoints-file');call option_value(i,narg,'--kpoints-file',kpoints_path)
@@ -889,7 +891,7 @@ contains
     end do
     if(.not.use_reference)call parallel_sum(eigenvalues)
     call parallel_sum(plane_waves);call parallel_min(smin)
-    call compute_occupations(eigenvalues,set%weights,nelect,sigma,occupation,mu,band_energy,entropy_term)
+    call compute_occupations(eigenvalues,set%weights,nelect,sigma,occupation,mu,band_energy,entropy_term,ismear)
     if(sigma>0.and.maxval(occupation(:,nbands))>1e-6_dp)call fail('highest computed band is occupied; increase --bands')
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)call write_vaspwave_h5(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,occupation,mu,wave_bases,waves)
@@ -962,10 +964,10 @@ contains
       if(trim(output_path)=='-')then;unit=6
       else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
         if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
-      call write_energy_json(unit,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
+      call write_energy_json(unit,xc,actual_backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
         have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step)
-      if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,set,nelect,density_electrons,mu,band_energy,entropy_term, &
+      if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
         have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step);end if
       if(trim(output_path)/='-')then
@@ -981,7 +983,7 @@ contains
     write(unit,'(A)')'Usage: half energy CHARGE POTENTIAL [OPTIONS]'
     write(unit,'(A)')'       half-energy CHARGE POTENTIAL [OPTIONS]'
     write(unit,'(A)')'Options: --encut EV --kspacing VALUE --kpoints-file FILE --no-kpoint-symmetry'
-    write(unit,'(A)')'         --symprec VALUE --bands N --sigma EV --xc lda|pbe'
+    write(unit,'(A)')'         --symprec VALUE --bands N --ismear -1|0 --sigma EV --xc lda|pbe'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
@@ -1055,13 +1057,13 @@ contains
     free_energy=internal+entropy
   end subroutine
 
-  subroutine write_energy_json(unit,xc,backend,solver,set,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald, &
+  subroutine write_energy_json(unit,xc,backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald, &
       er,eg,es,eb,local_g0,atomic_reference,paw_atomic,have_paw_atomic,internal,free,smin,plane_waves,use_uspp, &
       forces,have_forces,force_step)
-    integer,intent(in)::unit
+    integer,intent(in)::unit,ismear
     character(len=*),intent(in)::xc,backend,solver
     type(kpoint_set_t),intent(in)::set
-    real(dp),intent(in)::nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald,er,eg,es,eb,local_g0
+    real(dp),intent(in)::sigma,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald,er,eg,es,eb,local_g0
     real(dp),intent(in)::atomic_reference,paw_atomic,internal,free,smin
     integer(i64),intent(in)::plane_waves(:)
     real(dp),intent(in)::forces(:,:),force_step
@@ -1070,6 +1072,7 @@ contains
     write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.6.0",'
     write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",';write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",'
     write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",';write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),','
+    write(unit,'(A,I0,A)')'  "ismear": ',ismear,',';write(unit,'(A,ES24.16,A)')'  "sigma_eV": ',sigma,','
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
     write(unit,'(A,I0,A)')'  "full_kpoint_count": ',set%full_count,',';write(unit,'(A,I0,A)')'  "irreducible_kpoint_count": ',set%nk,','
     write(unit,'(A,I0,A,I0,A)')'  "plane_wave_range": [',minval(plane_waves),', ',maxval(plane_waves),'],'

@@ -55,9 +55,12 @@ program half_energy_check
 
   eig=reshape([-1.0_dp,-0.8_dp,0.5_dp,0.7_dp,2.0_dp,2.2_dp],[2,3])
   weight=[0.25_dp,0.75_dp]
-  call compute_occupations(eig,weight,2.0_dp,0.1_dp,occ,mu,band,entropy)
+  call compute_occupations(eig,weight,2.0_dp,0.1_dp,occ,mu,band,entropy,-1)
   if(abs(sum(spread(weight,2,3)*occ)-2.0_dp)>1e-12_dp.or.entropy>=0.0_dp) &
-    error stop 'HALF: finite-temperature occupation regression'
+    error stop 'HALF: Fermi-Dirac occupation regression'
+  call compute_occupations(eig,weight,2.0_dp,0.1_dp,occ,mu,band,entropy,0)
+  if(abs(sum(spread(weight,2,3)*occ)-2.0_dp)>1e-12_dp.or.entropy>=0.0_dp) &
+    error stop 'HALF: Gaussian occupation regression'
 
   crystal%nions=2;crystal%ntypes=1;crystal%lattice=0.0_dp
   crystal%lattice(1,1)=4.0_dp;crystal%lattice(2,2)=4.0_dp;crystal%lattice(3,3)=4.0_dp

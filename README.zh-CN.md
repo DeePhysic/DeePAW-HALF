@@ -253,7 +253,7 @@ half bands CHGCAR.smooth POTCAR \
 
 # 使用 spglib 不可约 k 网格计算固定密度 Harris 总能量
 half energy CHGCAR.smooth POTCAR \
-  --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
+  --encut 400 --kspacing 0.5 --bands 12 --ismear 0 --sigma 0.02 --backend cuda \
   --vaspwave-h5 vaspwave.h5 --output-prefix energy
 
 # 独立 HALF 解析 PAW/Harris 力；不移动原子
@@ -270,6 +270,10 @@ OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
 mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
   CHGCAR.smooth POTCAR KPOINTS --backend cpu --bands 60 --output bands.json
 ```
+
+当 `--sigma` 为正时，默认的 `--ismear 0` 使用与 VASP 一致的 Gaussian 占据，
+`--ismear -1` 则使用 Fermi–Dirac 占据；能量 JSON 会记录 `ismear` 和
+`sigma_eV`。
 
 `--solver acc` 是大基组的主加速路径。它不构造 `NPL x NPL` 稠密 H/S：局域势
 FFT、动能、PAW 投影收缩、残差、预条件、S 正交化及块旋转均留在 GPU；cuSOLVER

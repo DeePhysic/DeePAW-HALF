@@ -331,7 +331,7 @@ CPU/CUDA backend selection:
 
 # Evaluate the symmetry-reduced fixed-density Harris energy.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
-  --encut 400 --kspacing 0.5 --bands 12 --backend cuda \
+  --encut 400 --kspacing 0.5 --bands 12 --ismear 0 --sigma 0.02 --backend cuda \
   --vaspwave-h5 vaspwave.h5 --output-prefix energy
 
 # Production analytic force path; it never displaces atoms.
@@ -355,6 +355,10 @@ mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
 ./build/cpu-release/half potcar POTCAR
 ./build/cpu-release/half paw CHGCAR.smooth POTCAR --encut 400
 ```
+
+For positive `--sigma`, `--ismear 0` (the default) reproduces VASP Gaussian
+occupations and `--ismear -1` selects Fermi-Dirac occupations. The selected
+`ismear` and `sigma_eV` are recorded in the energy JSON.
 
 `--solver acc` is the production large-basis path. It never forms the
 `NPL x NPL` dense H/S matrices: local-potential FFTs, kinetic terms, PAW

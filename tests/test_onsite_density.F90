@@ -14,6 +14,7 @@ program test_onsite_density
   real(dp)::p_occupation(3,3),g20,eh_ae,eh_ps
   real(dp),allocatable::ae(:,:),ps(:,:),compensation(:),atomic_occupation(:,:),dij_delta(:,:)
   real(dp)::double_counting_delta,energy_delta,e_plus,e_minus,d_fd,weights(3),angular_xc,radial_xc
+  real(dp)::aspherical_diagonal_error,aspherical_offdiagonal_error
   p%channels=1
   allocate(p%lps(1),p%rgrid(3),p%wae(3,1),p%wps(3,1),p%rhoae(3),p%rhops(3),p%qpaw_l(1,1,3))
   p%lps=0;p%rgrid=[0.1_dp,0.2_dp,0.3_dp];p%paw_rmax=0.3_dp
@@ -83,7 +84,8 @@ program test_onsite_density
   call evaluate_onsite_nonlinearity(p_projector,p_occupation,2,dij_delta,double_counting_delta,e_plus)
   p_occupation(2,2)=0.9999_dp
   call evaluate_onsite_nonlinearity(p_projector,p_occupation,2,dij_delta,double_counting_delta,e_minus)
-  if(abs(d_fd-(e_plus-e_minus)/0.0002_dp)>1.0e-3_dp) &
+  aspherical_diagonal_error=abs(d_fd-(e_plus-e_minus)/0.0002_dp)
+  if(aspherical_diagonal_error>1.0e-6_dp) &
     error stop 'aspherical XC Hamiltonian is not the derivative of onsite energy'
   p_occupation(2,2)=1.0_dp;p_occupation(1,2)=0.05_dp;p_occupation(2,1)=0.05_dp
   call evaluate_onsite_nonlinearity(p_projector,p_occupation,2,dij_delta,double_counting_delta,energy_delta)
@@ -92,7 +94,9 @@ program test_onsite_density
   call evaluate_onsite_nonlinearity(p_projector,p_occupation,2,dij_delta,double_counting_delta,e_plus)
   p_occupation(1,2)=0.0499_dp;p_occupation(2,1)=0.0499_dp
   call evaluate_onsite_nonlinearity(p_projector,p_occupation,2,dij_delta,double_counting_delta,e_minus)
-  if(abs(d_fd-(e_plus-e_minus)/0.0004_dp)>1.0e-3_dp) &
+  aspherical_offdiagonal_error=abs(d_fd-(e_plus-e_minus)/0.0004_dp)
+  if(aspherical_offdiagonal_error>1.0e-6_dp) &
     error stop 'aspherical off-diagonal Dij is not the energy derivative'
-  print '(A)','onsite radial multipoles: PASS'
+  print '(A,2ES12.4)','onsite radial multipoles: PASS; aspherical Dij derivative errors: ', &
+    aspherical_diagonal_error,aspherical_offdiagonal_error
 end program

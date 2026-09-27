@@ -31,5 +31,10 @@
     "absolute_increment_error_eV_per_A": 0.0007800810346767495,
     "onsite_tolerance_eV": 1e-8,
     "conclusion": "high-l analytic total force remains unresolved"
+  },
+  "BN_force_l2_minus_l0_ifx_cpu_same_input": {
+    "analytic_increment_eV_per_A": 0.004930960810389906,
+    "energy_finite_difference_increment_eV_per_A": 0.005710068350239794,
+    "absolute_increment_error_eV_per_A": 0.0007791075398498881
   }
 }

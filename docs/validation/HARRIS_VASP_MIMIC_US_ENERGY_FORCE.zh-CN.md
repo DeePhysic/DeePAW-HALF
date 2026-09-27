@@ -1,5 +1,10 @@
 # HALF Harris 与 VASP MIMIC_US 能量、力对比
 
+> 历史参照说明：本文的普通 `ICHARG=1`、`NELM=1` VASP 力在一次精确
+> 对角化后未包含固定密度 Harris 收敛修正，因而不能作为最终解析力 oracle。
+> 当前实现与严格 `ICHARG=11` 参照、完整 Hartree+XC 响应及 $L$ 通道诊断见
+> [`HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md`](HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md)。
+
 ## 1. 对比定义
 
 本报告中的 `MIMIC_US` 严格指 VASP 的

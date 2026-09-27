@@ -52,7 +52,8 @@ module half_types
     real(dp), allocatable :: dion(:,:), pspnl(:,:), psprnl(:,:), pspnl_rmax(:)
     real(dp), allocatable :: rgrid(:), potae(:), potps(:), potpsc(:)
     real(dp), allocatable :: rhoae(:), rhops(:), wae(:,:), wps(:,:)
-    real(dp), allocatable :: qpaw(:,:), qato(:,:)
+    real(dp), allocatable :: qpaw(:,:), qpaw_l(:,:,:), qato(:,:)
+    real(dp) :: qpaw_rebuild_max_delta = 0.0_dp
   end type potcar_t
 
 contains

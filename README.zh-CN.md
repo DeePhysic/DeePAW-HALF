@@ -12,7 +12,7 @@ DeepAW 或 VASP 产生的平滑 `CHGCAR` 密度以及匹配的 PAW `POTCAR`，�
 
 三种实现之间的相互一致性构成内部数值交叉验证。当前 GPU/CUDA Fortran
 Gamma/MIMIC_US 固定密度路径已在 Si 与 HfO2 上通过逐本征值验证；CPU Fortran
-QDEP、任意 k 点、多 k 点能带、spglib
+QDEP（默认采用 VASP 式直接 FFT 网格 SETDIJ）、任意 k 点、多 k 点能带、spglib
 不可约 k 网格、占据数、Ewald 和 Harris 固定密度总能量也已闭合。Si 总能量及
 各分量在 Python 与 Fortran 实现之间的差小于 `4e-12 eV`。旧的中心差分力只
 保留为解析力的数值 oracle，不再作为正式力功能。原生解析力目前已经实现
@@ -20,16 +20,30 @@ Ewald、倒空间局域势以及
 广义 PAW `D-epsilon Q` Hellmann--Feynman 导数，以及 NLCC/`FORCOR` partial-core
 导数。现在还会从 POTCAR 的 AE/PS partial waves 与补偿多极矩重建输出态的
 augmentation density，通过 `dD_ij/dR` 计入其显式位移力，并把带 augmentation
-的输出密度用于力泛函。DeepAW 平滑输入密度保持冻结，Harris 响应只包含
-POTCAR core density 移动产生的 XC-kernel 导数。球形原子 PAW double counting
+的输出密度用于力泛函。DeepAW 平滑输入密度保持冻结；Harris 响应包含
+输出—输入密度差产生的 Hartree+XC kernel 场，并按 POTCAR `PSPRHO` 的移动
+导数收缩。球形原子 PAW double counting
 也会由 POTCAR 的 AE/PS partial waves、原子占据、core density、`DEXC` 与补偿
 电荷自动重建，不读取 CHGCAR augmentation 尾部，也不依赖 VASP 输出数值。
-独立 CLI 的 `--forces` 全程不移动原子；总力与同一泛函的数值导数仍在继续验证。原生
+独立 CLI 的 `--forces` 全程不移动原子；相对 `LMAXMIX=-1` 的完全自洽 VASP，
+Si/HfO2 的能量差为 `-1.360/+9.837 meV/atom`，力分量 MAE 为
+`0.414/10.988 meV/Angstrom`。原生
 `vaspwave.h5` 输出以及 HDF5 电荷/结构/内嵌 POTCAR 输入已经支持。
 
 PAW 无矩阵算符、全带约束最小化、残差预条件、S 度量正交化、重启式
 Rayleigh-Ritz、复杂度以及 VASP 直接内存接入的完整推导见
 [Harris 无矩阵全带加速原理与推导](docs/HARRIS_ACC_THEORY.zh-CN.md)。
+L 通道、Harris Hartree+XC 响应及 Si/HfO2 力验证见
+[Harris 力的 L 通道与密度响应优化](docs/validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.zh-CN.md)。
+项目对外采用的完全自洽 VASP 对比见
+[HALF 能量和力与完全自洽 VASP 的对比](docs/validation/HALF_VS_VASP_SCF_ENERGY_FORCE.zh-CN.md)。
+VASP 接入区分两种模式：one-step approximate SCF 只做一次电子更新并得到近自洽
+能量；ACC-SCF 继续迭代到 `EDIFF`，获得完全自洽的密度、能量和力。
+独立解析力现在可以使用 spglib 不可约 k 网格：HALF 在观测量空间展开平滑密度、
+PAW augmentation density 和各项原子力，不需要保存完整 k-star 波函数。Si 原胞
+的对角化数从 216 降至 16，wall time 从 35.41 s 降至 4.42 s（8.01×），与完整
+网格的力差为 `1.1e-7 eV/Angstrom`。详见
+[不可约 k 点解析力展开](docs/validation/KPOINT_SYMMETRY_FORCE_EXPANSION.zh-CN.md)。
 
 ## 数值模型：从固定密度到本征值
 
@@ -79,7 +93,9 @@ $$
 这里 `rho~_G` 是电子数归一化密度系数，`Omega` 是胞体积，`e^2` 是
 eV/angstrom 单位制中的静电换算因子。`rho_core` 是 POTCAR 中仅用于 NLCC 的
 部分芯密度，不会重复加入 Hartree 密度。`DION` 是 POTCAR 固定 onsite 项，
-`QDEP` 才给出势依赖的 MIMIC_US 校正；`VH(G=0)` 是势规范并设为零。
+`QDEP` 才给出势依赖的 MIMIC_US 校正；默认实现把补偿核直接放在 FFT 网格上，
+并从 POTCAR partial waves 在对数径向网格上统一重建 `QPAW(i,j,L)`；`VH(G=0)`
+是势规范并设为零。
 
 计算力时，HALF 从各 k 点波函数重建 PAW onsite 占据矩阵与 POTCAR
 augmentation density：
@@ -131,6 +147,24 @@ augmentation occupancy 与 augmentation density；有限差分只保留为验证
 `--kpoint KX KY KZ`。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 
+## 占据依赖的 onsite PAW（实验功能）
+
+`half energy` 与 `half bands` 支持运行参数 `--onsite-lmax -1|0|1|...`。
+默认 `-1` 保持原有 MIMIC_US Harris 路径。非负值从波函数计算 onsite
+占据、自洽更新每个原子的 PAW `Dij`，并加入相应的 one-centre 能量与
+双计数修正。目前需要用 `-DHALF_EXPERIMENTAL_ONSITE=ON` 显式构建：
+
+```bash
+half energy CHGCAR.deepaw POTCAR --onsite-lmax 2 --backend cuda
+half bands CHGCAR.deepaw POTCAR KPOINTS --onsite-lmax 2 --onsite-kspacing 0.35 --backend cuda
+```
+
+CPU Fortran、CPU MPI 与 CUDA Fortran 的 s/p、d、f 投影子已有定点
+数值对照。CUDA 路径在 GPU 上执行占据收缩和动态径向 Hartree/PBE
+泛函；静态 POTCAR 系数准备及最终力组合仍在主机侧。非负通道尚未通过
+生产级 EOS/VASP 参照验证，使用前请看
+[`onsite 验证状态`](docs/ONSITE_LMAX_STATUS.zh-CN.md)。
+
 对已实现的 DION 问题，`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，化为
 `L^-1 H L^-H y = epsilon y`，再以 `c = L^-H y` 恢复广义本征矢。CPU 的 MKL 和
 GPU 的 cuSOLVER 都执行这一稠密广义厄米求解。
@@ -158,6 +192,7 @@ CUDA 路径将 FFT 势构造、投影子计算、H/S 组装和本征值求解全
 | --- | --- |
 | `src/half_chgcar.F90`、`src/half_potcar.F90` | 输入解析 |
 | `src/half_basis.F90`、`src/half_fft.F90` | 平面波基与 FFT |
+| `src/half_potcar_interp.F90` | 与 POTCAR 表格约定一致的局域势、`PSPCOR`、`PSPRHO` 插值 |
 | `src/half_potential.F90`、`src/half_cuda_potential.cuf` | 有效势 |
 | `src/half_paw.F90`、`src/half_cuda_assembly.cuf` | PAW 项与 H/S 组装 |
 | `src/half_dense_solver.F90`、`src/half_cuda_solver.cuf` | CPU/GPU 广义本征求解 |

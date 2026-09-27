@@ -13,8 +13,21 @@ option(HALF_BUILD_SHARED_LIBRARY "Build the reusable libhalf shared library" ON)
 option(HALF_BUILD_EXAMPLES "Build libhalf API examples" ON)
 option(HALF_BUILD_VASP "Build the bundled private VASP 6.6.0 integration" OFF)
 option(HALF_ENABLE_ESCN_API "Enable the DeePAW-eSCN HTTP inference client" ON)
+option(HALF_EXPERIMENTAL_ONSITE "Build the unfinished occupation-dependent PAW onsite diagnostic path" OFF)
 set(HALF_GPU_CC "86" CACHE STRING "NVIDIA GPU compute capability, without the decimal point")
 set(HALF_CUDA_VERSION "12.4" CACHE STRING "CUDA toolkit selected by NVHPC")
+set(HALF_QDEP_NTHETA "12" CACHE STRING "Gauss-Legendre polar points for QDEP sphere integration")
+set(HALF_QDEP_NPHI "24" CACHE STRING "Uniform azimuthal points for QDEP sphere integration")
+set(HALF_QDEP_LMAX "-1" CACHE STRING
+  "Maximum PAW augmentation angular momentum included consistently in QDEP, augmentation density, and forces (-1: all POTCAR channels)")
+option(HALF_QDEP_DIRECT_GRID "Assemble PAW QDEP directly on the FFT grid (VASP SETDIJ construction)" ON)
+
+if(HALF_QDEP_NTHETA LESS 4 OR HALF_QDEP_NPHI LESS 8)
+  message(FATAL_ERROR "HALF QDEP angular grids require NTHETA>=4 and NPHI>=8")
+endif()
+if(HALF_QDEP_LMAX LESS -1)
+  message(FATAL_ERROR "HALF_QDEP_LMAX must be -1 (all channels) or a non-negative integer")
+endif()
 
 if(HALF_ENABLE_CUDA AND NOT CMAKE_Fortran_COMPILER_ID MATCHES "NVHPC|PGI")
   message(FATAL_ERROR
@@ -53,6 +66,7 @@ set(HALF_CORE_SOURCES
   src/half_basis.F90
   src/half_kpoints.F90
   src/half_paw.F90
+  src/half_potcar_interp.F90
   src/half_energy.F90
   src/half_forces.F90
   src/half_artifacts.F90
@@ -69,7 +83,8 @@ else()
 endif()
 if(HALF_HAVE_MKL)
   list(APPEND HALF_CORE_SOURCES
-    src/half_fft.F90 src/half_uspp.F90 src/half_xc.F90 src/half_paw_atomic_energy.F90
+    src/half_fft.F90 src/half_uspp.F90 src/half_onsite_density.F90 src/half_xc.F90 src/half_paw_atomic_energy.F90
+    src/half_onsite_functional.F90
     src/half_potential.F90 src/half_local_forces.F90 src/half_dense_solver.F90)
 endif()
 if(HALF_HAVE_HDF5)
@@ -79,12 +94,18 @@ if(HALF_ENABLE_CUDA)
   list(APPEND HALF_CORE_SOURCES src/half_cuda.cuf)
   list(APPEND HALF_CORE_SOURCES src/half_cuda_potential.cuf)
   list(APPEND HALF_CORE_SOURCES src/half_cuda_uspp.cuf)
+  if(HALF_HAVE_MKL)
+    list(APPEND HALF_CORE_SOURCES src/half_cuda_onsite_occupancy.cuf src/half_cuda_onsite_functional.cuf)
+  endif()
   list(APPEND HALF_CORE_SOURCES src/half_cuda_assembly.cuf)
   list(APPEND HALF_CORE_SOURCES src/half_cuda_iterative_solver.cuf)
   list(APPEND HALF_CORE_SOURCES src/half_cuda_solver.cuf)
   set_source_files_properties(src/half_cuda.cuf PROPERTIES LANGUAGE Fortran)
   set_source_files_properties(src/half_cuda_potential.cuf PROPERTIES LANGUAGE Fortran)
   set_source_files_properties(src/half_cuda_uspp.cuf PROPERTIES LANGUAGE Fortran)
+  if(HALF_HAVE_MKL)
+    set_source_files_properties(src/half_cuda_onsite_occupancy.cuf src/half_cuda_onsite_functional.cuf PROPERTIES LANGUAGE Fortran)
+  endif()
   set_source_files_properties(src/half_cuda_assembly.cuf PROPERTIES LANGUAGE Fortran)
   set_source_files_properties(src/half_cuda_iterative_solver.cuf PROPERTIES LANGUAGE Fortran)
   set_source_files_properties(src/half_cuda_solver.cuf PROPERTIES LANGUAGE Fortran)
@@ -104,6 +125,11 @@ set_target_properties(half_core PROPERTIES
   POSITION_INDEPENDENT_CODE YES
   EXPORT_NAME half
 )
+target_compile_definitions(half_core PRIVATE
+  HALF_QDEP_NTHETA=${HALF_QDEP_NTHETA}
+  HALF_QDEP_NPHI=${HALF_QDEP_NPHI}
+  HALF_QDEP_LMAX=${HALF_QDEP_LMAX}
+  $<$<BOOL:${HALF_QDEP_DIRECT_GRID}>:HALF_QDEP_DIRECT_GRID>)
 target_include_directories(half_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
@@ -186,6 +212,9 @@ endif()
 add_executable(half app/half_cli.F90)
 half_set_fortran_options(half)
 target_link_libraries(half PRIVATE half_core)
+if(HALF_EXPERIMENTAL_ONSITE)
+  target_compile_definitions(half PRIVATE HALF_EXPERIMENTAL_ONSITE=1)
+endif()
 if(HALF_HAVE_MKL)
   target_compile_definitions(half PRIVATE HALF_CLI_HAVE_MKL=1)
   half_link_mkl(half)
@@ -290,6 +319,21 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+  if(HALF_HAVE_MKL)
+    add_executable(half-onsite-density-check tests/test_onsite_density.F90)
+    half_set_fortran_options(half-onsite-density-check)
+    target_link_libraries(half-onsite-density-check PRIVATE half_core)
+    add_test(NAME half_onsite_density_multipoles COMMAND half-onsite-density-check)
+    if(HALF_ENABLE_CUDA)
+      add_executable(half-onsite-cuda-parity-check tests/check_onsite_cuda_parity.F90)
+      half_set_fortran_options(half-onsite-cuda-parity-check)
+      target_link_libraries(half-onsite-cuda-parity-check PRIVATE half_core)
+      target_compile_options(half-onsite-cuda-parity-check PRIVATE
+        -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC},lineinfo)
+      target_link_options(half-onsite-cuda-parity-check PRIVATE
+        -cuda -gpu=cuda${HALF_CUDA_VERSION},cc${HALF_GPU_CC})
+    endif()
+  endif()
   add_test(NAME half_inspect_help COMMAND half-inspect --help)
   add_test(NAME half_cli_help COMMAND half --help)
   add_test(NAME half_cli_version COMMAND half --version)

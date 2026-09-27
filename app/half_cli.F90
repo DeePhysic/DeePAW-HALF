@@ -4,8 +4,9 @@ program half_cli
   use half_chgcar, only: read_chgcar
   use half_potcar, only: read_potcar,validate_potcar_structure
   use half_basis, only: build_plane_wave_basis
-  use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh,generate_cubic_band_path
-  use half_paw, only: paw_species_t, build_paw_operators
+  use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh, &
+    generate_cubic_band_path,symmetrize_scalar_grid,symmetrize_atomic_vectors
+  use half_paw, only: paw_species_t, onsite_species_correction_t, build_paw_operators
   use half_energy, only: compute_occupations,ewald_energy,ewald_forces,read_vasp_eigenval
   use half_artifacts, only: write_bands_artifacts,write_energy_npz
   use half_math,only:inverse3
@@ -20,9 +21,15 @@ program half_cli
   use half_local_forces,only:local_ionic_forces,nlcc_forces,accumulate_smooth_density,harris_correction_forces
   use half_forces,only:add_nonlocal_paw_forces
   use half_paw_atomic_energy,only:compute_paw_atomic_double_counting
+  use half_onsite_functional,only:evaluate_onsite_corrections, &
+    apply_onsite_corrections_cpu
 #endif
 #ifdef HALF_CLI_CUDA
   use half_cuda_solver, only: solve_dense_gamma_cuda_full
+#endif
+#if defined(HALF_CLI_CUDA) && defined(HALF_CLI_HAVE_MKL)
+  use half_cuda_onsite_occupancy, only: accumulate_augmentation_occupancy_cuda
+  use half_cuda_onsite_functional, only: evaluate_onsite_corrections_cuda
 #endif
 #ifdef HALF_CLI_HAVE_HDF5
   use half_vaspwave,only:wave_block_t,write_vaspwave_h5
@@ -30,6 +37,10 @@ program half_cli
   implicit none
   type::force_wave_block_t
     complex(dp),allocatable::coefficients(:,:)
+  end type
+  type::force_qdep_cache_t
+    real(dp),allocatable::dij_atom(:,:,:)
+    real(dp),allocatable::ddij_atom(:,:,:,:)
   end type
   character(len=1024) :: invocation, command
   integer :: argument_offset
@@ -135,6 +146,7 @@ contains
       set%divisions(2),', ',set%divisions(3),'],'
     write(*,'(A,I0,A)')'  "full_kpoint_count": ',set%full_count,','
     write(*,'(A,I0,A)')'  "kpoint_count": ',set%nk,','
+    write(*,'(A,I0,A)')'  "space_group_operation_count": ',set%nsym,','
     write(*,'(A)')'  "kpoints": ['
     do k=1,set%nk
       write(*,'(A,3(ES24.16,A),ES24.16,A)',advance='no')'    [',set%points(k,1),', ', &
@@ -480,12 +492,14 @@ contains
     real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),overlap_mins(:),path_x(:),shifted(:,:)
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
-    real(dp)::encut,eh,exc,smin,smax,potential_seconds,assembly_seconds,gpu_seconds
+    real(dp)::encut,eh,exc,smin,smax,potential_seconds,assembly_seconds,gpu_seconds,acc_tol,acc_residual,onsite_kspacing
     real(dp)::nelect,vbm,cbm,gap,gamma_gap
-    integer::narg,i,ios,ik,nbands,unit,npoints,nocc,gamma_index,artifact_status
+    integer::narg,i,ios,ik,nbands,unit,npoints,nocc,gamma_index,artifact_status,acc_max_iter,acc_block_size,acc_iterations
+    integer::onsite_lmax
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,path_spec,path_used
     character(len=16)::xc,backend,solver,actual_backend
     logical::use_uspp
+    type(onsite_species_correction_t),allocatable::onsite_correction(:)
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)
     type(wave_block_t),allocatable::waves(:)
@@ -507,7 +521,9 @@ contains
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
     kpoints_path='';path_spec='';path_used='';i=offset+3
     if(i<=narg)then;call get_command_argument(i,arg);if(arg(1:1)/='-')then;kpoints_path=arg;i=i+1;end if;end if
-    encut=400.0_dp;nbands=8;npoints=60;xc='pbe';backend='auto';solver='evd';use_uspp=.true.
+    encut=400.0_dp;nbands=8;npoints=60;xc='pbe';backend='auto';solver='evd';use_uspp=.true.;onsite_lmax=-1
+    onsite_kspacing=0.35_dp
+    acc_tol=1.0e-4_dp;acc_max_iter=40;acc_block_size=16
     output_path='bands.json';output_prefix='bands';hdf5_path=''
     do while(i<=narg)
       call get_command_argument(i,arg)
@@ -526,6 +542,16 @@ contains
       case('--solver');call option_value(i,narg,'--solver',solver);solver=lower(trim(solver))
         if(trim(solver)/='evd'.and.trim(solver)/='evj'.and.trim(solver)/='evx'.and.trim(solver)/='acc') &
           call fail('--solver must be evd, evj, evx, or acc')
+      case('--onsite-lmax');call option_value(i,narg,'--onsite-lmax',value);read(value,*,iostat=ios)onsite_lmax
+        if(ios/=0.or.onsite_lmax< -1)call fail('--onsite-lmax must be -1 or a non-negative integer')
+      case('--onsite-kspacing');call option_value(i,narg,'--onsite-kspacing',value);read(value,*,iostat=ios)onsite_kspacing
+        if(ios/=0.or.onsite_kspacing<=0.0_dp)call fail('invalid --onsite-kspacing value')
+      case('--acc-tol');call option_value(i,narg,'--acc-tol',value);read(value,*,iostat=ios)acc_tol
+        if(ios/=0.or.acc_tol<=0)call fail('invalid --acc-tol value')
+      case('--acc-max-iter');call option_value(i,narg,'--acc-max-iter',value);read(value,*,iostat=ios)acc_max_iter
+        if(ios/=0.or.acc_max_iter<1)call fail('invalid --acc-max-iter value')
+      case('--acc-block-size');call option_value(i,narg,'--acc-block-size',value);read(value,*,iostat=ios)acc_block_size
+        if(ios/=0.or.acc_block_size<1)call fail('invalid --acc-block-size value')
       case('--output');call option_value(i,narg,'--output',output_path);output_prefix=strip_json_suffix(output_path)
       case('--output-prefix');call option_value(i,narg,'--output-prefix',output_prefix);output_path=trim(output_prefix)//'.json'
       case('--vaspwave-h5');call option_value(i,narg,'--vaspwave-h5',hdf5_path)
@@ -536,6 +562,10 @@ contains
       end select
       i=i+1
     end do
+    call require_onsite_implementation(onsite_lmax)
+    if(onsite_lmax>=0)then
+      if(trim(xc)/='pbe'.or..not.use_uspp)call fail('experimental onsite PAW bands require PBE and QDEP/PAW Dij')
+    end if
     call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars);call validate_potcar_structure(potcars,crystal)
     if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),set);path_used=kpoints_path
     else;call generate_cubic_band_path(crystal,npoints,path_spec,set,path_used);end if
@@ -552,6 +582,10 @@ contains
     if(len_trim(hdf5_path)>0.and.trim(solver)=='evj')call fail('vaspwave.h5 export is unavailable with --solver evj')
     if(parallel_size()>1.and.trim(actual_backend)/='cpu')call fail('MPI k-point distribution is supported by the CPU backend only')
     if(parallel_size()>1.and.len_trim(hdf5_path)>0)call fail('vaspwave.h5 export currently requires one MPI rank')
+#ifdef HALF_CLI_HAVE_MKL
+    if(onsite_lmax>=0)call converge_onsite_for_bands(rho,potcars,crystal,encut,onsite_kspacing, &
+      actual_backend,solver,nbands,onsite_lmax,onsite_correction)
+#endif
 #ifndef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)call fail('this HALF build has no HDF5 support')
 #endif
@@ -568,10 +602,14 @@ contains
       if(trim(actual_backend)=='cuda')then
         if(len_trim(hdf5_path)>0)then
           call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
-            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands)
+            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands, &
+            acc_tolerance=acc_tol,acc_max_iterations=acc_max_iter,acc_block_size=acc_block_size, &
+            iterations=acc_iterations,final_residual=acc_residual,onsite_correction=onsite_correction)
         else
           call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,smin,smax, &
-            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,target_bands=nbands)
+            potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,target_bands=nbands, &
+            acc_tolerance=acc_tol,acc_max_iterations=acc_max_iter,acc_block_size=acc_block_size, &
+            iterations=acc_iterations,final_residual=acc_residual,onsite_correction=onsite_correction)
         end if
       else
 #endif
@@ -580,6 +618,7 @@ contains
         if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc)
         else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc);end if
         if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
+        if(allocated(onsite_correction))call apply_onsite_corrections_cpu(paw,onsite_correction)
         if(len_trim(hdf5_path)>0)then;call solve_dense_gamma(veff,basis,paw,values,smin,smax,vectors)
         else;call solve_dense_gamma(veff,basis,paw,values,smin,smax);end if
 #endif
@@ -618,9 +657,10 @@ contains
       else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
         if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
       call write_bands_json(unit,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues, &
-        plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc)
+        plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing)
       if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,path_used,xc,actual_backend,solver, &
-        encut,set,eigenvalues,plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc);end if
+        encut,set,eigenvalues,plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc, &
+        onsite_lmax,onsite_kspacing);end if
       if(trim(output_path)/='-')then
         call write_bands_csv(trim(output_prefix)//'.csv',set,path_x,shifted)
         call write_bands_artifacts(trim(output_prefix),set%points,path_x,eigenvalues,shifted,plane_waves,overlap_mins,vbm,artifact_status)
@@ -635,24 +675,29 @@ contains
     write(unit,'(A)')'Usage: half bands CHARGE POTENTIAL [KPOINTS] [OPTIONS]'
     write(unit,'(A)')'       half-bands CHARGE POTENTIAL [KPOINTS] [OPTIONS]'
     write(unit,'(A)')'Options: --encut EV --bands N --npoints N --path LABELS --xc lda|pbe --backend auto|cpu|cuda'
-    write(unit,'(A)')'         --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
+    write(unit,'(A)')'         --solver evd|evj|evx|acc --acc-tol EV --acc-max-iter N --acc-block-size N'
+    write(unit,'(A)')'         --onsite-kspacing VALUE  (density mesh used when --onsite-lmax >= 0)'
+    write(unit,'(A)')'         --onsite-lmax -1  (non-negative channels require HALF_EXPERIMENTAL_ONSITE build)'
+    write(unit,'(A)')'         --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
     write(unit,'(A)')'KPOINTS is a VASP explicit reciprocal-coordinate file; omit it for an automatic cubic band path.'
   end subroutine
 
   subroutine write_bands_json(unit,charge,potential,kfile,xc,backend,solver,encut,set,eigenvalues,plane_waves, &
-      overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc)
+      overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing)
     integer,intent(in)::unit
     character(len=*),intent(in)::charge,potential,kfile,xc,backend,solver
-    real(dp),intent(in)::encut,eigenvalues(:,:),overlap_mins(:),path_x(:),vbm,cbm,gap,gamma_gap
+    real(dp),intent(in)::encut,eigenvalues(:,:),overlap_mins(:),path_x(:),vbm,cbm,gap,gamma_gap,onsite_kspacing
     type(kpoint_set_t),intent(in)::set
     integer(i64),intent(in)::plane_waves(:)
     logical,intent(in)::use_uspp
-    integer,intent(in)::nocc
+    integer,intent(in)::nocc,onsite_lmax
     integer::ik,ib
     write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.6.0",'
     write(unit,'(A,A,A)')'  "charge": "',trim(charge),'",';write(unit,'(A,A,A)')'  "potential": "',trim(potential),'",'
     write(unit,'(A,A,A)')'  "kpoints_source": "',trim(kfile),'",';write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",'
     write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",';write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",'
+    write(unit,'(A,I0,A)')'  "onsite_lmax": ',onsite_lmax,','
+    if(onsite_lmax>=0)write(unit,'(A,ES24.16,A)')'  "onsite_density_kspacing_Ainv": ',onsite_kspacing,','
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
     write(unit,'(A,I0,A)')'  "occupied_bands": ',nocc,','
     write(unit,'(A,ES24.16,A)')'  "vbm_eV": ',vbm,','
@@ -724,14 +769,18 @@ contains
     real(dp),allocatable::forces(:,:),force_ewald(:,:),force_local(:,:),force_nonlocal(:,:),force_projector(:,:), &
       force_augmentation(:,:),force_nlcc(:,:),force_harris(:,:)
     type(crystal_t)::displaced
-    integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status,ismear
+    integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status,ismear,onsite_lmax
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,reference_path
     character(len=16)::xc,backend,solver,actual_backend
     logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference
     type(plane_wave_basis_t),allocatable::force_bases(:)
     type(force_wave_block_t),allocatable::force_waves(:)
+    type(force_qdep_cache_t),allocatable::force_qdep_cache(:)
     type(augmentation_occupancy_t),allocatable::augmentation_occupancy(:)
+    type(onsite_species_correction_t),allocatable::onsite_correction(:),onsite_new(:)
     real(dp)::augmentation_charge
+    real(dp)::onsite_dc,onsite_energy,onsite_change,onsite_previous_change,onsite_mix
+    integer::onsite_iteration
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)
     type(wave_block_t),allocatable::waves(:)
@@ -750,7 +799,7 @@ contains
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
     encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.0_dp;nbands=0;ismear=0
     xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';output_prefix='energy';hdf5_path='';reference_path=''
-    use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.
+    use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.;onsite_lmax=-1
     paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;i=offset+3
     do while(i<=narg)
       call get_command_argument(i,arg)
@@ -777,6 +826,8 @@ contains
       case('--solver');call option_value(i,narg,'--solver',solver);solver=lower(trim(solver))
         if(trim(solver)/='evd'.and.trim(solver)/='evj'.and.trim(solver)/='evx'.and.trim(solver)/='acc') &
           call fail('--solver must be evd, evj, evx, or acc')
+      case('--onsite-lmax');call option_value(i,narg,'--onsite-lmax',value);read(value,*,iostat=ios)onsite_lmax
+        if(ios/=0.or.onsite_lmax< -1)call fail('--onsite-lmax must be -1 or a non-negative integer')
       case('--no-uspp-dij');use_uspp=.false.
       case('--forces');do_forces=.true.
       case('--finite-difference-force-check');call fail('finite differences are available only in the half-force-check validation executable, never in the production CLI')
@@ -794,6 +845,12 @@ contains
       end select
       i=i+1
     end do
+    call require_onsite_implementation(onsite_lmax)
+    if(onsite_lmax>=0)then
+      if(trim(xc)/='pbe')call fail('experimental onsite PAW currently supports PBE only')
+      if(.not.use_uspp)call fail('experimental onsite PAW requires QDEP/PAW Dij')
+      if(have_paw_atomic)call fail('experimental onsite PAW requires automatic atomic double counting')
+    end if
     call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars);call validate_potcar_structure(potcars,crystal)
     nelect=0.0_dp
     do it=1,size(potcars);nelect=nelect+potcars(it)%zval*real(crystal%counts(it),dp);end do
@@ -804,8 +861,13 @@ contains
     if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),set)
     else if(full_mesh)then;call gamma_centered_mesh(crystal,kspacing,set)
     else;call gamma_centered_irreducible_mesh(crystal,kspacing,set,symprec,.true.);end if
+    ! A symmetry-reduced Hamiltonian requires a density invariant under the
+    ! same space group.  This also removes harmless equivariance noise from a
+    ! learned DeepAW density, as VASP does before an irreducible-k calculation.
+    if(len_trim(kpoints_path)==0.and..not.full_mesh)call symmetrize_scalar_grid(set,rho%shape,rho%values)
     use_reference=len_trim(reference_path)>0
     if(use_reference)then
+      if(onsite_lmax>=0)call fail('--onsite-lmax requires reconstructed wavefunctions, not --reference-eigenval')
       call read_vasp_eigenval(trim(reference_path),reference_set,reference_eigenvalues,reference_nelect)
       if(reference_set%nk/=set%nk.or.size(reference_eigenvalues,2)<nbands)call fail('EIGENVAL dimensions do not match requested k points/bands')
       if(maxval(abs(reference_set%points-set%points))>2e-8_dp.or.maxval(abs(reference_set%weights-set%weights))>2e-8_dp) &
@@ -845,7 +907,13 @@ contains
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)allocate(wave_bases(set%nk),waves(set%nk))
 #endif
-    if(do_forces)allocate(force_bases(set%nk),force_waves(set%nk))
+    if(do_forces.or.onsite_lmax>=0)allocate(force_bases(set%nk),force_waves(set%nk))
+    onsite_dc=0.0_dp;onsite_energy=0.0_dp
+    onsite_previous_change=huge(1.0_dp);onsite_mix=1.0_dp
+    do onsite_iteration=1,120
+    if(onsite_iteration>1)then
+      eigenvalues=0.0_dp;plane_waves=0_i64;smin=huge(1.0_dp)
+    end if
     do ik=1,set%nk
       if(.not.parallel_owns(ik))cycle
       call build_plane_wave_basis(crystal,rho%shape,encut,set%points(ik,:),basis);plane_waves(ik)=basis%npw
@@ -854,17 +922,19 @@ contains
 #ifdef HALF_CLI_CUDA
       if(trim(actual_backend)=='cuda')then
         if(ik==1)then
-          if(len_trim(hdf5_path)>0.or.do_forces)then
+          if(len_trim(hdf5_path)>0.or.do_forces.or.onsite_lmax>=0)then
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
-              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,vectors,target_bands=nbands)
+              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,vectors,target_bands=nbands, &
+              onsite_correction=onsite_correction)
           else
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eh,exc,exv,target_bands=nbands)
           end if
         else
-          if(len_trim(hdf5_path)>0.or.do_forces)then
+          if(len_trim(hdf5_path)>0.or.do_forces.or.onsite_lmax>=0)then
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
-              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands)
+              potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,eigenvectors=vectors,target_bands=nbands, &
+              onsite_correction=onsite_correction)
           else
             call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,trim(xc)=='pbe',values,k_smin,smax, &
               potential_seconds,assembly_seconds,gpu_seconds,solver,use_uspp,target_bands=nbands)
@@ -875,7 +945,8 @@ contains
 #ifdef HALF_CLI_HAVE_MKL
         call build_paw_operators(potcars,crystal,basis,paw)
         if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
-        if(len_trim(hdf5_path)>0.or.do_forces)then;call solve_dense_gamma(veff,basis,paw,values,k_smin,smax,vectors)
+        if(allocated(onsite_correction))call apply_onsite_corrections_cpu(paw,onsite_correction)
+        if(len_trim(hdf5_path)>0.or.do_forces.or.onsite_lmax>=0)then;call solve_dense_gamma(veff,basis,paw,values,k_smin,smax,vectors)
         else;call solve_dense_gamma(veff,basis,paw,values,k_smin,smax);end if
 #endif
 #ifdef HALF_CLI_CUDA
@@ -886,13 +957,42 @@ contains
 #ifdef HALF_CLI_HAVE_HDF5
       if(len_trim(hdf5_path)>0)then;wave_bases(ik)=basis;waves(ik)%coefficients=vectors(:,:nbands);end if
 #endif
-      if(do_forces)then;force_bases(ik)=basis;force_waves(ik)%coefficients=vectors(:,:nbands);end if
+      if(do_forces.or.onsite_lmax>=0)then;force_bases(ik)=basis;force_waves(ik)%coefficients=vectors(:,:nbands);end if
       write(0,'(A,I0,A,I0,A,I0,A,ES14.6)')'HALF energy: rank ',parallel_rank(),' k point ',ik,'/',set%nk,' E1_eV=',values(1)
     end do
     if(.not.use_reference)call parallel_sum(eigenvalues)
     call parallel_sum(plane_waves);call parallel_min(smin)
     call compute_occupations(eigenvalues,set%weights,nelect,sigma,occupation,mu,band_energy,entropy_term,ismear)
     if(sigma>0.and.maxval(occupation(:,nbands))>1e-6_dp)call fail('highest computed band is occupied; increase --bands')
+    if(onsite_lmax<0)exit
+    call update_onsite_from_waves(potcars,crystal,rho%shape,encut,set,force_bases,force_waves, &
+      occupation,onsite_lmax,actual_backend,onsite_new,onsite_dc,onsite_energy)
+    onsite_change=huge(1.0_dp)
+    if(allocated(onsite_correction))then
+      onsite_change=0.0_dp
+      do it=1,size(potcars)
+        onsite_change=max(onsite_change,maxval(abs(onsite_new(it)%dij-onsite_correction(it)%dij)))
+      end do
+    end if
+    write(0,'(A,I0,A,ES14.6,A,ES14.6)')'HALF onsite iteration ',onsite_iteration, &
+      ' Dij_change_eV=',onsite_change,' double_counting_eV=',onsite_dc
+    if(onsite_change<1.0e-6_dp)exit
+    if(onsite_iteration==120)call fail('onsite PAW iteration failed to converge')
+    if(allocated(onsite_correction))then
+      if(onsite_change>1.05_dp*onsite_previous_change)then
+        onsite_mix=max(0.125_dp,0.5_dp*onsite_mix)
+      else if(onsite_change<0.5_dp*onsite_previous_change)then
+        onsite_mix=min(1.0_dp,1.2_dp*onsite_mix)
+      end if
+      do it=1,size(potcars)
+        onsite_new(it)%dij=onsite_correction(it)%dij+onsite_mix* &
+          (onsite_new(it)%dij-onsite_correction(it)%dij)
+      end do
+    end if
+    onsite_previous_change=onsite_change
+    call move_alloc(onsite_new,onsite_correction)
+    end do
+    if(onsite_lmax<0)onsite_iteration=0
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)call write_vaspwave_h5(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,occupation,mu,wave_bases,waves)
 #endif
@@ -915,6 +1015,7 @@ contains
 #endif
     internal_energy=band_energy-eh-exv+exc+ewald+local_g0+atomic_reference
     if(have_paw_atomic)internal_energy=internal_energy+paw_atomic
+    if(onsite_lmax>=0)internal_energy=internal_energy+onsite_dc
     free_energy=internal_energy+entropy_term
     if(do_forces)then
 #ifdef HALF_CLI_HAVE_MKL
@@ -929,10 +1030,25 @@ contains
       if(trim(xc)=='pbe')then;call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv,vxc_input)
       else;call build_veff_lda(rho,potcars,crystal,veff,eh,exc,exv,vxc_input);end if
       force_nonlocal=0.0_dp;force_projector=0.0_dp;force_augmentation=0.0_dp
+      if(use_uspp)allocate(force_qdep_cache(size(potcars)))
       do ik=1,set%nk
         call build_paw_operators(potcars,crystal,force_bases(ik),paw)
         if(ik==1)call initialize_augmentation_occupancy(paw,augmentation_occupancy)
-        if(use_uspp)call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
+        if(use_uspp)then
+          if(ik==1)then
+            call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
+            do it=1,size(paw)
+              force_qdep_cache(it)%dij_atom=paw(it)%dij_atom
+              force_qdep_cache(it)%ddij_atom=paw(it)%ddij_atom
+            end do
+          else
+            do it=1,size(paw)
+              paw(it)%dij_atom=force_qdep_cache(it)%dij_atom
+              paw(it)%ddij_atom=force_qdep_cache(it)%ddij_atom
+            end do
+          end if
+        end if
+        if(allocated(onsite_correction))call apply_onsite_corrections_cpu(paw,onsite_correction)
         call accumulate_augmentation_occupancy(paw,force_waves(ik)%coefficients,occupation(ik,:),set%weights(ik), &
           augmentation_occupancy)
         call add_nonlocal_paw_forces(force_bases(ik),paw,eigenvalues(ik,:),occupation(ik,:),set%weights(ik), &
@@ -940,6 +1056,10 @@ contains
       end do
       rho_out%shape=rho%shape;allocate(rho_out%values(size(rho%values)));rho_out%values=rho_smooth%values
       call add_augmentation_density(potcars,crystal,rho%shape,augmentation_occupancy,rho_out%values,augmentation_charge)
+      ! Expanding the combined smooth plus PAW augmentation density is
+      ! algebraically equivalent to rotating each star wavefunction and its
+      ! onsite occupation matrix, without materializing full-mesh states.
+      call symmetrize_scalar_grid(set,rho%shape,rho_out%values)
       write(0,'(A,4ES18.8)')'HALF analytic density input/smooth/augmentation/final=',rho%electron_count(), &
         rho_out%electron_count()-augmentation_charge,augmentation_charge,rho_out%electron_count()
       call ewald_forces(crystal,charges,force_ewald)
@@ -950,6 +1070,13 @@ contains
       call local_ionic_forces(rho_out,potcars,crystal,force_local)
       call nlcc_forces(vxc_input,potcars,crystal,rho%shape,force_nlcc)
       call harris_correction_forces(rho,rho_out,potcars,crystal,trim(xc)=='pbe',force_harris)
+      call symmetrize_atomic_vectors(set,force_ewald)
+      call symmetrize_atomic_vectors(set,force_local)
+      call symmetrize_atomic_vectors(set,force_nonlocal)
+      call symmetrize_atomic_vectors(set,force_projector)
+      call symmetrize_atomic_vectors(set,force_augmentation)
+      call symmetrize_atomic_vectors(set,force_nlcc)
+      call symmetrize_atomic_vectors(set,force_harris)
       forces=force_ewald+force_local+force_nonlocal+force_nlcc+force_harris
       do iat=1,crystal%nions
         write(0,'(A,I0,7(A,3ES14.6))')'HALF analytic force atom ',iat,' total=',forces(iat,:), &
@@ -966,10 +1093,12 @@ contains
         if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
       call write_energy_json(unit,xc,actual_backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
-        have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step)
+        have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step, &
+        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy)
       if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
-        have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step);end if
+        have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step, &
+        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy);end if
       if(trim(output_path)/='-')then
         call write_energy_npz(trim(output_prefix),set%points,set%weights,eigenvalues,occupation,forces,artifact_status)
         if(artifact_status/=0)call fail('cannot write energy NPZ artifact')
@@ -986,10 +1115,152 @@ contains
     write(unit,'(A)')'         --symprec VALUE --bands N --ismear -1|0 --sigma EV --xc lda|pbe'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
+    write(unit,'(A)')'         --onsite-lmax -1  (non-negative channels require HALF_EXPERIMENTAL_ONSITE build)'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
     write(unit,'(A)')'         --forces  (standalone analytic PAW/Harris force; never displaces atoms)'
+    write(unit,'(A)')'                   (automatic irreducible meshes expand density, PAW augmentation, and force by space group)'
     write(unit,'(A)')'         --atomic-reference-energy EV --paw-atomic-double-counting EV'
   end subroutine
+
+  subroutine require_onsite_implementation(onsite_lmax)
+    integer,intent(in)::onsite_lmax
+    ! HALF_QDEP_LMAX limits the compensation-charge multipoles only.  It is
+    ! not a PAW one-centre functional and must never masquerade as this option.
+    ! The nonnegative route is compiled only in explicit experimental builds
+    ! until the one-centre and absolute-force validation is complete.
+#ifndef HALF_EXPERIMENTAL_ONSITE
+    if(onsite_lmax>=0)call fail('--onsite-lmax >= 0 requires a build configured with '// &
+      '-DHALF_EXPERIMENTAL_ONSITE=ON; the default build retains the validated -1 path')
+#endif
+  end subroutine
+
+#ifdef HALF_CLI_HAVE_MKL
+  subroutine update_onsite_from_waves(potcars,crystal,grid_shape,encut,set,bases,waves,occupation,lmax,backend, &
+      correction,double_counting_delta,energy_delta)
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    integer,intent(in)::grid_shape(3),lmax
+    real(dp),intent(in)::encut,occupation(:,:)
+    character(len=*),intent(in)::backend
+    type(kpoint_set_t),intent(in)::set
+    type(plane_wave_basis_t),intent(in)::bases(:)
+    type(force_wave_block_t),intent(in)::waves(:)
+    type(onsite_species_correction_t),allocatable,intent(out)::correction(:)
+    real(dp),intent(out)::double_counting_delta,energy_delta
+    type(plane_wave_basis_t)::first_basis
+    type(paw_species_t),allocatable::onsite_paw(:)
+    type(augmentation_occupancy_t),allocatable::onsite_occupancy(:)
+    integer::ik,it
+    call build_plane_wave_basis(crystal,grid_shape,encut,set%points(1,:),first_basis)
+    call build_paw_operators(potcars,crystal,first_basis,onsite_paw)
+    call initialize_augmentation_occupancy(onsite_paw,onsite_occupancy)
+    do ik=1,set%nk
+      if(.not.parallel_owns(ik))cycle
+      call build_paw_operators(potcars,crystal,bases(ik),onsite_paw)
+#ifdef HALF_CLI_CUDA
+      if(trim(backend)=='cuda')then
+        call accumulate_augmentation_occupancy_cuda(onsite_paw,waves(ik)%coefficients,occupation(ik,:), &
+          set%weights(ik),onsite_occupancy)
+      else
+#endif
+        call accumulate_augmentation_occupancy(onsite_paw,waves(ik)%coefficients,occupation(ik,:), &
+          set%weights(ik),onsite_occupancy)
+#ifdef HALF_CLI_CUDA
+      end if
+#endif
+    end do
+    do it=1,size(onsite_occupancy)
+      call parallel_sum(onsite_occupancy(it)%matrix)
+    end do
+#ifdef HALF_CLI_CUDA
+    if(trim(backend)=='cuda')then
+      call evaluate_onsite_corrections_cuda(potcars,crystal,onsite_occupancy,lmax,correction, &
+        double_counting_delta,energy_delta)
+    else
+#endif
+      call evaluate_onsite_corrections(potcars,crystal,onsite_occupancy,lmax,correction, &
+        double_counting_delta,energy_delta)
+#ifdef HALF_CLI_CUDA
+    end if
+#endif
+  end subroutine
+
+  subroutine converge_onsite_for_bands(rho,potcars,crystal,encut,kspacing,backend,solver,requested_bands,lmax,correction)
+    type(charge_grid_t),intent(in)::rho
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    real(dp),intent(in)::encut,kspacing
+    character(len=*),intent(in)::backend,solver
+    integer,intent(in)::requested_bands,lmax
+    type(onsite_species_correction_t),allocatable,intent(out)::correction(:)
+    type(onsite_species_correction_t),allocatable::updated(:)
+    type(kpoint_set_t)::mesh
+    type(plane_wave_basis_t)::basis
+    type(plane_wave_basis_t),allocatable::bases(:)
+    type(force_wave_block_t),allocatable::waves(:)
+    type(paw_species_t),allocatable::paw(:)
+    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),occupation(:,:)
+    complex(dp),allocatable::vectors(:,:)
+    real(dp)::nelect,mu,band,entropy,eh,exc,exv,smin,smax,dc,e,change,ps,as,gs,previous_change,mix
+    integer::it,ik,iteration,nb
+    nelect=0.0_dp
+    do it=1,size(potcars)
+      nelect=nelect+potcars(it)%zval*real(crystal%counts(it),dp)
+    end do
+    nb=max(requested_bands,ceiling(nelect/2.0_dp)+8)
+    call gamma_centered_mesh(crystal,kspacing,mesh)
+    allocate(bases(mesh%nk),waves(mesh%nk),eigenvalues(mesh%nk,nb))
+    if(trim(backend)=='cpu')call build_veff_pbe(rho,potcars,crystal,veff,eh,exc,exv)
+    previous_change=huge(1.0_dp);mix=1.0_dp
+    do iteration=1,120
+      eigenvalues=0.0_dp
+      do ik=1,mesh%nk
+        if(.not.parallel_owns(ik))cycle
+        call build_plane_wave_basis(crystal,rho%shape,encut,mesh%points(ik,:),basis)
+        if(nb>basis%npw)call fail('onsite density mesh has fewer plane waves than required bands')
+#ifdef HALF_CLI_CUDA
+        if(trim(backend)=='cuda')then
+          call solve_dense_gamma_cuda_full(rho,potcars,crystal,basis,.true.,values,smin,smax, &
+            solver=solver,use_uspp=.true.,eigenvectors=vectors,target_bands=nb,onsite_correction=correction)
+        else
+#endif
+          call build_paw_operators(potcars,crystal,basis,paw)
+          call build_uspp_dij_cpu(veff,rho%shape,potcars,crystal,paw)
+          if(allocated(correction))call apply_onsite_corrections_cpu(paw,correction)
+          call solve_dense_gamma(veff,basis,paw,values,smin,smax,vectors)
+#ifdef HALF_CLI_CUDA
+        end if
+#endif
+        eigenvalues(ik,:)=values(:nb)
+        bases(ik)=basis;waves(ik)%coefficients=vectors(:,:nb)
+      end do
+      call parallel_sum(eigenvalues)
+      call compute_occupations(eigenvalues,mesh%weights,nelect,0.0_dp,occupation,mu,band,entropy)
+      call update_onsite_from_waves(potcars,crystal,rho%shape,encut,mesh,bases,waves,occupation,lmax,backend,updated,dc,e)
+      change=huge(1.0_dp)
+      if(allocated(correction))then
+        change=0.0_dp
+        do it=1,size(correction)
+          change=max(change,maxval(abs(updated(it)%dij-correction(it)%dij)))
+        end do
+      end if
+      if(change<1.0e-6_dp)exit
+      if(iteration==120)call fail('onsite PAW density mesh for bands failed to converge')
+      if(allocated(correction))then
+        if(change>1.05_dp*previous_change)then
+          mix=max(0.125_dp,0.5_dp*mix)
+        else if(change<0.5_dp*previous_change)then
+          mix=min(1.0_dp,1.2_dp*mix)
+        end if
+        do it=1,size(correction)
+          updated(it)%dij=correction(it)%dij+mix*(updated(it)%dij-correction(it)%dij)
+        end do
+      end if
+      previous_change=change
+      call move_alloc(updated,correction)
+    end do
+  end subroutine
+#endif
 
   subroutine evaluate_free_energy(crystal,rho,potcars,encut,kspacing,kpoints_path,full_mesh,symprec,nbands,sigma,xc, &
       backend,solver,use_uspp,atomic_reference,paw_atomic,have_paw_atomic,free_energy)
@@ -1059,12 +1330,12 @@ contains
 
   subroutine write_energy_json(unit,xc,backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald, &
       er,eg,es,eb,local_g0,atomic_reference,paw_atomic,have_paw_atomic,internal,free,smin,plane_waves,use_uspp, &
-      forces,have_forces,force_step)
-    integer,intent(in)::unit,ismear
+      forces,have_forces,force_step,onsite_lmax,onsite_iteration,onsite_dc,onsite_energy)
+    integer,intent(in)::unit,ismear,onsite_lmax,onsite_iteration
     character(len=*),intent(in)::xc,backend,solver
     type(kpoint_set_t),intent(in)::set
     real(dp),intent(in)::sigma,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald,er,eg,es,eb,local_g0
-    real(dp),intent(in)::atomic_reference,paw_atomic,internal,free,smin
+    real(dp),intent(in)::atomic_reference,paw_atomic,internal,free,smin,onsite_dc,onsite_energy
     integer(i64),intent(in)::plane_waves(:)
     real(dp),intent(in)::forces(:,:),force_step
     logical,intent(in)::have_paw_atomic,use_uspp,have_forces
@@ -1072,9 +1343,19 @@ contains
     write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.6.0",'
     write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",';write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",'
     write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",';write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),','
+    write(unit,'(A,I0,A)')'  "onsite_lmax": ',onsite_lmax,','
+    write(unit,'(A,I0,A)')'  "onsite_iterations": ',onsite_iteration,','
+    write(unit,'(A,ES24.16,A)')'  "onsite_nonlinear_energy_eV": ',onsite_energy,','
+    write(unit,'(A,ES24.16,A)')'  "onsite_double_counting_delta_eV": ',onsite_dc,','
     write(unit,'(A,I0,A)')'  "ismear": ',ismear,',';write(unit,'(A,ES24.16,A)')'  "sigma_eV": ',sigma,','
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
     write(unit,'(A,I0,A)')'  "full_kpoint_count": ',set%full_count,',';write(unit,'(A,I0,A)')'  "irreducible_kpoint_count": ',set%nk,','
+    write(unit,'(A,I0,A)')'  "space_group_operation_count": ',set%nsym,','
+    if(have_forces.and.set%nsym>1)then
+      write(unit,'(A)')'  "force_kpoint_expansion": "observable-space-group",'
+    else
+      write(unit,'(A)')'  "force_kpoint_expansion": null,'
+    end if
     write(unit,'(A,I0,A,I0,A)')'  "plane_wave_range": [',minval(plane_waves),', ',maxval(plane_waves),'],'
     write(unit,'(A,ES24.16,A)')'  "electron_count": ',nelect,',';write(unit,'(A,ES24.16,A)')'  "smooth_density_electron_count": ',density_electrons,','
     write(unit,'(A,ES24.16,A)')'  "fermi_level_eV": ',mu,',';write(unit,'(A,ES24.16,A)')'  "band_energy_eV": ',band,','

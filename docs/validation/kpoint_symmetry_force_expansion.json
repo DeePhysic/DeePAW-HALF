@@ -1,0 +1,41 @@
+{
+  "branch": "force-kpoint-symmetry",
+  "system": "two-atom diamond Si primitive cell",
+  "hardware": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+  "settings": {
+    "xc": "PBE",
+    "encut_eV": 520,
+    "kspacing_per_A": 0.35,
+    "bands": 12,
+    "backend": "cuda",
+    "solver": "evd",
+    "gpu_count": 1
+  },
+  "full_mesh": {
+    "kpoints_solved": 216,
+    "free_energy_eV_per_cell": -10.828846135302499,
+    "max_force_norm_eV_per_A": 1.6470047394155953e-7,
+    "wall_seconds": 35.41
+  },
+  "irreducible_space_group_expansion": {
+    "full_kpoint_count": 216,
+    "kpoints_solved": 16,
+    "space_group_operations": 48,
+    "method": "observable-space-group",
+    "free_energy_eV_per_cell": -10.828846145087127,
+    "max_force_norm_eV_per_A": 2.453268957056404e-18,
+    "wall_seconds": 4.42
+  },
+  "comparison": {
+    "energy_difference_eV_per_cell": -9.784628218767466e-9,
+    "max_force_component_difference_eV_per_A": 1.0575834703202596e-7,
+    "diagonalization_reduction": 13.5,
+    "wall_speedup": 8.011312217195
+  },
+  "regression": {
+    "cuda_direct_grid": "9/9 passed",
+    "cpu_direct_grid": "9/9 passed",
+    "legacy_shell": "9/9 passed"
+  },
+  "raw_data": "/data/limusen/deepaw_half_si_primitive_cli_timing_20260921"
+}

@@ -1,5 +1,16 @@
 # Validation contract
 
+## Project-level energy and force accuracy
+
+Accuracy claims use only fully self-consistent VASP with `LMAXMIX=-1` as the
+reference. For Si/HfO2, HALF differs by `-1.360/+9.837 meV/atom` in total
+energy and has force-component MAEs of `0.414/10.988 meV/Angstrom`. See
+[`validation/HALF_VS_VASP_SCF_ENERGY_FORCE.md`](validation/HALF_VS_VASP_SCF_ENERGY_FORCE.md)
+and its
+[`machine-readable record`](validation/half_vs_vasp_scf_energy_force.json).
+Frozen-density VASP calculations below are implementation regressions only;
+they are not used as project-level physical-accuracy comparisons.
+
 ## POTCAR augmentation density in analytic forces
 
 The standalone analytic-force path reconstructs PAW onsite occupations from
@@ -10,11 +21,14 @@ electron count to within `1.0e-5 e`; the detailed record is
 [`validation/potcar_augmentation_force_si_hfo2.json`](validation/potcar_augmentation_force_si_hfo2.json).
 
 The current force functional treats the DeepAW smooth input density as frozen.
-Its Harris response therefore contains only the XC-kernel contraction caused
-by translating the POTCAR core density; it does not translate `PSPRHO` and has
-no Hartree response. Atomic PAW double counting is reconstructed from POTCAR
-and is independent of the CHGCAR augmentation tail. The latest direct Si/HfO2
-numbers and the remaining variational-consistency work are recorded below.
+Its Harris convergence force includes the full Hartree-plus-XC response to the
+output-minus-input density and contracts that response with the translated
+POTCAR `PSPRHO`; NLCC remains the separate `PSPCOR` derivative. Atomic PAW
+double counting is reconstructed from POTCAR and is independent of the CHGCAR
+augmentation tail. Against the strict VASP `ICHARG=11` frozen-density oracle,
+the force-component MAE is `6.99e-6 eV/Angstrom` for Si and
+`1.007e-3 eV/Angstrom` for HfO2. See
+[`validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md`](validation/HARRIS_FORCE_L_RESPONSE_OPTIMIZATION.md).
 
 A direct comparison against non-converged VASP `LMAXMIX=-1` MIMIC_US energy
 and forces is recorded in
@@ -24,8 +38,22 @@ claim is made until those terms close quantitatively.
 The corresponding machine-readable values are in
 [`validation/harris_vasp_mimic_us_energy_force.json`](validation/harris_vasp_mimic_us_energy_force.json).
 
+The experimental `force-accuracy-experiments` branch makes the CPU/CUDA QDEP
+angular quadrature configurable. Raising it from 12x24 to 24x48 reduces the
+selected Si and HfO2 analytic-versus-finite-difference errors by about 40x and
+12x, respectively. See the
+[`Chinese experiment report`](validation/FORCE_ACCURACY_EXPERIMENTS.zh-CN.md)
+and
+[`machine-readable record`](validation/force_accuracy_qdep_angular_grid.json).
+
 HAPPY is the numerical oracle for HALF. Comparisons use identical CHGCAR,
 POTCAR, XC, ENCUT, k points and band counts.
+
+The Si primitive-cell CLI band benchmark overlays dense EVD and matrix-free
+ACC and reports convergence per band. ACC reproduces the lowest eight bands to
+`3.79e-12 eV`, including the occupied subspace and gap, while its default early
+stop leaves the highest requested empty bands unconverged. See the
+[`band plot and report`](validation/SI_PRIMITIVE_BAND_ACC.md).
 
 | Quantity | Acceptance threshold |
 |---|---:|

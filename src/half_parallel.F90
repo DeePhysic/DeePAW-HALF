@@ -12,7 +12,7 @@ module half_parallel
   logical, save :: started_here = .false.
 
   interface parallel_sum
-    module procedure parallel_sum_real_1d, parallel_sum_real_2d, parallel_sum_int64_1d
+    module procedure parallel_sum_real_1d, parallel_sum_real_2d, parallel_sum_real_3d, parallel_sum_int64_1d
   end interface
 
 contains
@@ -74,6 +74,14 @@ contains
 
   subroutine parallel_sum_real_2d(values)
     real(dp),intent(inout)::values(:,:)
+#ifdef HALF_HAVE_MPI
+    integer::ierr
+    if(saved_size>1)call MPI_Allreduce(MPI_IN_PLACE,values,size(values),MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)
+#endif
+  end subroutine
+
+  subroutine parallel_sum_real_3d(values)
+    real(dp),intent(inout)::values(:,:,:)
 #ifdef HALF_HAVE_MPI
     integer::ierr
     if(saved_size>1)call MPI_Allreduce(MPI_IN_PLACE,values,size(values),MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)

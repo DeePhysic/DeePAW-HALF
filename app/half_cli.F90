@@ -779,7 +779,7 @@ contains
     type(augmentation_occupancy_t),allocatable::augmentation_occupancy(:)
     type(onsite_species_correction_t),allocatable::onsite_correction(:),onsite_new(:)
     real(dp)::augmentation_charge
-    real(dp)::onsite_dc,onsite_energy,onsite_change,onsite_previous_change,onsite_mix
+    real(dp)::onsite_dc,onsite_energy,onsite_change,onsite_previous_change,onsite_mix,onsite_tol
     integer::onsite_iteration
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)
@@ -800,7 +800,7 @@ contains
     encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.0_dp;nbands=0;ismear=0
     xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';output_prefix='energy';hdf5_path='';reference_path=''
     use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.;onsite_lmax=-1
-    paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;i=offset+3
+    paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;onsite_tol=1.0e-6_dp;i=offset+3
     do while(i<=narg)
       call get_command_argument(i,arg)
       select case(trim(arg))
@@ -828,6 +828,8 @@ contains
           call fail('--solver must be evd, evj, evx, or acc')
       case('--onsite-lmax');call option_value(i,narg,'--onsite-lmax',value);read(value,*,iostat=ios)onsite_lmax
         if(ios/=0.or.onsite_lmax< -1)call fail('--onsite-lmax must be -1 or a non-negative integer')
+      case('--onsite-tol');call option_value(i,narg,'--onsite-tol',value);read(value,*,iostat=ios)onsite_tol
+        if(ios/=0.or.onsite_tol<=0.0_dp)call fail('invalid --onsite-tol value')
       case('--no-uspp-dij');use_uspp=.false.
       case('--forces');do_forces=.true.
       case('--finite-difference-force-check');call fail('finite differences are available only in the half-force-check validation executable, never in the production CLI')
@@ -850,6 +852,8 @@ contains
       if(trim(xc)/='pbe')call fail('experimental onsite PAW currently supports PBE only')
       if(.not.use_uspp)call fail('experimental onsite PAW requires QDEP/PAW Dij')
       if(have_paw_atomic)call fail('experimental onsite PAW requires automatic atomic double counting')
+      if(do_forces.and.onsite_lmax>0.and.parallel_rank()==0) &
+        write(0,'(A)')'HALF warning: high-l onsite analytic total forces remain unvalidated; use for diagnostics only'
     end if
     call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars);call validate_potcar_structure(potcars,crystal)
     nelect=0.0_dp
@@ -910,6 +914,7 @@ contains
     if(do_forces.or.onsite_lmax>=0)allocate(force_bases(set%nk),force_waves(set%nk))
     onsite_dc=0.0_dp;onsite_energy=0.0_dp
     onsite_previous_change=huge(1.0_dp);onsite_mix=1.0_dp
+    if(do_forces.and.onsite_lmax>=0)onsite_tol=min(onsite_tol,1.0e-8_dp)
     do onsite_iteration=1,120
     if(onsite_iteration>1)then
       eigenvalues=0.0_dp;plane_waves=0_i64;smin=huge(1.0_dp)
@@ -976,7 +981,7 @@ contains
     end if
     write(0,'(A,I0,A,ES14.6,A,ES14.6)')'HALF onsite iteration ',onsite_iteration, &
       ' Dij_change_eV=',onsite_change,' double_counting_eV=',onsite_dc
-    if(onsite_change<1.0e-6_dp)exit
+    if(onsite_change<onsite_tol)exit
     if(onsite_iteration==120)call fail('onsite PAW iteration failed to converge')
     if(allocated(onsite_correction))then
       if(onsite_change>1.05_dp*onsite_previous_change)then
@@ -1115,7 +1120,7 @@ contains
     write(unit,'(A)')'         --symprec VALUE --bands N --ismear -1|0 --sigma EV --xc lda|pbe'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
-    write(unit,'(A)')'         --onsite-lmax -1|0|1|...  (default -1; non-negative channels require MKL/FFTW)'
+    write(unit,'(A)')'         --onsite-lmax -1|0|1|... --onsite-tol EV (default -1 and 1e-6 EV)'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
     write(unit,'(A)')'         --forces  (standalone analytic PAW/Harris force; never displaces atoms)'
     write(unit,'(A)')'                   (automatic irreducible meshes expand density, PAW augmentation, and force by space group)'
@@ -1347,6 +1352,11 @@ contains
     write(unit,'(A,A,A)')'  "xc": "',trim(xc),'",';write(unit,'(A,A,A)')'  "backend": "',trim(backend),'",'
     write(unit,'(A,A,A)')'  "solver": "',trim(solver),'",';write(unit,'(A,A,A)')'  "uspp_dij": ',merge('true ','false',use_uspp),','
     write(unit,'(A,I0,A)')'  "onsite_lmax": ',onsite_lmax,','
+    if(have_forces.and.onsite_lmax>0)then
+      write(unit,'(A)')'  "onsite_force_validation": "experimental_unvalidated",'
+    else
+      write(unit,'(A)')'  "onsite_force_validation": null,'
+    end if
     write(unit,'(A,I0,A)')'  "onsite_iterations": ',onsite_iteration,','
     write(unit,'(A,ES24.16,A)')'  "onsite_nonlinear_energy_eV": ',onsite_energy,','
     write(unit,'(A,ES24.16,A)')'  "onsite_double_counting_delta_eV": ',onsite_dc,','

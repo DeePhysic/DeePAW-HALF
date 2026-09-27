@@ -1,0 +1,35 @@
+{
+  "status": "experimental; energy and band parity passed; high-l total force not validated",
+  "input_density": "DeepAW CHGCAR.deepaw",
+  "xc": "aspherical PBE for onsite_lmax > 0",
+  "functional_cpu_cuda_parity_eV": {
+    "TiO2_l2": {
+      "energy": 3.23469607e-9,
+      "double_counting": -2.2469e-7,
+      "max_Dij": 3.05577430e-8
+    },
+    "CeO2_l6": {
+      "energy": 8.07532174e-9,
+      "double_counting": 9.55890854e-7,
+      "max_Dij": 1.98263677e-7
+    }
+  },
+  "TiO2_fixed_point_120eV_kspacing2_bands28": {
+    "onsite_iterations_cpu": 17,
+    "onsite_iterations_cuda": 17,
+    "free_energy_cpu_eV": 76.99495310895982,
+    "free_energy_cuda_eV": 76.99495749879202
+  },
+  "BN_bands_l2_100eV_kspacing2_max_eigenvalue_difference_eV": 4.8767628157975196e-8,
+  "BN_l2_100eV_kspacing2": {
+    "free_energy_cpu_one_rank_eV": 14.655778551783092,
+    "free_energy_cpu_two_ranks_eV": 14.655778556185743
+  },
+  "BN_force_l2_minus_l0_200eV_kspacing1_5_step0_01": {
+    "analytic_increment_eV_per_A": 0.0049308778558267985,
+    "energy_finite_difference_increment_eV_per_A": 0.005710958890503548,
+    "absolute_increment_error_eV_per_A": 0.0007800810346767495,
+    "onsite_tolerance_eV": 1e-8,
+    "conclusion": "high-l analytic total force remains unresolved"
+  }
+}

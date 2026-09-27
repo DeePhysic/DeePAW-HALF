@@ -18,6 +18,7 @@ def main() -> None:
     parser.add_argument("potcar", type=Path)
     parser.add_argument("workdir", type=Path)
     parser.add_argument("--onsite-lmax", type=int, required=True)
+    parser.add_argument("--reference-lmax", type=int, default=-1)
     parser.add_argument("--center-shift", type=float, default=0.02)
     parser.add_argument("--step", type=float, default=0.002)
     parser.add_argument("--encut", type=float, default=200.0)
@@ -27,9 +28,11 @@ def main() -> None:
     args = parser.parse_args()
     if args.onsite_lmax < 0:
         parser.error("--onsite-lmax must be non-negative")
+    if args.reference_lmax < -1 or args.reference_lmax >= args.onsite_lmax:
+        parser.error("--reference-lmax must be -1 or a lower non-negative channel")
     args.workdir.mkdir(parents=True, exist_ok=True)
     results = {}
-    for lmax in (-1, args.onsite_lmax):
+    for lmax in (args.reference_lmax, args.onsite_lmax):
         case = {}
         for name, displacement in (
             ("center", args.center_shift),
@@ -42,7 +45,7 @@ def main() -> None:
             case[name] = run_half(args.binary, charge, args.potcar, output,
                                   args.encut, args.kspacing, args.bands, lmax, args.backend)
         results[lmax] = case
-    target, reference = results[args.onsite_lmax], results[-1]
+    target, reference = results[args.onsite_lmax], results[args.reference_lmax]
     analytic = (target["center"]["forces_eV_per_Angstrom"][0][0]
                 - reference["center"]["forces_eV_per_Angstrom"][0][0])
     delta_plus = target["plus"]["free_energy_eV"] - reference["plus"]["free_energy_eV"]
@@ -50,7 +53,7 @@ def main() -> None:
     finite_difference = -(delta_plus - delta_minus) / (2.0 * args.step)
     report = {
         "onsite_lmax": args.onsite_lmax,
-        "reference_lmax": -1,
+        "reference_lmax": args.reference_lmax,
         "backend": args.backend,
         "analytic_increment_eV_per_A": analytic,
         "finite_difference_increment_eV_per_A": finite_difference,

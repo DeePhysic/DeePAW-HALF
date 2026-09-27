@@ -488,8 +488,11 @@ half bands CHGCAR.deepaw POTCAR KPOINTS --onsite-lmax 2 --onsite-kspacing 0.35 -
 ```
 
 CPU Fortran, CPU MPI, and CUDA Fortran paths have focused numerical parity
-checks, including s/p, d, and f projectors. The CUDA path computes the
-occupation contraction and dynamic radial Hartree/PBE functional on GPU;
-static POTCAR coefficient preparation and final force assembly remain on the
-host. See [the onsite validation status](docs/ONSITE_LMAX_STATUS.zh-CN.md)
+checks, including s/p, d, and f projectors. Higher channels include angular
+density and gradient terms in PBE XC. The CUDA path computes the occupation
+contraction, dynamic radial Hartree energy, and aspherical PBE quadrature on
+GPU; static POTCAR coefficient preparation and final force assembly remain on
+the host. High-l analytic total forces have not passed finite-difference
+validation and are marked experimental by the CLI. See
+[the onsite validation status](docs/ONSITE_LMAX_STATUS.zh-CN.md)
 before using non-negative channels for production EOS conclusions.

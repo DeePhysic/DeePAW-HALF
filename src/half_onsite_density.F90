@@ -4,12 +4,50 @@ module half_onsite_density
   use half_kinds,only:dp
   use half_types,only:potcar_t
   use half_constants,only:pi,felect
-  use half_uspp,only:gaunt_numeric,radial_weights,bessel_root,compensation_coefficients,sph_bessel
+  use half_uspp,only:gaunt_numeric,radial_weights,bessel_root,compensation_coefficients,sph_bessel, &
+    gauss_legendre,ylm
   implicit none
   private
   public::build_onsite_radial_multipoles,atomic_onsite_occupation, &
-    add_onsite_compensation,onsite_hartree_energy,hartree_multipole
+    add_onsite_compensation,onsite_hartree_energy,hartree_multipole, &
+    onsite_angular_table_t,prepare_onsite_angular_table
+  type::onsite_angular_table_t
+    integer::npoints=0
+    real(dp),allocatable::y(:,:),dtheta(:,:),dphi(:,:),weight(:),sin_theta(:)
+  end type
 contains
+  subroutine prepare_onsite_angular_table(lmax,table)
+    integer,intent(in)::lmax
+    type(onsite_angular_table_t),intent(out)::table
+    real(dp),allocatable::x(:),w(:)
+    real(dp)::theta,theta_lo,theta_hi,phi,h
+    integer::nt,np,naug,it,ip,k,l,m,point
+    if(lmax<0)error stop 'HALF: angular table requires non-negative lmax'
+    nt=max(12,2*lmax+8);np=2*nt;naug=(lmax+1)*(lmax+1)
+    allocate(x(nt),w(nt),table%y(naug,nt*np),table%dtheta(naug,nt*np), &
+      table%dphi(naug,nt*np),table%weight(nt*np),table%sin_theta(nt*np))
+    call gauss_legendre(nt,x,w)
+    table%npoints=nt*np;h=1.0e-5_dp
+    do it=1,nt
+      theta=acos(x(it));theta_lo=max(1.0e-8_dp,theta-h);theta_hi=min(pi-1.0e-8_dp,theta+h)
+      do ip=1,np
+        point=(it-1)*np+ip;phi=2*pi*real(ip-1,dp)/real(np)
+        table%weight(point)=w(it)*2*pi/real(np,dp)
+        table%sin_theta(point)=sin(theta)
+        k=0
+        do l=0,lmax
+          do m=-l,l
+            k=k+1
+            table%y(k,point)=ylm(l,m,x(it),phi)
+            table%dtheta(k,point)=(ylm(l,m,cos(theta_hi),phi)-ylm(l,m,cos(theta_lo),phi))/ &
+              (theta_hi-theta_lo)
+            table%dphi(k,point)=(ylm(l,m,x(it),phi+h)-ylm(l,m,x(it),phi-h))/(2*h)
+          end do
+        end do
+      end do
+    end do
+  end subroutine
+
   subroutine atomic_onsite_occupation(p,occupation)
     type(potcar_t),intent(in)::p
     real(dp),allocatable,intent(out)::occupation(:,:)

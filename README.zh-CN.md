@@ -162,9 +162,10 @@ half bands CHGCAR.deepaw POTCAR KPOINTS --onsite-lmax 2 --onsite-kspacing 0.35 -
 ```
 
 CPU Fortran、CPU MPI 与 CUDA Fortran 的 s/p、d、f 投影子已有定点
-数值对照。CUDA 路径在 GPU 上执行占据收缩和动态径向 Hartree/PBE
-泛函；静态 POTCAR 系数准备及最终力组合仍在主机侧。非负通道尚未通过
-生产级 EOS/VASP 参照验证，使用前请看
+数值对照；高阶通道的 PBE XC 包含角向密度与梯度。CUDA 路径在 GPU
+上执行占据收缩、动态径向 Hartree 及非球形 PBE 求积；静态 POTCAR
+系数准备及最终力组合仍在主机侧。高阶解析总力的有限差分尚未通过，
+CLI 会标记为实验结果。非负通道尚未通过生产级 EOS/VASP 参照验证，使用前请看
 [`onsite 验证状态`](docs/ONSITE_LMAX_STATUS.zh-CN.md)。
 
 对已实现的 DION 问题，`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，化为

@@ -41,7 +41,7 @@ def run_half(binary: Path, charge: Path, potcar: Path, output: Path, encut: floa
     command = [
         str(binary), "energy", str(charge), str(potcar), "--backend", backend,
         "--onsite-lmax", str(onsite_lmax), "--encut", str(encut), "--kspacing", str(kspacing),
-        "--bands", str(bands), "--no-kpoint-symmetry", "--output", str(output),
+        "--bands", str(bands), "--onsite-tol", "1e-8", "--no-kpoint-symmetry", "--output", str(output),
     ]
     if "center" in output.stem:
         command.append("--forces")

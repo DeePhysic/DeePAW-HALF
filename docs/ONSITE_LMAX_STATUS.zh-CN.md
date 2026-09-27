@@ -4,8 +4,8 @@
 仍执行已有的固定输入平滑密度、MIMIC_US 型 Harris 路径。非负值必须启用
 one-centre PAW 泛函，不能用 `HALF_QDEP_LMAX` 截断补偿电荷来冒充。
 
-目前 `half bands` 和 `half energy` 均解析该参数。默认构建对非负值报错；
-仅在显式设置 `-DHALF_EXPERIMENTAL_ONSITE=ON` 时开放实验路径。它不是
+目前 `half bands` 和 `half energy` 均解析该参数。MKL/FFTW 构建默认
+启用非负通道；可用 `-DHALF_EXPERIMENTAL_ONSITE=OFF` 禁用。它不是
 已经完成验证的生产功能，不能据此宣称 BN 高 $l$ EOS 已解决。
 
 `half_onsite_density` 从 POTCAR 的 `QATO` 构建原子参考
@@ -114,5 +114,6 @@ onsite 增量为 `-0.006256910 eV/Å`，能量中心差分增量为
 `3.21e-5`、`3.41e-5 eV/Å`；逐项数据见
 `docs/validation/onsite_force_increment_bn_final_step.json`。
 
-只有这些项在 CPU 和 CUDA 两套路径都完成且通过数值验证后，才移除
-非负值的安全报错。
+运行时非负通道已经可用，但只有这些项在 CPU 和 CUDA 两套路径都完成
+并通过数值验证后，才能把它作为经 VASP 对照的生产级 PAW 结果发表或
+用于正式 EOS 结论。

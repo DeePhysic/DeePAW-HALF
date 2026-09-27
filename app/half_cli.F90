@@ -677,7 +677,7 @@ contains
     write(unit,'(A)')'Options: --encut EV --bands N --npoints N --path LABELS --xc lda|pbe --backend auto|cpu|cuda'
     write(unit,'(A)')'         --solver evd|evj|evx|acc --acc-tol EV --acc-max-iter N --acc-block-size N'
     write(unit,'(A)')'         --onsite-kspacing VALUE  (density mesh used when --onsite-lmax >= 0)'
-    write(unit,'(A)')'         --onsite-lmax -1  (non-negative channels require HALF_EXPERIMENTAL_ONSITE build)'
+    write(unit,'(A)')'         --onsite-lmax -1|0|1|...  (default -1; non-negative channels require MKL/FFTW)'
     write(unit,'(A)')'         --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
     write(unit,'(A)')'KPOINTS is a VASP explicit reciprocal-coordinate file; omit it for an automatic cubic band path.'
   end subroutine
@@ -1115,7 +1115,7 @@ contains
     write(unit,'(A)')'         --symprec VALUE --bands N --ismear -1|0 --sigma EV --xc lda|pbe'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
-    write(unit,'(A)')'         --onsite-lmax -1  (non-negative channels require HALF_EXPERIMENTAL_ONSITE build)'
+    write(unit,'(A)')'         --onsite-lmax -1|0|1|...  (default -1; non-negative channels require MKL/FFTW)'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
     write(unit,'(A)')'         --forces  (standalone analytic PAW/Harris force; never displaces atoms)'
     write(unit,'(A)')'                   (automatic irreducible meshes expand density, PAW augmentation, and force by space group)'
@@ -1126,11 +1126,14 @@ contains
     integer,intent(in)::onsite_lmax
     ! HALF_QDEP_LMAX limits the compensation-charge multipoles only.  It is
     ! not a PAW one-centre functional and must never masquerade as this option.
-    ! The nonnegative route is compiled only in explicit experimental builds
-    ! until the one-centre and absolute-force validation is complete.
+    ! The nonnegative route is available in normal MKL/FFTW builds. Keep the
+    ! build option for sites that explicitly need the legacy -1-only binary.
 #ifndef HALF_EXPERIMENTAL_ONSITE
     if(onsite_lmax>=0)call fail('--onsite-lmax >= 0 requires a build configured with '// &
-      '-DHALF_EXPERIMENTAL_ONSITE=ON; the default build retains the validated -1 path')
+      '-DHALF_EXPERIMENTAL_ONSITE=ON')
+#endif
+#ifndef HALF_CLI_HAVE_MKL
+    if(onsite_lmax>=0)call fail('--onsite-lmax >= 0 requires an MKL/FFTW-enabled build')
 #endif
   end subroutine
 

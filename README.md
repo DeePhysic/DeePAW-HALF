@@ -477,8 +477,10 @@ the corresponding numerical row passes.
 The `half energy` and `half bands` commands accept `--onsite-lmax -1|0|1|...`.
 The default `-1` retains the established MIMIC_US Harris path. Non-negative
 values self-consistently update the onsite occupation matrix and PAW `Dij`,
-with a matching one-centre energy/double-counting correction. To enable this
-still-experimental path, configure with `-DHALF_EXPERIMENTAL_ONSITE=ON`.
+with a matching one-centre energy/double-counting correction. This path is
+included in normal MKL/FFTW builds, although its validation remains experimental.
+Sites requiring the legacy `-1`-only binary may set
+`-DHALF_EXPERIMENTAL_ONSITE=OFF`.
 
 ```bash
 half energy CHGCAR.deepaw POTCAR --onsite-lmax 2 --backend cuda

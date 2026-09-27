@@ -152,7 +152,9 @@ augmentation occupancy 与 augmentation density；有限差分只保留为验证
 `half energy` 与 `half bands` 支持运行参数 `--onsite-lmax -1|0|1|...`。
 默认 `-1` 保持原有 MIMIC_US Harris 路径。非负值从波函数计算 onsite
 占据、自洽更新每个原子的 PAW `Dij`，并加入相应的 one-centre 能量与
-双计数修正。目前需要用 `-DHALF_EXPERIMENTAL_ONSITE=ON` 显式构建：
+双计数修正。MKL/FFTW 构建默认包含该运行时功能；如需仅保留旧的
+`-1` 路径，可设置 `-DHALF_EXPERIMENTAL_ONSITE=OFF`。数值验证状态
+仍标记为实验功能：
 
 ```bash
 half energy CHGCAR.deepaw POTCAR --onsite-lmax 2 --backend cuda

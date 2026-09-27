@@ -5,7 +5,7 @@ module half_cuda_assembly
   use half_kinds, only: dp
   use half_constants,only:pi
   use half_types, only: plane_wave_basis_t,crystal_t,potcar_t
-  use half_paw, only: paw_species_t
+  use half_paw, only: paw_species_t,onsite_species_correction_t
   use half_cuda_uspp, only: build_uspp_dij_cuda_species
   implicit none
   private
@@ -79,6 +79,15 @@ contains
       h(matrix_index)=h(matrix_index)+zh
       s(matrix_index)=s(matrix_index)+zs
     end if
+  end subroutine
+
+  attributes(global) subroutine add_onsite_dij_kernel(dij,correction,n)
+    real(dp),device,intent(inout)::dij(*)
+    real(dp),device,intent(in)::correction(*)
+    integer,value::n
+    integer::i
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i<=n)dij(i)=dij(i)+correction(i)
   end subroutine
 
   attributes(device) function spline_eval_projector_d(y,m2,xmax,x,nrad)result(value)
@@ -324,16 +333,17 @@ contains
     ierr=cudaDeviceSynchronize(); if(ierr/=cudaSuccess)error stop 'HALF: CUDA matrix assembly failed'
   end subroutine
 
-  subroutine assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,h,s,use_uspp)
+  subroutine assemble_dense_gamma_cuda_full(dveff,basis,potcars,crystal,h,s,use_uspp,onsite_correction)
     real(dp),device,intent(in)::dveff(:)
     type(plane_wave_basis_t),intent(in)::basis
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
     logical,intent(in),optional::use_uspp
+    type(onsite_species_correction_t),intent(in),optional::onsite_correction(:)
     complex(dp),device,allocatable,intent(out)::h(:,:),s(:,:)
     complex(dp),device,allocatable::dvin(:),dvg(:),dprojectors(:,:,:)
     integer,device,allocatable::dgvectors(:,:)
-    real(dp),device,allocatable::dkinetic(:),dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:),ddij(:,:,:),dqij(:,:)
+    real(dp),device,allocatable::dkinetic(:),dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:),ddij(:,:,:),dqij(:,:),dcorr(:,:,:)
     real(dp),allocatable::positions(:,:),m2(:),dij(:,:),qij(:,:)
     type(dim3)::threads,blocks
     integer::n,ngrid,plan,status,it,iat,ich,jch,m,mj,l,ilm,jlm,nlm,nrad,ion0,ierr
@@ -375,6 +385,13 @@ contains
         allocate(ddij(crystal%counts(it),nlm,nlm))
         do iat=1,crystal%counts(it);ddij(iat,:,:)=dij;end do
       end if
+      if(present(onsite_correction))then
+        if(size(onsite_correction)/=size(potcars))error stop 'HALF: CUDA onsite species mismatch'
+        if(any(shape(onsite_correction(it)%dij)/=shape(ddij)))error stop 'HALF: CUDA onsite Dij shape mismatch'
+        allocate(dcorr(crystal%counts(it),nlm,nlm));dcorr=onsite_correction(it)%dij
+        call add_onsite_dij_kernel<<<(size(ddij)+255)/256,256>>>(ddij,dcorr,size(ddij))
+        deallocate(dcorr)
+      end if
       dqij=qij
       do iat=1,crystal%counts(it);positions(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do
       dpositions=positions;ilm=0
@@ -399,14 +416,15 @@ contains
     ierr=cudaDeviceSynchronize();if(ierr/=cudaSuccess)error stop 'HALF: full CUDA matrix assembly failed'
   end subroutine
 
-  subroutine prepare_hs_operator_cuda(dveff,basis,potcars,crystal,op,use_uspp)
+  subroutine prepare_hs_operator_cuda(dveff,basis,potcars,crystal,op,use_uspp,onsite_correction)
     real(dp),device,intent(in)::dveff(:)
     type(plane_wave_basis_t),intent(in)::basis
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
     type(cuda_hs_operator_t),intent(out)::op
     logical,intent(in),optional::use_uspp
-    real(dp),device,allocatable::dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:)
+    type(onsite_species_correction_t),intent(in),optional::onsite_correction(:)
+    real(dp),device,allocatable::dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:),dcorr(:,:,:)
     real(dp),allocatable::positions(:,:),m2(:),dij(:,:),qij(:,:)
     integer::status,it,iat,ich,jch,m,mj,l,ilm,jlm,nlm,nrad,ion0
     logical::with_uspp
@@ -443,6 +461,14 @@ contains
       else
         allocate(op%paw(it)%dij(crystal%counts(it),nlm,nlm))
         do iat=1,crystal%counts(it);op%paw(it)%dij(iat,:,:)=dij;end do
+      end if
+      if(present(onsite_correction))then
+        if(size(onsite_correction)/=size(potcars))error stop 'HALF: CUDA onsite species mismatch'
+        if(any(shape(onsite_correction(it)%dij)/=shape(op%paw(it)%dij))) &
+          error stop 'HALF: CUDA onsite Dij shape mismatch'
+        allocate(dcorr(crystal%counts(it),nlm,nlm));dcorr=onsite_correction(it)%dij
+        call add_onsite_dij_kernel<<<(size(dcorr)+255)/256,256>>>(op%paw(it)%dij,dcorr,size(dcorr))
+        deallocate(dcorr)
       end if
       allocate(positions(crystal%counts(it),3),dpositions(crystal%counts(it),3))
       do iat=1,crystal%counts(it);positions(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do

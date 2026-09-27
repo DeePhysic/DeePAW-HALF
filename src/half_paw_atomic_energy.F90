@@ -5,7 +5,7 @@ module half_paw_atomic_energy
   use half_xc,only:pbe_energy_density
   implicit none
   private
-  public::compute_paw_atomic_double_counting
+  public::compute_paw_atomic_double_counting,radial_pbe_energy
 contains
   subroutine compute_paw_atomic_double_counting(potcars,counts,use_pbe,total,ae_total,ps_total)
     type(potcar_t),intent(in)::potcars(:)

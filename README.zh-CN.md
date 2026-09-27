@@ -147,6 +147,24 @@ augmentation occupancy 与 augmentation density；有限差分只保留为验证
 `--kpoint KX KY KZ`。权威状态见
 [`docs/PORTING_MATRIX.md`](docs/PORTING_MATRIX.md)。
 
+## 占据依赖的 onsite PAW（实验功能）
+
+`half energy` 与 `half bands` 支持运行参数 `--onsite-lmax -1|0|1|...`。
+默认 `-1` 保持原有 MIMIC_US Harris 路径。非负值从波函数计算 onsite
+占据、自洽更新每个原子的 PAW `Dij`，并加入相应的 one-centre 能量与
+双计数修正。目前需要用 `-DHALF_EXPERIMENTAL_ONSITE=ON` 显式构建：
+
+```bash
+half energy CHGCAR.deepaw POTCAR --onsite-lmax 2 --backend cuda
+half bands CHGCAR.deepaw POTCAR KPOINTS --onsite-lmax 2 --onsite-kspacing 0.35 --backend cuda
+```
+
+CPU Fortran、CPU MPI 与 CUDA Fortran 的 s/p、d、f 投影子已有定点
+数值对照。CUDA 路径在 GPU 上执行占据收缩和动态径向 Hartree/PBE
+泛函；静态 POTCAR 系数准备及最终力组合仍在主机侧。非负通道尚未通过
+生产级 EOS/VASP 参照验证，使用前请看
+[`onsite 验证状态`](docs/ONSITE_LMAX_STATUS.zh-CN.md)。
+
 对已实现的 DION 问题，`S` 正定，可将 `S = L L^H` 作 Cholesky 分解，化为
 `L^-1 H L^-H y = epsilon y`，再以 `c = L^-H y` 恢复广义本征矢。CPU 的 MKL 和
 GPU 的 cuSOLVER 都执行这一稠密广义厄米求解。

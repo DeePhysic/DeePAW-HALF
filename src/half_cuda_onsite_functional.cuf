@@ -1,0 +1,293 @@
+module half_cuda_onsite_functional
+  ! CUDA Fortran evaluation of the occupation-dependent one-centre functional.
+  ! POTCAR angular coefficients and normalized compensation shapes are prepared
+  ! once per species on the host; every trial density, radial Hartree/PBE
+  ! integral, and occupation derivative is evaluated on the GPU.
+  use cudafor
+  use half_kinds,only:dp
+  use half_constants,only:pi,autoa,hatoev,felect
+  use half_types,only:potcar_t,crystal_t
+  use half_paw,only:onsite_species_correction_t
+  use half_uspp,only:augmentation_occupancy_t,gaunt_numeric,radial_weights, &
+    bessel_root,compensation_coefficients,sph_bessel
+  use half_onsite_density,only:atomic_onsite_occupation
+  implicit none
+  private
+  public::evaluate_onsite_corrections_cuda
+
+  type::radial_gpu_context_t
+    integer::nrad,nlm,naug,nchan
+    integer,device,allocatable::channel(:),angular(:)
+    real(dp),device,allocatable::r(:),w(:),wae(:,:),wps(:,:),rhoae(:),rhops(:), &
+      gaunt(:,:,:),qpaw(:,:,:),shape(:,:),occupation(:,:),ae(:,:),ps(:,:), &
+      hartree_ae(:),hartree_ps(:),xc(:),energy(:)
+  end type
+contains
+  attributes(device) real(dp) function pw92_correlation(rs)result(ec)
+    real(dp),value::rs
+    real(dp),parameter::a=.031091_dp,a1=.21370_dp,b1=7.5957_dp,b2=3.5876_dp, &
+      b3=1.6382_dp,b4=.49294_dp
+    real(dp)::sr,q
+    sr=sqrt(rs);q=2*a*(b1*sr+b2*rs+b3*rs*sr+b4*rs*rs)
+    ec=-2*a*(1+a1*rs)*log(1+1/q)
+  end function
+
+  attributes(device) real(dp) function pbe_energy_density_cuda(density,sigma)result(f)
+    real(dp),value::density,sigma
+    real(dp),parameter::mu=0.2195149727645171_dp,kappa=0.804_dp,beta=0.06672455060314922_dp
+    real(dp),parameter::gamma=(1.0_dp-log(2.0_dp))/(pi*pi)
+    real(dp)::n,s,rs,kf,exlda,s2,fx,ec,ks2,t2,aa,at2,ratio,hh
+    n=max(density,1.0e-30_dp);s=max(sigma,0.0_dp)
+    rs=(3/(4*pi*n))**(1.0_dp/3.0_dp)
+    kf=(3*pi*pi*n)**(1.0_dp/3.0_dp);exlda=-3*kf/(4*pi)
+    s2=s/(4*kf*kf*n*n);fx=1+kappa-kappa/(1+mu*s2/kappa)
+    ec=pw92_correlation(rs);ks2=4*kf/pi;t2=s/(4*ks2*n*n)
+    aa=beta/gamma/(exp(-ec/gamma)-1);at2=aa*t2
+    if(t2==0)then
+      ratio=0
+    else if(at2<1.0e100_dp)then
+      ratio=t2*(1+at2)/(1+at2+at2*at2)
+    else
+      ratio=(1/aa)*(1+1/at2)/(1+1/at2+(1/at2)**2)
+    end if
+    hh=gamma*log(1+beta/gamma*ratio)
+    f=n*(exlda*fx+ec+hh)
+  end function
+
+  attributes(global) subroutine onsite_radial_kernel(occupation,channel,angular,gaunt,qpaw, &
+      wae,wps,rhoae,rhops,shape,r,ae,ps,nrad,nlm,naug,nchan)
+    integer,value::nrad,nlm,naug,nchan
+    real(dp),device,intent(in)::occupation(nlm,nlm),gaunt(nlm,nlm,naug), &
+      qpaw(:,:,:),wae(nrad,nchan),wps(nrad,nchan),rhoae(nrad),rhops(nrad), &
+      shape(nrad,naug),r(nrad)
+    integer,device,intent(in)::channel(nlm),angular(naug)
+    real(dp),device,intent(out)::ae(nrad,naug),ps(nrad,naug)
+    integer::idx,i,k,a,b,ca,cb,l
+    real(dp)::v,g,aeval,psval,qval
+    idx=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(idx>nrad*naug)return
+    i=mod(idx-1,nrad)+1;k=(idx-1)/nrad+1;l=angular(k)
+    aeval=0.0_dp;psval=0.0_dp;qval=0.0_dp
+    if(k==1)then;aeval=rhoae(i);psval=rhops(i);end if
+    do b=1,nlm
+      cb=channel(b)
+      do a=1,nlm
+        ca=channel(a);g=gaunt(a,b,k)*occupation(a,b)
+        if(abs(g)<1.0e-15_dp)cycle
+        aeval=aeval+g*wae(i,ca)*wae(i,cb)
+        psval=psval+g*wps(i,ca)*wps(i,cb)
+        qval=qval+g*qpaw(ca,cb,l+1)
+      end do
+    end do
+    ae(i,k)=aeval
+    ps(i,k)=psval+qval*shape(i,k)*r(i)*r(i)
+  end subroutine
+
+  attributes(global) subroutine onsite_hartree_kernel(r,w,angular,ae,ps,contrib_ae,contrib_ps,nrad,naug)
+    integer,value::nrad,naug
+    real(dp),device,intent(in)::r(nrad),w(nrad),ae(nrad,naug),ps(nrad,naug)
+    integer,device,intent(in)::angular(naug)
+    real(dp),device,intent(out)::contrib_ae(naug),contrib_ps(naug)
+    integer::k,i,l
+    real(dp)::inner_ae,inner_ps,outer_ae,outer_ps,pa,pp,prefactor,ea,ep
+    k=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(k>naug)return
+    l=angular(k);outer_ae=0.0_dp;outer_ps=0.0_dp
+    do i=1,nrad
+      outer_ae=outer_ae+w(i)*ae(i,k)/r(i)**(l+1)
+      outer_ps=outer_ps+w(i)*ps(i,k)/r(i)**(l+1)
+    end do
+    inner_ae=0.0_dp;inner_ps=0.0_dp;ea=0.0_dp;ep=0.0_dp
+    do i=1,nrad
+      inner_ae=inner_ae+w(i)*ae(i,k)*r(i)**l
+      inner_ps=inner_ps+w(i)*ps(i,k)*r(i)**l
+      outer_ae=outer_ae-w(i)*ae(i,k)/r(i)**(l+1)
+      outer_ps=outer_ps-w(i)*ps(i,k)/r(i)**(l+1)
+      pa=inner_ae/r(i)**(l+1)+r(i)**l*outer_ae
+      pp=inner_ps/r(i)**(l+1)+r(i)**l*outer_ps
+      prefactor=0.5_dp*felect*w(i)*4.0_dp*pi/real(2*l+1,dp)
+      ea=ea+prefactor*ae(i,k)*pa
+      ep=ep+prefactor*ps(i,k)*pp
+    end do
+    contrib_ae(k)=ea;contrib_ps(k)=ep
+  end subroutine
+
+  attributes(device) real(dp) function radial_density_au(radial,r)result(n)
+    real(dp),value::radial,r
+    n=max(radial/(sqrt(4.0_dp*pi)*r*r)*autoa**3,1.0e-30_dp)
+  end function
+
+  attributes(global) subroutine onsite_xc_kernel(r,w,ae,ps,contrib,nrad,naug)
+    integer,value::nrad,naug
+    real(dp),device,intent(in)::r(nrad),w(nrad),ae(nrad,naug),ps(nrad,naug)
+    real(dp),device,intent(out)::contrib(nrad)
+    integer::i,lo,hi
+    real(dp)::na,np,ga,gp,denominator,scale
+    i=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(i>nrad)return
+    lo=max(1,i-1);hi=min(nrad,i+1)
+    if(i==1)hi=2
+    if(i==nrad)lo=nrad-1
+    na=radial_density_au(ae(i,1),r(i));np=radial_density_au(ps(i,1),r(i))
+    denominator=(r(hi)-r(lo))/autoa
+    ga=(radial_density_au(ae(hi,1),r(hi))-radial_density_au(ae(lo,1),r(lo)))/denominator
+    gp=(radial_density_au(ps(hi,1),r(hi))-radial_density_au(ps(lo,1),r(lo)))/denominator
+    scale=(w(i)/autoa)*4.0_dp*pi*(r(i)/autoa)**2*hatoev
+    contrib(i)=scale*(pbe_energy_density_cuda(na,ga*ga)-pbe_energy_density_cuda(np,gp*gp))
+  end subroutine
+
+  attributes(global) subroutine onsite_reduce_kernel(hartree_ae,hartree_ps,xc,energy,nrad,naug)
+    integer,value::nrad,naug
+    real(dp),device,intent(in)::hartree_ae(naug),hartree_ps(naug),xc(nrad)
+    real(dp),device,intent(out)::energy(1)
+    integer::i
+    real(dp)::total
+    total=0.0_dp
+    do i=1,naug
+      total=total+hartree_ae(i)-hartree_ps(i)
+    end do
+    do i=1,nrad
+      total=total+xc(i)
+    end do
+    energy(1)=total
+  end subroutine
+
+  subroutine prepare_context(p,lmax,ctx)
+    type(potcar_t),intent(in)::p
+    integer,intent(in)::lmax
+    type(radial_gpu_context_t),intent(out)::ctx
+    integer,allocatable::channel(:),angular(:),orbital_l(:),magnetic(:)
+    real(dp),allocatable::gaunt(:,:,:),shape(:,:),weights(:),qpaw(:,:,:)
+    real(dp)::z1,z2,c1,c2,r
+    integer::ich,m,k,l,a,b,i,nlm,nrad,naug
+    nrad=size(p%rgrid);naug=(lmax+1)*(lmax+1);nlm=0
+    do ich=1,p%channels
+      nlm=nlm+2*p%lps(ich)+1
+    end do
+    ctx%nrad=nrad;ctx%naug=naug;ctx%nlm=nlm;ctx%nchan=p%channels
+    allocate(channel(nlm),orbital_l(nlm),magnetic(nlm),angular(naug), &
+      gaunt(nlm,nlm,naug),shape(nrad,naug),weights(nrad),qpaw(p%channels,p%channels,lmax+1))
+    a=0
+    do ich=1,p%channels
+      l=p%lps(ich)
+      do m=-l,l
+        a=a+1;channel(a)=ich;orbital_l(a)=l;magnetic(a)=m
+      end do
+    end do
+    k=0;gaunt=0.0_dp;shape=0.0_dp;qpaw=0.0_dp
+    do l=0,lmax
+      call bessel_root(l,1,z1);call bessel_root(l,2,z2)
+      call compensation_coefficients(l,p%paw_rmax,z1,z2,c1,c2)
+      do m=-l,l
+        k=k+1;angular(k)=l
+        do i=1,nrad
+          r=p%rgrid(i)
+          if(r<=p%paw_rmax)shape(i,k)=c1*sph_bessel(l,z1*r/p%paw_rmax)+ &
+            c2*sph_bessel(l,z2*r/p%paw_rmax)
+        end do
+        do b=1,nlm
+          do a=1,nlm
+            if(abs(orbital_l(a)-orbital_l(b))>l.or.l>orbital_l(a)+orbital_l(b))cycle
+            if(mod(orbital_l(a)+orbital_l(b)+l,2)/=0)cycle
+            gaunt(a,b,k)=gaunt_numeric(orbital_l(a),magnetic(a),orbital_l(b),magnetic(b),l,m)
+          end do
+        end do
+      end do
+      if(l+1<=size(p%qpaw_l,3))qpaw(:,:,l+1)=p%qpaw_l(:,:,l+1)
+    end do
+    call radial_weights(p%rgrid,weights)
+    allocate(ctx%channel(nlm),ctx%angular(naug),ctx%r(nrad),ctx%w(nrad), &
+      ctx%wae(nrad,p%channels),ctx%wps(nrad,p%channels),ctx%rhoae(nrad),ctx%rhops(nrad), &
+      ctx%gaunt(nlm,nlm,naug),ctx%qpaw(p%channels,p%channels,lmax+1),ctx%shape(nrad,naug), &
+      ctx%occupation(nlm,nlm),ctx%ae(nrad,naug),ctx%ps(nrad,naug), &
+      ctx%hartree_ae(naug),ctx%hartree_ps(naug),ctx%xc(nrad),ctx%energy(1))
+    ctx%channel=channel;ctx%angular=angular;ctx%r=p%rgrid;ctx%w=weights
+    ctx%wae=p%wae;ctx%wps=p%wps;ctx%rhoae=p%rhoae;ctx%rhops=p%rhops
+    ctx%gaunt=gaunt;ctx%qpaw=qpaw;ctx%shape=shape
+  end subroutine
+
+  subroutine radial_energy_gpu(ctx,occupation,energy)
+    type(radial_gpu_context_t),intent(inout)::ctx
+    real(dp),intent(in)::occupation(:,:)
+    real(dp),intent(out)::energy
+    real(dp)::host_energy(1)
+    integer::n,ierr
+    n=ctx%nrad*ctx%naug
+    ctx%occupation=occupation
+    call onsite_radial_kernel<<<(n+255)/256,256>>>(ctx%occupation,ctx%channel,ctx%angular, &
+      ctx%gaunt,ctx%qpaw,ctx%wae,ctx%wps,ctx%rhoae,ctx%rhops,ctx%shape,ctx%r,ctx%ae,ctx%ps, &
+      ctx%nrad,ctx%nlm,ctx%naug,ctx%nchan)
+    call onsite_hartree_kernel<<<(ctx%naug+255)/256,256>>>(ctx%r,ctx%w,ctx%angular,ctx%ae,ctx%ps, &
+      ctx%hartree_ae,ctx%hartree_ps,ctx%nrad,ctx%naug)
+    call onsite_xc_kernel<<<(ctx%nrad+255)/256,256>>>(ctx%r,ctx%w,ctx%ae,ctx%ps,ctx%xc,ctx%nrad,ctx%naug)
+    call onsite_reduce_kernel<<<1,1>>>(ctx%hartree_ae,ctx%hartree_ps,ctx%xc,ctx%energy,ctx%nrad,ctx%naug)
+    ierr=cudaGetLastError()
+    if(ierr/=cudaSuccess)error stop 'HALF: CUDA onsite radial kernel launch failed'
+    host_energy=ctx%energy
+    energy=host_energy(1)
+  end subroutine
+
+  subroutine functional_gradient_gpu(ctx,occupation,gradient)
+    type(radial_gpu_context_t),intent(inout)::ctx
+    real(dp),intent(in)::occupation(:,:)
+    real(dp),allocatable,intent(out)::gradient(:,:)
+    real(dp),allocatable::trial(:,:)
+    real(dp)::step,plus,minus
+    integer::a,b,nlm
+    nlm=ctx%nlm;allocate(gradient(nlm,nlm),trial(nlm,nlm))
+    do b=1,nlm
+      do a=1,b
+        step=1.0e-3_dp*max(1.0_dp,abs(occupation(a,b)))
+        trial=occupation;trial(a,b)=trial(a,b)+step
+        if(a/=b)trial(b,a)=trial(b,a)+step
+        call radial_energy_gpu(ctx,trial,plus)
+        trial=occupation;trial(a,b)=trial(a,b)-step
+        if(a/=b)trial(b,a)=trial(b,a)-step
+        call radial_energy_gpu(ctx,trial,minus)
+        if(a==b)then
+          gradient(a,b)=(plus-minus)/(2.0_dp*step)
+        else
+          gradient(a,b)=(plus-minus)/(4.0_dp*step)
+          gradient(b,a)=gradient(a,b)
+        end if
+      end do
+    end do
+  end subroutine
+
+  subroutine evaluate_onsite_corrections_cuda(potcars,crystal,occupancy,lmax,correction,double_counting_delta,energy_delta)
+    type(potcar_t),intent(in)::potcars(:)
+    type(crystal_t),intent(in)::crystal
+    type(augmentation_occupancy_t),intent(in)::occupancy(:)
+    integer,intent(in)::lmax
+    type(onsite_species_correction_t),allocatable,intent(out)::correction(:)
+    real(dp),intent(out)::double_counting_delta,energy_delta
+    type(radial_gpu_context_t)::ctx
+    real(dp),allocatable::reference(:,:),reference_gradient(:,:),gradient(:,:),dij(:,:)
+    real(dp)::reference_energy,current_energy,e,dc
+    integer::it,iat,n
+    if(lmax<0)error stop 'HALF: CUDA onsite functional requires non-negative lmax'
+    if(size(potcars)/=size(occupancy).or.size(potcars)/=size(crystal%counts)) &
+      error stop 'HALF: CUDA onsite species count mismatch'
+    allocate(correction(size(potcars)))
+    double_counting_delta=0.0_dp;energy_delta=0.0_dp
+    do it=1,size(potcars)
+      call prepare_context(potcars(it),lmax,ctx)
+      call atomic_onsite_occupation(potcars(it),reference)
+      call radial_energy_gpu(ctx,reference,reference_energy)
+      call functional_gradient_gpu(ctx,reference,reference_gradient)
+      n=ctx%nlm
+      allocate(correction(it)%dij(crystal%counts(it),n,n))
+      do iat=1,crystal%counts(it)
+        call radial_energy_gpu(ctx,occupancy(it)%matrix(iat,:,:),current_energy)
+        call functional_gradient_gpu(ctx,occupancy(it)%matrix(iat,:,:),gradient)
+        dij=gradient-reference_gradient
+        dij=0.5_dp*(dij+transpose(dij))
+        e=current_energy-reference_energy-sum(reference_gradient*(occupancy(it)%matrix(iat,:,:)-reference))
+        dc=e-sum(occupancy(it)%matrix(iat,:,:)*dij)
+        correction(it)%dij(iat,:,:)=dij
+        double_counting_delta=double_counting_delta+dc
+        energy_delta=energy_delta+e
+      end do
+    end do
+  end subroutine
+end module

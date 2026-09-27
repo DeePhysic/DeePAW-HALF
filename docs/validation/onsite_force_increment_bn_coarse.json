@@ -1,0 +1,21 @@
+{
+  "material": "nc-BN-mp604884-eq",
+  "density": "CHGCAR.deepaw (held fixed at all displaced geometries)",
+  "backend": "CPU Fortran",
+  "encut_eV": 200,
+  "kspacing_Ainv": 1.5,
+  "bands": 8,
+  "kpoint_symmetry": false,
+  "center_shift_A": 0.02,
+  "finite_difference_step_A": 0.002,
+  "onsite_lmax": 0,
+  "reference_lmax": -1,
+  "analytic_force_reference_eV_per_A": -0.674956932989448,
+  "analytic_force_onsite_eV_per_A": -0.6812149650120488,
+  "finite_difference_force_reference_eV_per_A": -0.5114361056612893,
+  "finite_difference_force_onsite_eV_per_A": -0.5177075607498693,
+  "analytic_onsite_increment_eV_per_A": -0.0062580320226008,
+  "finite_difference_onsite_increment_eV_per_A": -0.00627145508858,
+  "absolute_increment_error_eV_per_A": 0.0000134230659792,
+  "note": "This isolates the one-centre contribution. The shared absolute Harris force discrepancy is not resolved by this check."
+}

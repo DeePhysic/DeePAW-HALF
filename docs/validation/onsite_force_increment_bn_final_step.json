@@ -1,0 +1,29 @@
+{
+  "material": "nc-BN-mp604884-eq",
+  "input_charge": "CHGCAR.deepaw",
+  "density_condition": "held fixed for all displaced structures",
+  "encut_eV": 200,
+  "kspacing_Ainv": 1.5,
+  "bands": 8,
+  "kpoint_symmetry": false,
+  "center_shift_A": 0.02,
+  "finite_difference_step_A": 0.002,
+  "onsite_lmax": 0,
+  "reference_lmax": -1,
+  "cpu_nvhpc": {
+    "analytic_increment_eV_per_A": -0.006256868891820311,
+    "finite_difference_increment_eV_per_A": -0.006288984109481532,
+    "absolute_increment_error_eV_per_A": 0.00003211521766122161
+  },
+  "cpu_ifx": {
+    "analytic_increment_eV_per_A": -0.006256870571239581,
+    "finite_difference_increment_eV_per_A": -0.006290948919129846,
+    "absolute_increment_error_eV_per_A": 0.00003407834789029509
+  },
+  "cuda_nvhpc": {
+    "analytic_increment_eV_per_A": -0.006256909738898031,
+    "finite_difference_increment_eV_per_A": -0.006279059480363003,
+    "absolute_increment_error_eV_per_A": 0.00002214974146497184
+  },
+  "scope": "one-centre force increment only; absolute Harris force and VASP PAW equivalence remain unvalidated"
+}

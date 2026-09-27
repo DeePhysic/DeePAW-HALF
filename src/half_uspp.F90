@@ -8,7 +8,8 @@ module half_uspp
   implicit none
   private
   public::build_uspp_dij_cpu,augmentation_occupancy_t,initialize_augmentation_occupancy, &
-    accumulate_augmentation_occupancy,add_augmentation_density
+    accumulate_augmentation_occupancy,add_augmentation_density,gaunt_numeric, &
+    radial_weights,bessel_root,compensation_coefficients,sph_bessel
   type::augmentation_occupancy_t
     real(dp),allocatable::matrix(:,:,:)
   end type

@@ -471,3 +471,23 @@ on the same input. Default tolerances and the required observables are
 documented in
 [`docs/VALIDATION.md`](docs/VALIDATION.md). Performance work begins only after
 the corresponding numerical row passes.
+
+## Occupation-dependent onsite PAW (experimental)
+
+The `half energy` and `half bands` commands accept `--onsite-lmax -1|0|1|...`.
+The default `-1` retains the established MIMIC_US Harris path. Non-negative
+values self-consistently update the onsite occupation matrix and PAW `Dij`,
+with a matching one-centre energy/double-counting correction. To enable this
+still-experimental path, configure with `-DHALF_EXPERIMENTAL_ONSITE=ON`.
+
+```bash
+half energy CHGCAR.deepaw POTCAR --onsite-lmax 2 --backend cuda
+half bands CHGCAR.deepaw POTCAR KPOINTS --onsite-lmax 2 --onsite-kspacing 0.35 --backend cuda
+```
+
+CPU Fortran, CPU MPI, and CUDA Fortran paths have focused numerical parity
+checks, including s/p, d, and f projectors. The CUDA path computes the
+occupation contraction and dynamic radial Hartree/PBE functional on GPU;
+static POTCAR coefficient preparation and final force assembly remain on the
+host. See [the onsite validation status](docs/ONSITE_LMAX_STATUS.zh-CN.md)
+before using non-negative channels for production EOS conclusions.

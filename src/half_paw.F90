@@ -4,7 +4,10 @@ module half_paw
   use half_types, only: crystal_t, plane_wave_basis_t, potcar_t
   implicit none
   private
-  public :: paw_species_t, build_paw_operators
+  public :: paw_species_t, onsite_species_correction_t, build_paw_operators
+  type::onsite_species_correction_t
+    real(dp),allocatable::dij(:,:,:)
+  end type
   type :: paw_species_t
     integer(i32) :: natoms=0, nlm=0
     complex(dp), allocatable :: projectors(:,:,:)

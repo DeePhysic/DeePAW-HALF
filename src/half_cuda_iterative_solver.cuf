@@ -4,6 +4,7 @@ module half_cuda_iterative_solver
   use cusolverdn
   use half_kinds,only:dp
   use half_types,only:plane_wave_basis_t,crystal_t,charge_grid_t,potcar_t
+  use half_paw,only:onsite_species_correction_t
   use half_cuda_potential,only:build_veff_cuda
   use half_cuda_assembly,only:cuda_hs_operator_t,prepare_hs_operator_cuda,apply_hs_operator_cuda,destroy_hs_operator_cuda
   implicit none
@@ -78,7 +79,7 @@ contains
 
   subroutine solve_block_harris_cuda_full(charge,potcars,crystal,basis,use_pbe,eigenvalues,overlap_min,overlap_max, &
       potential_seconds,operator_seconds,solver_seconds,use_uspp,e_hartree,e_xc,e_xc_potential,eigenvectors, &
-      target_bands,tolerance,max_iterations,block_size,iterations,final_residual)
+      target_bands,tolerance,max_iterations,block_size,iterations,final_residual,onsite_correction)
     type(charge_grid_t),intent(in)::charge
     type(potcar_t),intent(in)::potcars(:)
     type(crystal_t),intent(in)::crystal
@@ -93,6 +94,7 @@ contains
     integer,intent(in),optional::target_bands,max_iterations,block_size
     real(dp),intent(in),optional::tolerance
     integer,intent(out),optional::iterations
+    type(onsite_species_correction_t),intent(in),optional::onsite_correction(:)
     type(cuda_hs_operator_t)::op
     type(cublasHandle)::blas
     complex(dp),device,allocatable::x(:,:),hx(:,:),sx(:,:),r(:,:),p(:,:),hp(:,:),sp(:,:),z(:,:),hz(:,:),sz(:,:), &
@@ -130,7 +132,7 @@ contains
       call build_veff_cuda(charge,potcars,crystal,use_pbe,dveff,eh,exc,.false.)
     end if
     call system_clock(tick1);if(present(potential_seconds))potential_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
-    call prepare_hs_operator_cuda(dveff,basis,potcars,crystal,op,with_uspp)
+    call prepare_hs_operator_cuda(dveff,basis,potcars,crystal,op,with_uspp,onsite_correction)
     call system_clock(tick1);if(present(operator_seconds))operator_seconds=real(tick1-tick0,dp)/real(rate,dp);tick0=tick1
 
     allocate(indices(n));call kinetic_order(basis%kinetic,indices)

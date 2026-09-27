@@ -1,0 +1,78 @@
+module half_cuda_onsite_occupancy
+  ! Projector/band contraction for the occupation-dependent one-centre path.
+  use cudafor
+  use half_kinds,only:dp
+  use half_paw,only:paw_species_t
+  use half_uspp,only:augmentation_occupancy_t
+  implicit none
+  private
+  public::accumulate_augmentation_occupancy_cuda
+contains
+  attributes(global) subroutine projector_band_kernel(projectors,wave,coeff,npw,nlm,nb)
+    integer,value::npw,nlm,nb
+    complex(dp),device,intent(in)::projectors(nlm,npw),wave(npw,nb)
+    complex(dp),device,intent(out)::coeff(nlm,nb)
+    integer::idx,a,ib,ig
+    complex(dp)::total
+    idx=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(idx>nlm*nb)return
+    a=mod(idx-1,nlm)+1;ib=(idx-1)/nlm+1
+    total=cmplx(0.0_dp,0.0_dp,dp)
+    do ig=1,npw
+      total=total+conjg(projectors(a,ig))*wave(ig,ib)
+    end do
+    coeff(a,ib)=total
+  end subroutine
+
+  attributes(global) subroutine occupation_outer_kernel(coeff,occupations,weight,matrix,nlm,nb)
+    integer,value::nlm,nb
+    complex(dp),device,intent(in)::coeff(nlm,nb)
+    real(dp),device,intent(in)::occupations(nb)
+    real(dp),value::weight
+    real(dp),device,intent(out)::matrix(nlm,nlm)
+    integer::idx,a,b,ib
+    real(dp)::total
+    idx=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(idx>nlm*nlm)return
+    a=mod(idx-1,nlm)+1;b=(idx-1)/nlm+1
+    total=0.0_dp
+    do ib=1,nb
+      total=total+occupations(ib)*real(conjg(coeff(a,ib))*coeff(b,ib),dp)
+    end do
+    matrix(a,b)=weight*total
+  end subroutine
+
+  subroutine accumulate_augmentation_occupancy_cuda(paw,eigenvectors,occupations,kweight,occupancy)
+    type(paw_species_t),intent(in)::paw(:)
+    complex(dp),intent(in)::eigenvectors(:,:)
+    real(dp),intent(in)::occupations(:),kweight
+    type(augmentation_occupancy_t),intent(inout)::occupancy(:)
+    complex(dp),device,allocatable::dprojectors(:,:),dwave(:,:),dcoeff(:,:)
+    real(dp),device,allocatable::doccupations(:),dmatrix(:,:)
+    complex(dp),allocatable::projectors(:,:)
+    real(dp),allocatable::matrix(:,:)
+    integer::it,iat,npw,nlm,nb,ierr
+    if(size(paw)/=size(occupancy))error stop 'HALF: CUDA onsite occupancy species mismatch'
+    npw=size(eigenvectors,1);nb=size(eigenvectors,2)
+    if(size(occupations)/=nb)error stop 'HALF: CUDA onsite occupancy band count mismatch'
+    allocate(dwave(npw,nb),doccupations(nb));dwave=eigenvectors;doccupations=occupations
+    do it=1,size(paw)
+      nlm=paw(it)%nlm
+      if(size(paw(it)%projectors,3)/=npw)error stop 'HALF: CUDA onsite projector basis mismatch'
+      if(any(shape(occupancy(it)%matrix)/=[paw(it)%natoms,nlm,nlm])) &
+        error stop 'HALF: CUDA onsite occupancy matrix shape mismatch'
+      allocate(projectors(nlm,npw),matrix(nlm,nlm),dprojectors(nlm,npw),dcoeff(nlm,nb),dmatrix(nlm,nlm))
+      do iat=1,paw(it)%natoms
+        projectors=paw(it)%projectors(iat,:,:)
+        dprojectors=projectors
+        call projector_band_kernel<<<(nlm*nb+255)/256,256>>>(dprojectors,dwave,dcoeff,npw,nlm,nb)
+        call occupation_outer_kernel<<<(nlm*nlm+255)/256,256>>>(dcoeff,doccupations,kweight,dmatrix,nlm,nb)
+        ierr=cudaGetLastError()
+        if(ierr/=cudaSuccess)error stop 'HALF: CUDA onsite occupancy kernel launch failed'
+        matrix=dmatrix
+        occupancy(it)%matrix(iat,:,:)=occupancy(it)%matrix(iat,:,:)+matrix
+      end do
+      deallocate(projectors,matrix,dprojectors,dcoeff,dmatrix)
+    end do
+  end subroutine
+end module

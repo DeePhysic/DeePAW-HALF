@@ -749,7 +749,9 @@ contains
     type(plane_wave_basis_t),allocatable::force_bases(:)
     type(force_wave_block_t),allocatable::force_waves(:)
     type(force_qdep_cache_t),allocatable::force_qdep_cache(:)
+#ifdef HALF_CLI_HAVE_MKL
     type(augmentation_occupancy_t),allocatable::augmentation_occupancy(:)
+#endif
     real(dp)::augmentation_charge
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)

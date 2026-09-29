@@ -292,9 +292,10 @@ mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
   CHGCAR.smooth POTCAR KPOINTS --backend cpu --bands 60 --output bands.json
 ```
 
-当 `--sigma` 为正时，默认的 `--ismear 0` 使用与 VASP 一致的 Gaussian 占据，
-`--ismear -1` 则使用 Fermi–Dirac 占据；能量 JSON 会记录 `ismear` 和
-`sigma_eV`。
+`half energy` 默认使用 `--ismear 0 --sigma 0.01`（Gaussian 占据、展宽
+0.01 eV）。本次 EOS 基准显式使用 `--sigma 0.02`，不受默认值影响。
+`--ismear -1` 选择 Fermi–Dirac 占据；显式传入 `--sigma 0` 则使用零展宽占据。
+能量 JSON 会记录 `ismear` 和 `sigma_eV`。
 
 `--solver acc` 是大基组的主加速路径。它不构造 `NPL x NPL` 稠密 H/S：局域势
 FFT、动能、PAW 投影收缩、残差、预条件、S 正交化及块旋转均留在 GPU；cuSOLVER

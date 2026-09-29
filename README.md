@@ -362,9 +362,11 @@ mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
 ./build/cpu-release/half paw CHGCAR.smooth POTCAR --encut 400
 ```
 
-For positive `--sigma`, `--ismear 0` (the default) reproduces VASP Gaussian
-occupations and `--ismear -1` selects Fermi-Dirac occupations. The selected
-`ismear` and `sigma_eV` are recorded in the energy JSON.
+`half energy` defaults to `--ismear 0 --sigma 0.01` (Gaussian occupations,
+0.01 eV width). The EOS benchmark explicitly uses `--sigma 0.02`, independent
+of this default. `--ismear -1` selects Fermi-Dirac occupations; explicit
+`--sigma 0` selects zero-width filling.
+The selected `ismear` and `sigma_eV` are recorded in the energy JSON.
 
 `--solver acc` is the production large-basis path. It never forms the
 `NPL x NPL` dense H/S matrices: local-potential FFTs, kinetic terms, PAW

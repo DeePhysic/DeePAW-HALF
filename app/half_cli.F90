@@ -799,7 +799,7 @@ contains
 #else
     narg=command_argument_count();if(narg<offset+2)then;call print_energy_help(0);call fail('energy requires CHARGE and POTENTIAL');end if
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
-    encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.0_dp;nbands=0;ismear=0
+    encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.01_dp;nbands=0;ismear=0
     xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';output_prefix='energy';hdf5_path='';reference_path=''
     use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.;onsite_lmax=-1
     paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;onsite_tol=1.0e-6_dp;i=offset+3
@@ -1120,6 +1120,7 @@ contains
     write(unit,'(A)')'       half-energy CHARGE POTENTIAL [OPTIONS]'
     write(unit,'(A)')'Options: --encut EV --kspacing VALUE --kpoints-file FILE --no-kpoint-symmetry'
     write(unit,'(A)')'         --symprec VALUE --bands N --ismear -1|0 --sigma EV --xc lda|pbe'
+    write(unit,'(A)')'         Occupation defaults: ISMEAR=0 (Gaussian), SIGMA=0.01 eV; --sigma 0 selects zero-width filling'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
     write(unit,'(A)')'         --onsite-lmax -1|0|1|... --onsite-tol EV (default -1 and 1e-6 EV)'

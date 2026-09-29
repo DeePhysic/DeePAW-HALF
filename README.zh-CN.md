@@ -297,6 +297,23 @@ mpirun --bind-to core -np 4 build/cpu-mpi/half bands \
 `--ismear -1` 选择 Fermi–Dirac 占据；显式传入 `--sigma 0` 则使用零展宽占据。
 能量 JSON 会记录 `ismear` 和 `sigma_eV`。
 
+360 结构 EOS 使用的非线性通道记为 DeePAW-HALF_n，`n=2/4/6` 由
+POTCAR 最高投影角动量的两倍自动确定。DeePAW-HALF_0 指线性
+`--onsite-lmax -1` 路径，不等于非线性 `--onsite-lmax 0`。
+可恢复的 `scripts/eos_half_360.py` 需要 ASE、NumPy、Matplotlib；它读取
+`CHGCAR.deepaw`，核对 VASP 的 k 点权重与 NBANDS，并显式使用 Gaussian
+`--sigma 0.02` 和解析力。示例：
+
+```bash
+python scripts/eos_half_360.py --source /path/to/final360-inputs \
+  --output /path/to/half-n-results --half /path/to/half --gpu 0 \
+  --onsite-lmax auto --onsite-tol 1e-6 --case-timeout 10800
+```
+
+on-site 求解默认最多迭代 120 次，使用自适应混合。仅在诊断明确的难收敛子集上，
+可增加 `--only MATERIAL --onsite-mix 0.2 --onsite-max-iter 400`，以固定阻尼
+重试；有效的已有结果会跳过，显式指定的收敛阈值不会被覆盖。
+
 `--solver acc` 是大基组的主加速路径。它不构造 `NPL x NPL` 稠密 H/S：局域势
 FFT、动能、PAW 投影收缩、残差、预条件、S 正交化及块旋转均留在 GPU；cuSOLVER
 只求解 `NBANDS` 或 `2*NBANDS` 的 Rayleigh-Ritz 子空间问题。JSON 会记录迭代次数

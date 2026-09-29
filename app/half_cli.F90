@@ -772,7 +772,7 @@ contains
     integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status,ismear,onsite_lmax
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,reference_path
     character(len=16)::xc,backend,solver,actual_backend
-    logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference
+    logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference,onsite_tol_explicit
     type(plane_wave_basis_t),allocatable::force_bases(:)
     type(force_wave_block_t),allocatable::force_waves(:)
     type(force_qdep_cache_t),allocatable::force_qdep_cache(:)
@@ -781,8 +781,9 @@ contains
 #endif
     type(onsite_species_correction_t),allocatable::onsite_correction(:),onsite_new(:)
     real(dp)::augmentation_charge
-    real(dp)::onsite_dc,onsite_energy,onsite_change,onsite_previous_change,onsite_mix,onsite_tol
-    integer::onsite_iteration
+    real(dp)::onsite_dc,onsite_energy,onsite_change,onsite_previous_change,onsite_mix,onsite_tol,onsite_mix_fixed
+    integer::onsite_iteration,onsite_max_iter
+    logical::onsite_mix_explicit
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)
     type(wave_block_t),allocatable::waves(:)
@@ -802,7 +803,8 @@ contains
     encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.01_dp;nbands=0;ismear=0
     xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';output_prefix='energy';hdf5_path='';reference_path=''
     use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.;onsite_lmax=-1
-    paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;onsite_tol=1.0e-6_dp;i=offset+3
+    paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;onsite_tol=1.0e-6_dp;onsite_tol_explicit=.false.
+    onsite_mix_fixed=1.0_dp;onsite_mix_explicit=.false.;onsite_max_iter=120;i=offset+3
     do while(i<=narg)
       call get_command_argument(i,arg)
       select case(trim(arg))
@@ -832,6 +834,12 @@ contains
         if(ios/=0.or.onsite_lmax< -1)call fail('--onsite-lmax must be -1 or a non-negative integer')
       case('--onsite-tol');call option_value(i,narg,'--onsite-tol',value);read(value,*,iostat=ios)onsite_tol
         if(ios/=0.or.onsite_tol<=0.0_dp)call fail('invalid --onsite-tol value')
+        onsite_tol_explicit=.true.
+      case('--onsite-mix');call option_value(i,narg,'--onsite-mix',value);read(value,*,iostat=ios)onsite_mix_fixed
+        if(ios/=0.or.onsite_mix_fixed<=0.0_dp.or.onsite_mix_fixed>1.0_dp)call fail('--onsite-mix must be in (0,1]')
+        onsite_mix_explicit=.true.
+      case('--onsite-max-iter');call option_value(i,narg,'--onsite-max-iter',value);read(value,*,iostat=ios)onsite_max_iter
+        if(ios/=0.or.onsite_max_iter<2)call fail('--onsite-max-iter must be at least 2')
       case('--no-uspp-dij');use_uspp=.false.
       case('--forces');do_forces=.true.
       case('--finite-difference-force-check');call fail('finite differences are available only in the half-force-check validation executable, never in the production CLI')
@@ -916,8 +924,9 @@ contains
     if(do_forces.or.onsite_lmax>=0)allocate(force_bases(set%nk),force_waves(set%nk))
     onsite_dc=0.0_dp;onsite_energy=0.0_dp
     onsite_previous_change=huge(1.0_dp);onsite_mix=1.0_dp
-    if(do_forces.and.onsite_lmax>=0)onsite_tol=min(onsite_tol,1.0e-8_dp)
-    do onsite_iteration=1,120
+    ! A force run may tighten the default, but an explicit tolerance is authoritative.
+    if(do_forces.and.onsite_lmax>=0.and..not.onsite_tol_explicit)onsite_tol=min(onsite_tol,1.0e-7_dp)
+    do onsite_iteration=1,onsite_max_iter
     if(onsite_iteration>1)then
       eigenvalues=0.0_dp;plane_waves=0_i64;smin=huge(1.0_dp)
     end if
@@ -984,12 +993,16 @@ contains
     write(0,'(A,I0,A,ES14.6,A,ES14.6)')'HALF onsite iteration ',onsite_iteration, &
       ' Dij_change_eV=',onsite_change,' double_counting_eV=',onsite_dc
     if(onsite_change<onsite_tol)exit
-    if(onsite_iteration==120)call fail('onsite PAW iteration failed to converge')
+    if(onsite_iteration==onsite_max_iter)call fail('onsite PAW iteration failed to converge')
     if(allocated(onsite_correction))then
-      if(onsite_change>1.05_dp*onsite_previous_change)then
-        onsite_mix=max(0.125_dp,0.5_dp*onsite_mix)
-      else if(onsite_change<0.5_dp*onsite_previous_change)then
-        onsite_mix=min(1.0_dp,1.2_dp*onsite_mix)
+      if(onsite_mix_explicit)then
+        onsite_mix=onsite_mix_fixed
+      else
+        if(onsite_change>1.05_dp*onsite_previous_change)then
+          onsite_mix=max(0.125_dp,0.5_dp*onsite_mix)
+        else if(onsite_change<0.5_dp*onsite_previous_change)then
+          onsite_mix=min(1.0_dp,1.2_dp*onsite_mix)
+        end if
       end if
       do it=1,size(potcars)
         onsite_new(it)%dij=onsite_correction(it)%dij+onsite_mix* &
@@ -1123,7 +1136,8 @@ contains
     write(unit,'(A)')'         Occupation defaults: ISMEAR=0 (Gaussian), SIGMA=0.01 eV; --sigma 0 selects zero-width filling'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
-    write(unit,'(A)')'         --onsite-lmax -1|0|1|... --onsite-tol EV (default -1 and 1e-6 EV)'
+    write(unit,'(A)')'         --onsite-lmax -1|0|1|... (default -1) --onsite-tol EV (default 1e-6; forces 1e-7)'
+    write(unit,'(A)')'         --onsite-mix VALUE (fixed damping in (0,1]) --onsite-max-iter N (default 120)'
     write(unit,'(A)')'         --vaspwave-h5 FILE'
     write(unit,'(A)')'         --forces  (standalone analytic PAW/Harris force; never displaces atoms)'
     write(unit,'(A)')'                   (automatic irreducible meshes expand density, PAW augmentation, and force by space group)'

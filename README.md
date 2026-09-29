@@ -489,6 +489,27 @@ half energy CHGCAR.deepaw POTCAR --onsite-lmax 2 --backend cuda
 half bands CHGCAR.deepaw POTCAR KPOINTS --onsite-lmax 2 --onsite-kspacing 0.35 --backend cuda
 ```
 
+For the 360-structure EOS protocol, call this nonlinear channel
+DeePAW-HALF_n (`n=2/4/6`, selected as twice the highest POTCAR projector
+angular momentum). DeePAW-HALF_0 denotes the linear `--onsite-lmax -1`
+path, **not** the nonlinear `--onsite-lmax 0` setting. The resumable
+`scripts/eos_half_360.py` runner requires Python with ASE, NumPy and
+Matplotlib; it reads `CHGCAR.deepaw`, checks the VASP k-point weights and
+NBANDS, explicitly uses Gaussian `--sigma 0.02`, and records analytic forces.
+For example:
+
+```bash
+python scripts/eos_half_360.py --source /path/to/final360-inputs \
+  --output /path/to/half-n-results --half /path/to/half --gpu 0 \
+  --onsite-lmax auto --onsite-tol 1e-6 --case-timeout 10800
+```
+
+The default onsite iteration limit is 120 with adaptive mixing. For a
+diagnosed nonconvergent subset, `--only MATERIAL --onsite-mix 0.2
+--onsite-max-iter 400` selects fixed damping and a larger limit while
+preserving the explicit `--onsite-tol`; valid existing results are skipped.
+These options do not change the normal default solver path.
+
 CPU Fortran, CPU MPI, and CUDA Fortran paths have focused numerical parity
 checks, including s/p, d, and f projectors. Higher channels include angular
 density and gradient terms in PBE XC. The CUDA path computes the occupation

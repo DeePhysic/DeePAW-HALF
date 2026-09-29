@@ -101,7 +101,9 @@ contains
     tol=1e-5_dp;if(present(symprec))tol=symprec
     use_tr=1;if(present(time_reversal))use_tr=merge(1,0,time_reversal)
     allocate(address(3,full%full_count),mapping(full%full_count),positions(3,nat),types(nat))
-    lattice=transpose(crystal%lattice);ion=0
+    ! The Fortran row-vector lattice already has the memory layout expected
+    ! by spglib's C column-vector API; transposing lowers the point group.
+    lattice=crystal%lattice;ion=0
     do it=1,crystal%ntypes;do iat=1,crystal%counts(it)
       ion=ion+1;positions(:,ion)=crystal%positions(ion,:);types(ion)=it
     end do;end do
@@ -147,7 +149,7 @@ contains
     integer(c_int)::nsym
     integer::op,i,j,it,iat,ion,bestj
     allocate(raw_rotation(3,3,maxsym),raw_translation(3,maxsym),positions(3,crystal%nions),types(crystal%nions))
-    lattice=transpose(crystal%lattice);ion=0
+    lattice=crystal%lattice;ion=0
     do it=1,crystal%ntypes;do iat=1,crystal%counts(it)
       ion=ion+1;positions(:,ion)=crystal%positions(ion,:);types(ion)=it
     end do;end do

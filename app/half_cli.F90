@@ -776,7 +776,9 @@ contains
     type(plane_wave_basis_t),allocatable::force_bases(:)
     type(force_wave_block_t),allocatable::force_waves(:)
     type(force_qdep_cache_t),allocatable::force_qdep_cache(:)
+#ifdef HALF_CLI_HAVE_MKL
     type(augmentation_occupancy_t),allocatable::augmentation_occupancy(:)
+#endif
     type(onsite_species_correction_t),allocatable::onsite_correction(:),onsite_new(:)
     real(dp)::augmentation_charge
     real(dp)::onsite_dc,onsite_energy,onsite_change,onsite_previous_change,onsite_mix,onsite_tol

@@ -1,8 +1,10 @@
 {
-  "implementation_commit": "08659c202ec9b65e4e9ae3cf5d1f7a71532ce5ed",
+  "implementation_commit": "0f2ed9b",
   "system": "nc-Si-mp149-eq",
-  "charge_source": "matched VASP CHGCAR",
-  "charge_electrons": 7.9999999975,
+  "charge_source": "DeePAW-eSCN CHGCAR with explicit valence normalization",
+  "charge_electrons_raw": 7.99451536762444,
+  "density_normalization_scale": 1.0006860493880305,
+  "charge_electrons_used": 7.999999999999994,
   "potcar_zval_electrons": 8.0,
   "settings": {
     "encut_eV": 520.0,
@@ -19,32 +21,27 @@
       "nupdown": 0.0,
       "n_up": 4.0,
       "n_down": 4.0,
-      "band_energy_eV": 22.05749348075166,
-      "internal_energy_eV": 5.658086293618169,
-      "spin_fermi_levels_eV": [5.733907029337123, 5.733907029337123]
+      "internal_energy_eV": 5.648611172334498
     },
     {
       "nupdown": 2.0,
       "n_up": 5.0,
       "n_down": 3.0,
-      "band_energy_eV": 24.624071438051473,
-      "internal_energy_eV": 8.224664250917982,
-      "spin_fermi_levels_eV": [8.30048498663694, 5.733904271492718]
+      "internal_energy_eV": 8.219099205548247
     },
     {
       "nupdown": -2.0,
       "n_up": 3.0,
       "n_down": 5.0,
-      "internal_energy_eV": 8.224664250917982,
-      "spin_fermi_levels_eV": [5.733904271492718, 8.30048498663694]
+      "internal_energy_eV": 8.219099205548247
     }
   ],
   "checks": {
     "all_hdf5_rispin": 2.0,
     "all_hdf5_have_spin_1_and_spin_2": true,
-    "electron_count_max_abs_error": 0.0,
+    "normalized_electron_count_abs_error": 6.0e-15,
     "nupdown_max_abs_error": 0.0,
     "spin_reversal_internal_energy_abs_error_eV": 0.0
   },
-  "note": "This validates fixed-moment spin occupations and two-channel VASP HDF5 export using the shared total-density Harris operator; it is not a self-consistent spin-density PBE calculation."
+  "note": "This validates pre-operator DeePAW density normalization, fixed-moment spin occupations, and two-channel VASP HDF5 export using the shared total-density Harris operator; it is not a self-consistent spin-density PBE calculation."
 }

@@ -31,6 +31,11 @@ operator.  It supplies controlled NUPDOWN occupations and two-channel VASP
 wavefunctions; it is not a replacement for self-consistent spin-polarized VASP
 energies.  Mechanistic claims therefore use converged VASP energies and forces.
 
+Large-interface production also requires validated DeePAW-eSCN tiled inference.
+The coefficient-first and halo fallback designs, provenance requirements, and
+monolithic-versus-tiled gates are specified in `ESCN_LARGE_CELL_TILING.md`.
+NRR production cannot begin until this infrastructure passes those gates.
+
 ## Pilot: Fe-N4/graphene
 
 Use one relaxed Fe-N4/graphene slab with at least 15 A vacuum and four adsorbate

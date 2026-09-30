@@ -240,6 +240,26 @@ R² = 0.9999896
 
 该重建只进行移位请求和直接交错，没有使用 Fourier 插值、平滑或逐块归一化。实测总时间与 probe 数线性模型一致。
 
+### 4.6 RTX PRO 6000 显存占用
+
+对一个 `8000 原子 + 110³ probes` 请求进行了 200 ms 间隔的 `nvidia-smi` 采样。服务运行在 GPU0；GPU1 作为空闲对照。
+
+| 指标 | GPU0 结果 |
+|---|---:|
+| 物理显存 | `97,887 MiB = 95.59 GiB` |
+| 请求前已用 | `68,036 MiB = 66.44 GiB` |
+| 推理期间最小/中位/P95/峰值 | 均为 `68,036 MiB` |
+| 最低空闲显存 | `29,215 MiB = 28.53 GiB` |
+| 可见显存占用比例 | `69.50%` |
+| 推理可见增量峰值 | `0 MiB` |
+| 活跃阶段 GPU 利用率均值 | `93.98%` |
+| 活跃阶段 GPU 利用率中位数 | `96%` |
+| GPU 利用率峰值 | `100%` |
+
+服务进程在请求前由 `nvidia-smi` 报告占用 `68,026 MiB`。推理过程中整卡显存读数保持不变，说明服务启动后已经预留或保留约 66.44 GiB CUDA 显存池，probe batch 工作区在池内复用。
+
+该结果是设备外部可见的 resident/reserved 显存，不等同于 PyTorch 内部实时 tensor allocation。若要区分 `memory_allocated` 与 `memory_reserved`，需要在服务端增加 `torch.cuda.max_memory_allocated()` 和 `max_memory_reserved()` 采样。
+
 ## 5. 生产化所需改进
 
 ### 5.1 提高原子数上限
@@ -304,6 +324,7 @@ HALF 大体系电子结构：随机密度矩阵/Green's function + 确定性活�
 - 60 Å probe scaling 脚本：`scripts/benchmark_escn_probe_scaling.py`
 - 60 Å probe scaling 数据：`docs/validation/si_60angstrom_probe_scaling.json`
 - 完整 `220³` 重建数据：`docs/validation/si_60angstrom_220cube_shifted_probe.json`
+- RTX PRO 6000 显存数据：`docs/validation/si_60angstrom_110cube_vram.json`
 - 相关总体设计：`docs/ESCN_LARGE_CELL_TILING.md`
 
 当前方法必须继续遵守“先外部验证，再嵌入生产接口”的顺序。在密度、电子数、HALF 能量和下游 VASP 结果全部通过之前，不应替代现有单体推理路径。

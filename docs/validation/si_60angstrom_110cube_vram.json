@@ -1,0 +1,39 @@
+{
+  "date": "2026-10-01",
+  "system": "60 A uniformly strained Si API load test",
+  "atoms": 8000,
+  "probe_grid": [110, 110, 110],
+  "probe_points": 1331000,
+  "inference_seconds": 117.07963779199963,
+  "sampling_interval_ms": 200,
+  "gpu": {
+    "index": 0,
+    "name": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+    "total_mib": 97887,
+    "total_gib": 95.5927734375,
+    "idle_used_mib": 68036,
+    "idle_used_gib": 66.44140625,
+    "inference_min_used_mib": 68036,
+    "inference_median_used_mib": 68036,
+    "inference_p95_used_mib": 68036,
+    "inference_peak_used_mib": 68036,
+    "minimum_free_mib": 29215,
+    "minimum_free_gib": 28.5302734375,
+    "used_fraction": 0.6950463289302972,
+    "observed_incremental_peak_mib": 0,
+    "active_utilization_mean_percent": 93.984375,
+    "active_utilization_median_percent": 96.0,
+    "active_utilization_p95_percent": 100.0,
+    "active_utilization_peak_percent": 100
+  },
+  "service_process": {
+    "pid": 332272,
+    "used_mib_before_request": 68026
+  },
+  "control_gpu": {
+    "index": 1,
+    "used_mib": 2,
+    "utilization_percent": 0
+  },
+  "interpretation": "nvidia-smi reported a flat 68036 MiB device-resident allocation before and throughout inference. The service therefore appears to reserve or retain a roughly 66.44 GiB CUDA memory pool and reuse it for the probe batches. This measurement establishes the externally visible device occupancy, not the live tensor high-water mark inside the allocator. PyTorch allocator instrumentation in the server would be required to separate reserved from actively allocated memory."
+}

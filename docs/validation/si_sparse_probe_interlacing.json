@@ -1,0 +1,23 @@
+{
+  "system": "nc-Si-mp149-eq",
+  "method": "shifted_sparse_probe_interlacing",
+  "global_grid": [60, 60, 60],
+  "stride": [2, 2, 2],
+  "sparse_grid_per_request": [30, 30, 30],
+  "requests": 8,
+  "atom_shift_sign": -1,
+  "density_metrics": {
+    "max_abs": 0.002476036548614502,
+    "mae": 0.00006789302278775722,
+    "rmse": 0.00012509116867857116,
+    "relative_l1": 0.0003415783867239952,
+    "monolithic_mean": 0.19823025166988373,
+    "interlaced_mean": 0.19823035597801208,
+    "mean_delta": 1.043081283569336e-7
+  },
+  "timing_seconds": {
+    "monolithic": 9.565649032592773,
+    "sum_of_eight_sparse_requests": 9.524605751037598
+  },
+  "interpretation": "The method preserves the complete periodic cell and atomic graph, lowers peak probe-grid size by 8x, and reconstructs the dense grid without spatial block seams. It is numerically close but not bitwise identical to monolithic inference, so downstream HALF/VASP validation remains required."
+}

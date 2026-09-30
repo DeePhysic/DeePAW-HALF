@@ -40,6 +40,35 @@ This is preferable to running the neural model independently on cropped
 subcells: changing a subcell changes its periodic graph and can change atomic
 embeddings even when a geometric halo is added.
 
+## Immediately usable method: shifted sparse probes
+
+The probe formulation also permits a client-side decomposition without
+cropping the periodic structure.  Let the desired dense grid be
+`N=(Nx,Ny,Nz)` and choose integer strides `S=(Sx,Sy,Sz)` that divide the three
+grid dimensions.  For every residue `r` in `[0,S)`, request the sparse grid
+`N/S` after shifting every atom by
+
+`-[(rx/Nx) a1 + (ry/Ny) a2 + (rz/Nz) a3]`.
+
+Translational covariance gives `rho_(R-delta)(x)=rho_R(x+delta)`.  The sparse
+result therefore fills dense indices `r + S*j`.  All requests retain the full
+cell, full atom list, and `[true,true,true]` PBC, so there are no spatial block
+boundaries or artificial cropped-cell environments.  Assemble every residue
+class first and normalize the global density only once.
+
+For Si, eight shifted `30^3` requests reconstructed one `60^3` prediction with
+relative density L1 error `3.42e-4`, mean-density difference `1.04e-7`, and
+nearly identical aggregate inference time (`9.52 s` sparse versus `9.57 s`
+monolithic).  Peak probe-grid size was reduced by eight.  The result was not
+bitwise identical, so this path still requires downstream HALF energy/band and
+VASP SCF gates.  Different residues can be dispatched to multiple service
+workers or GPUs; caching the unchanged atomic graph would remove repeated graph
+inference.
+
+This method requires exact stride divisibility.  If no useful divisor exists,
+the service needs explicit probe coordinates or coefficient-first rendering;
+silently changing the FFT grid is not allowed.
+
 ## Fallback: halo-based model tiling
 
 If coefficients cannot be exposed, add `/v1/predict_tile` with the global cell,

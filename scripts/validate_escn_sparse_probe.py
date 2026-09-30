@@ -7,6 +7,7 @@ import argparse
 import base64
 import itertools
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -112,7 +113,9 @@ def main() -> int:
         target = tuple(slice(r, None, s) for r, s in zip(residue, stride))
         for name in fields:
             assembled[name][target] = arrays[name]
-        tile_records.append({"residue": list(residue), "elapsed_seconds": elapsed})
+        tile_record = {"residue": list(residue), "elapsed_seconds": elapsed}
+        tile_records.append(tile_record)
+        print(json.dumps(tile_record), file=sys.stderr, flush=True)
 
     report = {
         "structure": str(args.structure.resolve()),

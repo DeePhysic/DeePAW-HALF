@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-01",
+  "system": "60 A uniformly strained Si API load test",
+  "atoms": 8000,
+  "requested_global_grid": [220, 220, 220],
+  "direct_request": {
+    "status": "rejected_before_inference",
+    "http_status": 400,
+    "error": "网格点超过限制: 10648000 > 2000000"
+  },
+  "shifted_sparse_reconstruction": {
+    "status": "succeeded",
+    "stride": [2, 2, 2],
+    "sparse_grid": [110, 110, 110],
+    "requests": 8,
+    "points_per_request": 1331000,
+    "total_points": 10648000,
+    "tile_seconds": [
+      117.92221808299928,
+      120.13985045899972,
+      118.78061987500041,
+      119.29284520799956,
+      119.19823587500014,
+      119.68551533299978,
+      119.24292404100015,
+      119.3642399170003
+    ],
+    "mean_tile_seconds": 119.20330609887492,
+    "tile_seconds_standard_deviation": 0.6087901389865352,
+    "total_inference_seconds": 953.6264487909993,
+    "total_inference_minutes": 15.893774146516655
+  },
+  "assembled_density": {
+    "shape": [220, 220, 220],
+    "dtype": "float32",
+    "points": 10648000,
+    "finite": true,
+    "nan_points": 0,
+    "infinite_points": 0,
+    "zero_points": 0,
+    "negative_points": 36000,
+    "min": -0.16482216119766235,
+    "max": 0.46380460262298584,
+    "mean": 0.1498635542559244,
+    "raw_bytes": 42592000,
+    "compressed_npz_bytes": 36382154,
+    "compressed_npz_sha256": "3b65c79dc6857c4a6fd9613df0bb4ad4fa5011098e3b0d4e61e67d8ba3b0404e"
+  },
+  "conclusion": "The API cannot accept 220^3 monolithically under its current two-million-point limit, but eight phase-shifted 110^3 requests reconstruct the complete 220^3 grid without Fourier interpolation. Runtime scales as predicted from the probe benchmark and all assembled values are finite."
+}

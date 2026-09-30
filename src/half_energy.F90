@@ -5,7 +5,7 @@ module half_energy
   use half_kpoints,only:kpoint_set_t
   implicit none
   private
-  public::compute_occupations,ewald_energy,ewald_forces,read_vasp_eigenval
+  public::compute_occupations,compute_spin_occupations,ewald_energy,ewald_forces,read_vasp_eigenval
 contains
   subroutine read_vasp_eigenval(path,set,eigenvalues,nelect)
     character(len=*),intent(in)::path
@@ -36,6 +36,34 @@ contains
     close(unit)
     if(sum(set%weights)<=0)error stop 'HALF: invalid EIGENVAL weights'
     set%weights=set%weights/sum(set%weights);set%multiplicities=1;nelect=real(nelectron,dp)
+  end subroutine
+
+  subroutine compute_spin_occupations(eigenvalues_up,eigenvalues_down,weights,nelect,nupdown,sigma, &
+      occupation_up,occupation_down,chemical_potential_up,chemical_potential_down,band_energy,entropy_term,ismear)
+    real(dp),intent(in)::eigenvalues_up(:,:),eigenvalues_down(:,:),weights(:),nelect,nupdown,sigma
+    real(dp),allocatable,intent(out)::occupation_up(:,:),occupation_down(:,:)
+    real(dp),intent(out)::chemical_potential_up,chemical_potential_down,band_energy,entropy_term
+    integer,intent(in),optional::ismear
+    real(dp)::n_up,n_down,band_up,band_down,entropy_up,entropy_down
+    integer::nb,smearing
+    if(any(shape(eigenvalues_up)/=shape(eigenvalues_down))) &
+      error stop 'HALF: spin-channel eigenvalue dimensions do not match'
+    nb=size(eigenvalues_up,2)
+    if(nelect< -1e-12_dp.or.nelect>2.0_dp*nb+1e-12_dp) &
+      error stop 'HALF: electrons do not fit in requested spin bands'
+    n_up=0.5_dp*(nelect+nupdown);n_down=0.5_dp*(nelect-nupdown)
+    if(n_up< -1e-12_dp.or.n_down< -1e-12_dp.or.n_up>nb+1e-12_dp.or.n_down>nb+1e-12_dp) &
+      error stop 'HALF: NUPDOWN is incompatible with NELECT and requested bands'
+    smearing=0;if(present(ismear))smearing=ismear
+    ! Reuse the rigorously tested twofold-degenerate occupation solver.  Doubling
+    ! a channel's electron count and halving its result is exactly the same
+    ! one-electron-per-spin-state problem, including fractional k-point weights.
+    call compute_occupations(eigenvalues_up,weights,2.0_dp*n_up,sigma,occupation_up, &
+      chemical_potential_up,band_up,entropy_up,smearing)
+    call compute_occupations(eigenvalues_down,weights,2.0_dp*n_down,sigma,occupation_down, &
+      chemical_potential_down,band_down,entropy_down,smearing)
+    occupation_up=0.5_dp*occupation_up;occupation_down=0.5_dp*occupation_down
+    band_energy=0.5_dp*(band_up+band_down);entropy_term=0.5_dp*(entropy_up+entropy_down)
   end subroutine
 
   subroutine compute_occupations(eigenvalues,weights,nelect,sigma,occupation,chemical_potential,band_energy,entropy_term,ismear)

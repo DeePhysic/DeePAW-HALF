@@ -335,6 +335,18 @@ CPU/CUDA backend selection:
 ./build/cuda12-cc89-release/half bands CHGCAR.smooth POTCAR \
   --encut 400 --bands 12 --npoints 60 --backend cuda --output-prefix bands
 
+# Prepare a two-channel collinear VASP restart at fixed total moment.
+# Both channels currently use the same DeePAW total-density Harris operator;
+# NUPDOWN controls N_up-N_down and each channel carries occupations in [0,1].
+./build/cuda12-cc89-release/half bands CHGCAR.smooth POTCAR KPOINTS \
+  --encut 400 --bands 24 --backend cuda --ispin 2 --nupdown 2 \
+  --vaspwave-h5 vaspwave-spin.h5 --output-prefix bands-spin
+
+# Evaluate a fixed-spin Delta-SCF Harris energy with the same convention.
+./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
+  --encut 400 --bands 24 --backend cuda --ispin 2 --nupdown 2 \
+  --vaspwave-h5 vaspwave-spin.h5 --output-prefix energy-spin
+
 # Evaluate the symmetry-reduced fixed-density Harris energy.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --ismear 0 --sigma 0.02 --backend cuda \

@@ -2,7 +2,7 @@ program half_energy_check
   use half_kinds,only:dp
   use half_types,only:crystal_t,plane_wave_basis_t
   use half_math,only:inverse3
-  use half_energy,only:compute_occupations,ewald_energy,ewald_forces
+  use half_energy,only:compute_occupations,compute_spin_occupations,ewald_energy,ewald_forces
   use half_paw,only:paw_species_t
   use half_forces,only:add_nonlocal_paw_forces
   use half_potcar_interp,only:vasp_local_spline_second,vasp_local_spline_eval,vasp_four_point_eval
@@ -18,7 +18,8 @@ program half_energy_check
   real(dp)::symgrid(8),symvectors(2,3),expected_vectors(2,3)
   complex(dp)::waves(3,1),projector0(2,3),cc(2)
   integer::i,j,ig
-  real(dp),allocatable::occ(:,:)
+  real(dp),allocatable::occ(:,:),occ_up(:,:),occ_down(:,:)
+  real(dp)::mu_up,mu_down
 
   eig=0.0_dp;eig(:,1:2)=reshape([0.0_dp,1.0_dp,2.0_dp,3.0_dp],[2,2])
   weight=[0.5_dp,0.5_dp]
@@ -61,6 +62,15 @@ program half_energy_check
   call compute_occupations(eig,weight,2.0_dp,0.1_dp,occ,mu,band,entropy,0)
   if(abs(sum(spread(weight,2,3)*occ)-2.0_dp)>1e-12_dp.or.entropy>=0.0_dp) &
     error stop 'HALF: Gaussian occupation regression'
+
+  call compute_spin_occupations(eig,eig,weight,3.0_dp,1.0_dp,0.0_dp,occ_up,occ_down, &
+    mu_up,mu_down,band,entropy)
+  if(abs(sum(spread(weight,2,3)*occ_up)-2.0_dp)>1e-12_dp.or. &
+     abs(sum(spread(weight,2,3)*occ_down)-1.0_dp)>1e-12_dp) &
+    error stop 'HALF: fixed-NUPDOWN channel electron-count regression'
+  if(abs(sum(spread(weight,2,3)*(occ_up-occ_down))-1.0_dp)>1e-12_dp.or. &
+     any(occ_up<0.0_dp).or.any(occ_up>1.0_dp).or.any(occ_down<0.0_dp).or.any(occ_down>1.0_dp)) &
+    error stop 'HALF: fixed-NUPDOWN channel occupation regression'
 
   crystal%nions=2;crystal%ntypes=1;crystal%lattice=0.0_dp
   crystal%lattice(1,1)=4.0_dp;crystal%lattice(2,2)=4.0_dp;crystal%lattice(3,3)=4.0_dp

@@ -262,6 +262,22 @@ def test_native_hdf5_input_and_vaspwave_output_are_enabled():
     assert "case('--vaspwave-h5')" in cli
 
 
+def test_fixed_nupdown_spin_channels_are_exported_to_vasp_hdf5():
+    energy = (ROOT / "src/half_energy.F90").read_text().lower()
+    bridge = (ROOT / "src/half_hdf5_bridge.c").read_text().lower()
+    writer = (ROOT / "src/half_vaspwave.F90").read_text().lower()
+    cli = (ROOT / "app/half_cli.F90").read_text().lower()
+    assert "compute_spin_occupations" in energy
+    assert '"spin_%d"' in bridge
+    assert "rispin=(double)nspin" in bridge
+    assert "write_vaspwave_h5_spin" in writer
+    assert "case('--ispin')" in cli
+    assert "case('--nupdown')" in cli
+    assert "shared_total_density_fixed_moment" in cli
+    assert "call compute_spin_occupations" in cli
+    assert "occupation=occupation_up+occupation_down" in cli
+
+
 def test_si_finite_difference_force_parity_record():
     # Kept only as an independent numerical oracle for analytic-force tests.
     import json

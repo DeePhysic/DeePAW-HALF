@@ -7,7 +7,7 @@ program half_cli
   use half_kpoints, only: kpoint_set_t,read_explicit_kpoints,gamma_centered_mesh,gamma_centered_irreducible_mesh, &
     generate_cubic_band_path,symmetrize_scalar_grid,symmetrize_atomic_vectors
   use half_paw, only: paw_species_t, onsite_species_correction_t, build_paw_operators
-  use half_energy, only: compute_occupations,ewald_energy,ewald_forces,read_vasp_eigenval
+  use half_energy, only: compute_occupations,compute_spin_occupations,ewald_energy,ewald_forces,read_vasp_eigenval
   use half_artifacts, only: write_bands_artifacts,write_energy_npz
   use half_math,only:inverse3
   use half_cpu, only: cpu_density_mean
@@ -32,7 +32,7 @@ program half_cli
   use half_cuda_onsite_functional, only: evaluate_onsite_corrections_cuda
 #endif
 #ifdef HALF_CLI_HAVE_HDF5
-  use half_vaspwave,only:wave_block_t,write_vaspwave_h5
+  use half_vaspwave,only:wave_block_t,write_vaspwave_h5,write_vaspwave_h5_spin
 #endif
   implicit none
   type::force_wave_block_t
@@ -493,18 +493,18 @@ contains
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
     real(dp)::encut,eh,exc,smin,smax,potential_seconds,assembly_seconds,gpu_seconds,acc_tol,acc_residual,onsite_kspacing
-    real(dp)::nelect,vbm,cbm,gap,gamma_gap
-    integer::narg,i,ios,ik,nbands,unit,npoints,nocc,gamma_index,artifact_status,acc_max_iter,acc_block_size,acc_iterations
+    real(dp)::nelect,nupdown,vbm,cbm,gap,gamma_gap
+    integer::narg,i,ios,ik,nbands,unit,npoints,nocc,gamma_index,artifact_status,acc_max_iter,acc_block_size,acc_iterations,ispin
     integer::onsite_lmax
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,path_spec,path_used
     character(len=16)::xc,backend,solver,actual_backend
-    logical::use_uspp
+    logical::use_uspp,nupdown_set
     type(onsite_species_correction_t),allocatable::onsite_correction(:)
 #ifdef HALF_CLI_HAVE_HDF5
     type(plane_wave_basis_t),allocatable::wave_bases(:)
     type(wave_block_t),allocatable::waves(:)
-    real(dp),allocatable::wave_occ(:,:)
-    real(dp)::wave_mu,wave_band,wave_entropy,nelect
+    real(dp),allocatable::wave_occ(:,:),wave_occ_up(:,:),wave_occ_down(:,:)
+    real(dp)::wave_mu,wave_mu_up,wave_mu_down,wave_band,wave_entropy
 #endif
     narg=command_argument_count()
     if(narg>=offset+1)then
@@ -522,6 +522,7 @@ contains
     kpoints_path='';path_spec='';path_used='';i=offset+3
     if(i<=narg)then;call get_command_argument(i,arg);if(arg(1:1)/='-')then;kpoints_path=arg;i=i+1;end if;end if
     encut=400.0_dp;nbands=8;npoints=60;xc='pbe';backend='auto';solver='evd';use_uspp=.true.;onsite_lmax=-1
+    ispin=1;nupdown=0.0_dp;nupdown_set=.false.
     onsite_kspacing=0.35_dp
     acc_tol=1.0e-4_dp;acc_max_iter=40;acc_block_size=16
     output_path='bands.json';output_prefix='bands';hdf5_path=''
@@ -532,6 +533,10 @@ contains
         if(ios/=0.or.encut<=0)call fail('invalid --encut value')
       case('--bands');call option_value(i,narg,'--bands',value);read(value,*,iostat=ios)nbands
         if(ios/=0.or.nbands<1)call fail('invalid --bands value')
+      case('--ispin');call option_value(i,narg,'--ispin',value);read(value,*,iostat=ios)ispin
+        if(ios/=0.or.(ispin/=1.and.ispin/=2))call fail('--ispin must be 1 or 2')
+      case('--nupdown');call option_value(i,narg,'--nupdown',value);read(value,*,iostat=ios)nupdown;nupdown_set=.true.
+        if(ios/=0.or.nupdown/=nupdown)call fail('invalid --nupdown value')
       case('--npoints');call option_value(i,narg,'--npoints',value);read(value,*,iostat=ios)npoints
         if(ios/=0.or.npoints<2)call fail('invalid --npoints value')
       case('--path');call option_value(i,narg,'--path',path_spec)
@@ -562,11 +567,21 @@ contains
       end select
       i=i+1
     end do
+    if(nupdown_set.and.ispin/=2)call fail('--nupdown requires --ispin 2')
     call require_onsite_implementation(onsite_lmax)
     if(onsite_lmax>=0)then
       if(trim(xc)/='pbe'.or..not.use_uspp)call fail('experimental onsite PAW bands require PBE and QDEP/PAW Dij')
     end if
     call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars);call validate_potcar_structure(potcars,crystal)
+    nelect=0.0_dp
+    do i=1,size(potcars);nelect=nelect+potcars(i)%zval*real(crystal%counts(i),dp);end do
+    if(ispin==2)then
+      if(0.5_dp*(nelect+abs(nupdown))>real(nbands,dp)+1e-12_dp) &
+        call fail('NUPDOWN/NELECT require more spin bands; increase --bands')
+      if(abs(nupdown)>nelect+1e-12_dp)call fail('abs(NUPDOWN) cannot exceed NELECT')
+      if(parallel_root())write(0,'(A,ES14.6)') &
+        'HALF bands: fixed spin channels share the DeePAW total-density operator; NUPDOWN=',nupdown
+    end if
     if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),set);path_used=kpoints_path
     else;call generate_cubic_band_path(crystal,npoints,path_spec,set,path_used);end if
 #ifdef HALF_CLI_CUDA
@@ -636,14 +651,22 @@ contains
 #ifdef HALF_CLI_HAVE_HDF5
     if(len_trim(hdf5_path)>0)then
       nelect=0;do i=1,size(potcars);nelect=nelect+potcars(i)%zval*real(crystal%counts(i),dp);end do
-      call compute_occupations(eigenvalues,set%weights,nelect,0.0_dp,wave_occ,wave_mu,wave_band,wave_entropy)
-      call write_vaspwave_h5(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,wave_occ,wave_mu,wave_bases,waves)
+      if(ispin==2)then
+        call compute_spin_occupations(eigenvalues,eigenvalues,set%weights,nelect,nupdown,0.0_dp, &
+          wave_occ_up,wave_occ_down,wave_mu_up,wave_mu_down,wave_band,wave_entropy)
+        call write_vaspwave_h5_spin(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,eigenvalues, &
+          wave_occ_up,wave_occ_down,max(wave_mu_up,wave_mu_down),wave_bases,waves)
+      else
+        call compute_occupations(eigenvalues,set%weights,nelect,0.0_dp,wave_occ,wave_mu,wave_band,wave_entropy)
+        call write_vaspwave_h5(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,wave_occ,wave_mu,wave_bases,waves)
+      end if
     end if
 #endif
     if(parallel_root())then
       nelect=0.0_dp
       do i=1,size(potcars);nelect=nelect+potcars(i)%zval*real(crystal%counts(i),dp);end do
-      nocc=ceiling(nelect/2.0_dp)
+      if(ispin==2)then;nocc=ceiling(0.5_dp*(nelect+abs(nupdown)))
+      else;nocc=ceiling(nelect/2.0_dp);end if
       if(nocc>nbands)call fail('too few bands to determine the valence-band maximum')
       vbm=maxval(eigenvalues(:,nocc));cbm=vbm;gap=0.0_dp;gamma_gap=0.0_dp
       if(nocc<nbands)then
@@ -657,10 +680,10 @@ contains
       else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
         if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
       call write_bands_json(unit,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues, &
-        plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing)
+        plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing,ispin,nupdown)
       if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,path_used,xc,actual_backend,solver, &
         encut,set,eigenvalues,plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc, &
-        onsite_lmax,onsite_kspacing);end if
+        onsite_lmax,onsite_kspacing,ispin,nupdown);end if
       if(trim(output_path)/='-')then
         call write_bands_csv(trim(output_prefix)//'.csv',set,path_x,shifted)
         call write_bands_artifacts(trim(output_prefix),set%points,path_x,eigenvalues,shifted,plane_waves,overlap_mins,vbm,artifact_status)
@@ -678,19 +701,21 @@ contains
     write(unit,'(A)')'         --solver evd|evj|evx|acc --acc-tol EV --acc-max-iter N --acc-block-size N'
     write(unit,'(A)')'         --onsite-kspacing VALUE  (density mesh used when --onsite-lmax >= 0)'
     write(unit,'(A)')'         --onsite-lmax -1|0|1|...  (default -1; non-negative channels require MKL/FFTW)'
-    write(unit,'(A)')'         --no-uspp-dij --output FILE --output-prefix PREFIX --vaspwave-h5 FILE'
+    write(unit,'(A)')'         --ispin 1|2 --nupdown VALUE --no-uspp-dij --output FILE --output-prefix PREFIX'
+    write(unit,'(A)')'         --vaspwave-h5 FILE  (ISPIN=2 writes two fixed-NUPDOWN spin channels)'
     write(unit,'(A)')'KPOINTS is a VASP explicit reciprocal-coordinate file; omit it for an automatic cubic band path.'
   end subroutine
 
   subroutine write_bands_json(unit,charge,potential,kfile,xc,backend,solver,encut,set,eigenvalues,plane_waves, &
-      overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing)
+      overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing,ispin,nupdown)
     integer,intent(in)::unit
     character(len=*),intent(in)::charge,potential,kfile,xc,backend,solver
     real(dp),intent(in)::encut,eigenvalues(:,:),overlap_mins(:),path_x(:),vbm,cbm,gap,gamma_gap,onsite_kspacing
     type(kpoint_set_t),intent(in)::set
     integer(i64),intent(in)::plane_waves(:)
     logical,intent(in)::use_uspp
-    integer,intent(in)::nocc,onsite_lmax
+    integer,intent(in)::nocc,onsite_lmax,ispin
+    real(dp),intent(in)::nupdown
     integer::ik,ib
     write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.6.0",'
     write(unit,'(A,A,A)')'  "charge": "',trim(charge),'",';write(unit,'(A,A,A)')'  "potential": "',trim(potential),'",'
@@ -700,6 +725,9 @@ contains
     if(onsite_lmax>=0)write(unit,'(A,ES24.16,A)')'  "onsite_density_kspacing_Ainv": ',onsite_kspacing,','
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
     write(unit,'(A,I0,A)')'  "occupied_bands": ',nocc,','
+    write(unit,'(A,I0,A)')'  "ispin": ',ispin,','
+    write(unit,'(A,ES24.16,A)')'  "nupdown": ',nupdown,','
+    if(ispin==2)write(unit,'(A)')'  "spin_channel_mode": "shared_total_density_fixed_moment",'
     write(unit,'(A,ES24.16,A)')'  "vbm_eV": ',vbm,','
     write(unit,'(A,ES24.16,A)')'  "cbm_eV": ',cbm,','
     write(unit,'(A,ES24.16,A)')'  "sampled_band_gap_eV": ',gap,','
@@ -758,10 +786,12 @@ contains
     type(potcar_t),allocatable::potcars(:)
     type(paw_species_t),allocatable::paw(:)
     type(kpoint_set_t)::set,reference_set
-    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),occupation(:,:),charges(:),reference_eigenvalues(:,:),vxc_input(:)
+    real(dp),allocatable::veff(:),values(:),eigenvalues(:,:),occupation(:,:),occupation_up(:,:),occupation_down(:,:), &
+      charges(:),reference_eigenvalues(:,:),vxc_input(:)
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
-    real(dp)::encut,kspacing,symprec,sigma,nelect,density_electrons,mu,band_energy,entropy_term,reference_nelect
+    real(dp)::encut,kspacing,symprec,sigma,nelect,nupdown,density_electrons,mu,mu_up,mu_down, &
+      band_energy,entropy_term,reference_nelect
     real(dp)::eh,exc,exv,smin,k_smin,smax,potential_seconds,assembly_seconds,gpu_seconds
     real(dp)::ewald,ewald_real,ewald_recip,ewald_self,ewald_background,atomic_reference,local_g0
     real(dp)::paw_atomic,paw_atomic_ae,paw_atomic_ps,internal_energy,free_energy
@@ -769,10 +799,10 @@ contains
     real(dp),allocatable::forces(:,:),force_ewald(:,:),force_local(:,:),force_nonlocal(:,:),force_projector(:,:), &
       force_augmentation(:,:),force_nlcc(:,:),force_harris(:,:)
     type(crystal_t)::displaced
-    integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status,ismear,onsite_lmax
+    integer::narg,i,ios,ik,it,iat,ion,nbands,minimum_bands,unit,artifact_status,ismear,onsite_lmax,ispin
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,reference_path
     character(len=16)::xc,backend,solver,actual_backend
-    logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference,onsite_tol_explicit
+    logical::use_uspp,full_mesh,have_atomic_override,have_paw_atomic,do_forces,use_reference,onsite_tol_explicit,nupdown_set
     type(plane_wave_basis_t),allocatable::force_bases(:)
     type(force_wave_block_t),allocatable::force_waves(:)
     type(force_qdep_cache_t),allocatable::force_qdep_cache(:)
@@ -801,6 +831,7 @@ contains
     narg=command_argument_count();if(narg<offset+2)then;call print_energy_help(0);call fail('energy requires CHARGE and POTENTIAL');end if
     call get_command_argument(offset+1,charge_path);call get_command_argument(offset+2,potential_path)
     encut=400.0_dp;kspacing=0.5_dp;symprec=1e-5_dp;sigma=0.01_dp;nbands=0;ismear=0
+    ispin=1;nupdown=0.0_dp;nupdown_set=.false.;mu_up=0.0_dp;mu_down=0.0_dp
     xc='pbe';backend='auto';solver='evd';kpoints_path='';output_path='energy.json';output_prefix='energy';hdf5_path='';reference_path=''
     use_uspp=.true.;full_mesh=.false.;have_atomic_override=.false.;have_paw_atomic=.false.;do_forces=.false.;onsite_lmax=-1
     paw_atomic=0;atomic_reference=0;force_step=1e-3_dp;onsite_tol=1.0e-6_dp;onsite_tol_explicit=.false.
@@ -820,6 +851,10 @@ contains
         if(ios/=0.or.(ismear/=-1.and.ismear/=0))call fail('--ismear must be -1 (Fermi-Dirac) or 0 (Gaussian)')
       case('--bands');call option_value(i,narg,'--bands',value);read(value,*,iostat=ios)nbands
         if(ios/=0.or.nbands<1)call fail('invalid --bands value')
+      case('--ispin');call option_value(i,narg,'--ispin',value);read(value,*,iostat=ios)ispin
+        if(ios/=0.or.(ispin/=1.and.ispin/=2))call fail('--ispin must be 1 or 2')
+      case('--nupdown');call option_value(i,narg,'--nupdown',value);read(value,*,iostat=ios)nupdown;nupdown_set=.true.
+        if(ios/=0.or.nupdown/=nupdown)call fail('invalid --nupdown value')
       case('--kpoints-file');call option_value(i,narg,'--kpoints-file',kpoints_path)
       case('--reference-eigenval');call option_value(i,narg,'--reference-eigenval',reference_path)
       case('--no-kpoint-symmetry');full_mesh=.true.
@@ -857,6 +892,7 @@ contains
       end select
       i=i+1
     end do
+    if(nupdown_set.and.ispin/=2)call fail('--nupdown requires --ispin 2')
     call require_onsite_implementation(onsite_lmax)
     if(onsite_lmax>=0)then
       if(trim(xc)/='pbe')call fail('experimental onsite PAW currently supports PBE only')
@@ -870,7 +906,15 @@ contains
     do it=1,size(potcars);nelect=nelect+potcars(it)%zval*real(crystal%counts(it),dp);end do
     density_electrons=rho%electron_count()
     if(abs(density_electrons-nelect)>5e-4_dp)call fail('smooth CHGCAR electron count does not match POTCAR ZVAL')
-    minimum_bands=ceiling(nelect/2.0_dp);if(nbands==0)nbands=minimum_bands+8
+    if(ispin==2)then
+      if(abs(nupdown)>nelect+1e-12_dp)call fail('abs(NUPDOWN) cannot exceed NELECT')
+      minimum_bands=ceiling(0.5_dp*(nelect+abs(nupdown)))
+      if(parallel_root())write(0,'(A,ES14.6)') &
+        'HALF energy: fixed spin channels share the DeePAW total-density operator; NUPDOWN=',nupdown
+    else
+      minimum_bands=ceiling(nelect/2.0_dp)
+    end if
+    if(nbands==0)nbands=minimum_bands+8
     if(nbands<minimum_bands)call fail('too few bands for POTCAR electron count')
     if(len_trim(kpoints_path)>0)then;call read_explicit_kpoints(trim(kpoints_path),set)
     else if(full_mesh)then;call gamma_centered_mesh(crystal,kspacing,set)
@@ -978,8 +1022,18 @@ contains
     end do
     if(.not.use_reference)call parallel_sum(eigenvalues)
     call parallel_sum(plane_waves);call parallel_min(smin)
-    call compute_occupations(eigenvalues,set%weights,nelect,sigma,occupation,mu,band_energy,entropy_term,ismear)
-    if(sigma>0.and.maxval(occupation(:,nbands))>1e-6_dp)call fail('highest computed band is occupied; increase --bands')
+    if(ispin==2)then
+      call compute_spin_occupations(eigenvalues,eigenvalues,set%weights,nelect,nupdown,sigma, &
+        occupation_up,occupation_down,mu_up,mu_down,band_energy,entropy_term,ismear)
+      if(allocated(occupation))deallocate(occupation)
+      allocate(occupation(set%nk,nbands));occupation=occupation_up+occupation_down;mu=max(mu_up,mu_down)
+      if(sigma>0.and.max(maxval(occupation_up(:,nbands)),maxval(occupation_down(:,nbands)))>1e-6_dp) &
+        call fail('highest computed spin band is occupied; increase --bands')
+    else
+      call compute_occupations(eigenvalues,set%weights,nelect,sigma,occupation,mu,band_energy,entropy_term,ismear)
+      mu_up=mu;mu_down=mu
+      if(sigma>0.and.maxval(occupation(:,nbands))>1e-6_dp)call fail('highest computed band is occupied; increase --bands')
+    end if
     if(onsite_lmax<0)exit
     call update_onsite_from_waves(potcars,crystal,rho%shape,encut,set,force_bases,force_waves, &
       occupation,onsite_lmax,actual_backend,onsite_new,onsite_dc,onsite_energy)
@@ -1014,7 +1068,14 @@ contains
     end do
     if(onsite_lmax<0)onsite_iteration=0
 #ifdef HALF_CLI_HAVE_HDF5
-    if(len_trim(hdf5_path)>0)call write_vaspwave_h5(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,occupation,mu,wave_bases,waves)
+    if(len_trim(hdf5_path)>0)then
+      if(ispin==2)then
+        call write_vaspwave_h5_spin(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,eigenvalues, &
+          occupation_up,occupation_down,mu,wave_bases,waves)
+      else
+        call write_vaspwave_h5(trim(hdf5_path),crystal,rho,encut,set%points,eigenvalues,occupation,mu,wave_bases,waves)
+      end if
+    end if
 #endif
     allocate(charges(crystal%nions));ion=0
     do it=1,size(potcars);do iat=1,crystal%counts(it);ion=ion+1;charges(ion)=potcars(it)%zval;end do;end do
@@ -1114,11 +1175,11 @@ contains
       call write_energy_json(unit,xc,actual_backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
         have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step, &
-        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy)
+        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down)
       if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
         have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step, &
-        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy);end if
+        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down);end if
       if(trim(output_path)/='-')then
         call write_energy_npz(trim(output_prefix),set%points,set%weights,eigenvalues,occupation,forces,artifact_status)
         if(artifact_status/=0)call fail('cannot write energy NPZ artifact')
@@ -1133,6 +1194,7 @@ contains
     write(unit,'(A)')'       half-energy CHARGE POTENTIAL [OPTIONS]'
     write(unit,'(A)')'Options: --encut EV --kspacing VALUE --kpoints-file FILE --no-kpoint-symmetry'
     write(unit,'(A)')'         --symprec VALUE --bands N --ismear -1|0 --sigma EV --xc lda|pbe'
+    write(unit,'(A)')'         --ispin 1|2 --nupdown VALUE  (fixed-moment spin channels; NUPDOWN=N_up-N_down)'
     write(unit,'(A)')'         Occupation defaults: ISMEAR=0 (Gaussian), SIGMA=0.01 eV; --sigma 0 selects zero-width filling'
     write(unit,'(A)')'         --reference-eigenval EIGENVAL'
     write(unit,'(A)')'         --backend auto|cpu|cuda --solver evd|evj|evx|acc --no-uspp-dij --output FILE --output-prefix PREFIX'
@@ -1355,12 +1417,13 @@ contains
 
   subroutine write_energy_json(unit,xc,backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald, &
       er,eg,es,eb,local_g0,atomic_reference,paw_atomic,have_paw_atomic,internal,free,smin,plane_waves,use_uspp, &
-      forces,have_forces,force_step,onsite_lmax,onsite_iteration,onsite_dc,onsite_energy)
-    integer,intent(in)::unit,ismear,onsite_lmax,onsite_iteration
+      forces,have_forces,force_step,onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down)
+    integer,intent(in)::unit,ismear,onsite_lmax,onsite_iteration,ispin
     character(len=*),intent(in)::xc,backend,solver
     type(kpoint_set_t),intent(in)::set
     real(dp),intent(in)::sigma,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald,er,eg,es,eb,local_g0
     real(dp),intent(in)::atomic_reference,paw_atomic,internal,free,smin,onsite_dc,onsite_energy
+    real(dp),intent(in)::nupdown,mu_up,mu_down
     integer(i64),intent(in)::plane_waves(:)
     real(dp),intent(in)::forces(:,:),force_step
     logical,intent(in)::have_paw_atomic,use_uspp,have_forces
@@ -1378,6 +1441,12 @@ contains
     write(unit,'(A,ES24.16,A)')'  "onsite_nonlinear_energy_eV": ',onsite_energy,','
     write(unit,'(A,ES24.16,A)')'  "onsite_double_counting_delta_eV": ',onsite_dc,','
     write(unit,'(A,I0,A)')'  "ismear": ',ismear,',';write(unit,'(A,ES24.16,A)')'  "sigma_eV": ',sigma,','
+    write(unit,'(A,I0,A)')'  "ispin": ',ispin,','
+    write(unit,'(A,ES24.16,A)')'  "nupdown": ',nupdown,','
+    if(ispin==2)then
+      write(unit,'(A)')'  "spin_channel_mode": "shared_total_density_fixed_moment",'
+      write(unit,'(A,2(ES24.16,:,A))')'  "spin_fermi_levels_eV": [',mu_up,', ',mu_down,'],'
+    end if
     write(unit,'(A,I0,A)')'  "mpi_ranks": ',parallel_size(),','
     write(unit,'(A,I0,A)')'  "full_kpoint_count": ',set%full_count,',';write(unit,'(A,I0,A)')'  "irreducible_kpoint_count": ',set%nk,','
     write(unit,'(A,I0,A)')'  "space_group_operation_count": ',set%nsym,','

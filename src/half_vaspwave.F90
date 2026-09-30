@@ -5,7 +5,7 @@ module half_vaspwave
   use half_math,only:inverse3
   implicit none
   private
-  public::wave_block_t,write_vaspwave_h5,is_hdf5_file,read_vaspwave_h5,extract_hdf5_potcar
+  public::wave_block_t,write_vaspwave_h5,write_vaspwave_h5_spin,is_hdf5_file,read_vaspwave_h5,extract_hdf5_potcar
   type::wave_block_t
     complex(dp),allocatable::coefficients(:,:)
   end type
@@ -36,10 +36,10 @@ module half_vaspwave
       real(c_double),intent(out)::lattice(*),positions(*),charge(*)
     end function
     integer(c_int) function write_c(filename,system,ntypes,species,counts,nions,lattice,positions,grid,charge, &
-        encut,fermi,nk,nb,kpoints,eigenvalues,occupations,npws,offsets,coefficients)bind(C,name='half_write_vaspwave_h5_c')
+        encut,fermi,nk,nb,nspin,kpoints,eigenvalues,occupations,npws,offsets,coefficients)bind(C,name='half_write_vaspwave_h5_c')
       import::c_int,c_int64_t,c_double,c_float,c_char
       character(c_char),intent(in)::filename(*),system(*),species(*)
-      integer(c_int),value::ntypes,nions,nk,nb
+      integer(c_int),value::ntypes,nions,nk,nb,nspin
       integer(c_int),intent(in)::counts(*),grid(*),npws(*)
       integer(c_int64_t),intent(in)::offsets(*)
       real(c_double),intent(in)::lattice(*),positions(*),charge(*),kpoints(*),eigenvalues(*),occupations(*)
@@ -98,18 +98,55 @@ contains
     real(dp),intent(in)::encut,kpoints(:,:),eigenvalues(:,:),occupations(:,:),fermi
     type(plane_wave_basis_t),intent(in)::bases(:)
     type(wave_block_t),intent(in)::waves(:)
+    real(dp),allocatable::spin_eigenvalues(:,:,:),spin_occupations(:,:,:)
+    allocate(spin_eigenvalues(size(eigenvalues,1),size(eigenvalues,2),1), &
+      spin_occupations(size(occupations,1),size(occupations,2),1))
+    spin_eigenvalues(:,:,1)=eigenvalues;spin_occupations(:,:,1)=occupations
+    call write_vaspwave_h5_core(filename,crystal,charge,encut,kpoints,spin_eigenvalues,spin_occupations,fermi,bases,waves)
+  end subroutine
+
+  subroutine write_vaspwave_h5_spin(filename,crystal,charge,encut,kpoints,eigenvalues_up,eigenvalues_down, &
+      occupations_up,occupations_down,fermi,bases,waves)
+    character(len=*),intent(in)::filename
+    type(crystal_t),intent(in)::crystal
+    type(charge_grid_t),intent(in)::charge
+    real(dp),intent(in)::encut,kpoints(:,:),eigenvalues_up(:,:),eigenvalues_down(:,:), &
+      occupations_up(:,:),occupations_down(:,:),fermi
+    type(plane_wave_basis_t),intent(in)::bases(:)
+    type(wave_block_t),intent(in)::waves(:)
+    real(dp),allocatable::spin_eigenvalues(:,:,:),spin_occupations(:,:,:)
+    if(any(shape(eigenvalues_up)/=shape(eigenvalues_down)).or. &
+       any(shape(occupations_up)/=shape(eigenvalues_up)).or. &
+       any(shape(occupations_down)/=shape(eigenvalues_up))) &
+      error stop 'HALF: spin HDF5 band array mismatch'
+    allocate(spin_eigenvalues(size(eigenvalues_up,1),size(eigenvalues_up,2),2), &
+      spin_occupations(size(eigenvalues_up,1),size(eigenvalues_up,2),2))
+    spin_eigenvalues(:,:,1)=eigenvalues_up;spin_eigenvalues(:,:,2)=eigenvalues_down
+    spin_occupations(:,:,1)=occupations_up;spin_occupations(:,:,2)=occupations_down
+    call write_vaspwave_h5_core(filename,crystal,charge,encut,kpoints,spin_eigenvalues,spin_occupations,fermi,bases,waves)
+  end subroutine
+
+  subroutine write_vaspwave_h5_core(filename,crystal,charge,encut,kpoints,eigenvalues,occupations,fermi,bases,waves)
+    character(len=*),intent(in)::filename
+    type(crystal_t),intent(in)::crystal
+    type(charge_grid_t),intent(in)::charge
+    real(dp),intent(in)::encut,kpoints(:,:),eigenvalues(:,:,:),occupations(:,:,:),fermi
+    type(plane_wave_basis_t),intent(in)::bases(:)
+    type(wave_block_t),intent(in)::waves(:)
     character(c_char),allocatable::cfilename(:),csystem(:),species(:)
     integer(c_int),allocatable::counts(:),grid(:),npws(:)
     integer(c_int64_t),allocatable::offsets(:)
     integer,allocatable::order(:)
-    real(c_double),allocatable::lattice(:,:),positions(:,:),kp(:,:),eig(:,:),occ(:,:)
+    real(c_double),allocatable::lattice(:,:),positions(:,:),kp(:,:),eig(:,:,:),occ(:,:,:)
     real(c_float),allocatable::packed(:)
-    integer::nk,nb,ik,ib,ig,npw,total,cursor,j,status
-    nk=size(kpoints,1);nb=size(eigenvalues,2)
+    integer::nk,nb,nspin,ik,ib,ig,is,npw,total,cursor,j,status
+    nk=size(kpoints,1);nb=size(eigenvalues,2);nspin=size(eigenvalues,3)
     if(size(kpoints,2)/=3.or.size(eigenvalues,1)/=nk.or.any(shape(occupations)/=shape(eigenvalues))) &
       error stop 'HALF: HDF5 band array mismatch'
+    if(nspin<1.or.nspin>2)error stop 'HALF: HDF5 supports one or two collinear spin channels'
     if(size(bases)/=nk.or.size(waves)/=nk)error stop 'HALF: HDF5 wave block count mismatch'
-    if(any(occupations< -1e-10_dp).or.any(occupations>2.0_dp+1e-10_dp))error stop 'HALF: invalid HDF5 occupations'
+    if(any(occupations< -1e-10_dp).or.any(occupations>real(3-nspin,dp)+1e-10_dp)) &
+      error stop 'HALF: invalid HDF5 occupations'
     call c_string(filename,cfilename);call c_string(crystal%system_name,csystem)
     allocate(species(16*crystal%ntypes));species=' '
     do ik=1,crystal%ntypes;do j=1,min(16,len_trim(crystal%species(ik)))
@@ -130,11 +167,12 @@ contains
       end do;end do
       deallocate(order)
     end do
-    allocate(lattice(3,3),positions(3,crystal%nions),kp(3,nk),eig(nb,nk),occ(nb,nk))
+    allocate(lattice(3,3),positions(3,crystal%nions),kp(3,nk),eig(nb,nk,nspin),occ(nb,nk,nspin))
     lattice=transpose(crystal%lattice);positions=transpose(crystal%positions);kp=transpose(kpoints)
-    eig=transpose(eigenvalues);occ=transpose(occupations)
+    do is=1,nspin;eig(:,:,is)=transpose(eigenvalues(:,:,is));occ(:,:,is)=transpose(occupations(:,:,is));end do
     status=write_c(cfilename,csystem,int(crystal%ntypes,c_int),species,counts,int(crystal%nions,c_int), &
-      lattice,positions,grid,charge%values,encut,fermi,int(nk,c_int),int(nb,c_int),kp,eig,occ,npws,offsets,packed)
+      lattice,positions,grid,charge%values,encut,fermi,int(nk,c_int),int(nb,c_int),int(nspin,c_int), &
+      kp,eig,occ,npws,offsets,packed)
     if(status/=0)error stop 'HALF: failed to write vaspwave.h5'
   end subroutine
 

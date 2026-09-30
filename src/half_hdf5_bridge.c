@@ -77,12 +77,12 @@ static int string_scalar(hid_t parent, const char *name, const char *value) {
 int half_write_vaspwave_h5_c(const char *filename, const char *system,
     int ntypes, const char *species, const int *counts, int nions,
     const double *lattice, const double *positions, const int *grid,
-    const double *charge, double encut, double fermi, int nk, int nb,
+    const double *charge, double encut, double fermi, int nk, int nb, int nspin,
     const double *kpoints, const double *eigenvalues, const double *occupations,
     const int *npws, const int64_t *offsets, const float *coefficients) {
   hid_t file=-1, version=-1, structure=-1, pos=-1, charge_group=-1, wave=-1, spin=-1, point=-1, stype=-1;
   int status=-1, major=6, minor=6, patch=0, direct=1;
-  double one=1.0, max_npw=0.0, rispin=1.0, rnb=(double)nb, rnk=(double)nk;
+  double one=1.0, max_npw=0.0, rispin=(double)nspin, rnb=(double)nb, rnk=(double)nk;
   hsize_t d1[1], d2[2], d3[3], d4[4];
   double *celtot=NULL, *fertot=NULL;
   file=H5Fcreate(filename,H5F_ACC_TRUNC,H5P_DEFAULT,H5P_DEFAULT); if(file<0)goto done;
@@ -109,18 +109,25 @@ int half_write_vaspwave_h5_c(const char *filename, const char *system,
   if(scalar(wave,"efermi",H5T_NATIVE_DOUBLE,&fermi)||scalar(wave,"enmax",H5T_NATIVE_DOUBLE,&encut)||
      scalar(wave,"rdum",H5T_NATIVE_DOUBLE,&max_npw)||scalar(wave,"rispin",H5T_NATIVE_DOUBLE,&rispin)||
      scalar(wave,"rnb_tot",H5T_NATIVE_DOUBLE,&rnb)||scalar(wave,"rnkpts",H5T_NATIVE_DOUBLE,&rnk))goto done;
-  spin=H5Gcreate2(wave,"spin_1",H5P_DEFAULT,H5P_DEFAULT,H5P_DEFAULT);if(spin<0)goto done;
   celtot=(double*)calloc((size_t)nb*2,sizeof(double));fertot=(double*)malloc((size_t)nb*sizeof(double));if(!celtot||!fertot)goto done;
-  for(int k=0;k<nk;k++){
-    char name[64];snprintf(name,sizeof(name),"kpoint_%d",k+1);point=H5Gcreate2(spin,name,H5P_DEFAULT,H5P_DEFAULT,H5P_DEFAULT);if(point<0)goto done;
-    memset(celtot,0,(size_t)nb*2*sizeof(double));for(int b=0;b<nb;b++){celtot[2*b]=eigenvalues[k*nb+b];fertot[b]=0.5*occupations[k*nb+b];}
-    d2[0]=(hsize_t)nb;d2[1]=2;if(array(point,"celtot",H5T_NATIVE_DOUBLE,2,d2,celtot))goto done;
-    d1[0]=(hsize_t)nb;if(array(point,"fertot",H5T_NATIVE_DOUBLE,1,d1,fertot))goto done;
-    if(scalar(point,"num_planewaves",H5T_NATIVE_INT,&npws[k]))goto done;d1[0]=3;
-    if(array(point,"vkpt",H5T_NATIVE_DOUBLE,1,d1,kpoints+3*k))goto done;
-    d3[0]=(hsize_t)nb;d3[1]=(hsize_t)npws[k];d3[2]=2;
-    if(array(point,"wave",H5T_NATIVE_FLOAT,3,d3,coefficients+offsets[k]))goto done;
-    H5Gclose(point);point=-1;
+  if(nspin<1||nspin>2)goto done;
+  for(int s=0;s<nspin;s++){
+    char spin_name[32];snprintf(spin_name,sizeof(spin_name),"spin_%d",s+1);
+    spin=H5Gcreate2(wave,spin_name,H5P_DEFAULT,H5P_DEFAULT,H5P_DEFAULT);if(spin<0)goto done;
+    for(int k=0;k<nk;k++){
+      char name[64];snprintf(name,sizeof(name),"kpoint_%d",k+1);point=H5Gcreate2(spin,name,H5P_DEFAULT,H5P_DEFAULT,H5P_DEFAULT);if(point<0)goto done;
+      size_t base=((size_t)s*(size_t)nk+(size_t)k)*(size_t)nb;
+      memset(celtot,0,(size_t)nb*2*sizeof(double));
+      for(int b=0;b<nb;b++){celtot[2*b]=eigenvalues[base+(size_t)b];fertot[b]=occupations[base+(size_t)b]/(nspin==1?2.0:1.0);}
+      d2[0]=(hsize_t)nb;d2[1]=2;if(array(point,"celtot",H5T_NATIVE_DOUBLE,2,d2,celtot))goto done;
+      d1[0]=(hsize_t)nb;if(array(point,"fertot",H5T_NATIVE_DOUBLE,1,d1,fertot))goto done;
+      if(scalar(point,"num_planewaves",H5T_NATIVE_INT,&npws[k]))goto done;d1[0]=3;
+      if(array(point,"vkpt",H5T_NATIVE_DOUBLE,1,d1,kpoints+3*k))goto done;
+      d3[0]=(hsize_t)nb;d3[1]=(hsize_t)npws[k];d3[2]=2;
+      if(array(point,"wave",H5T_NATIVE_FLOAT,3,d3,coefficients+offsets[k]))goto done;
+      H5Gclose(point);point=-1;
+    }
+    H5Gclose(spin);spin=-1;
   }
   status=0;
 done:

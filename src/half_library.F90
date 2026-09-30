@@ -7,6 +7,7 @@ module half_library
   use half_basis,only:build_plane_wave_basis
   use half_paw,only:paw_species_t,build_paw_operators
 #ifdef HALF_HAVE_MKL
+  use half_fft,only:fft3_forward,fft3_backward
   use half_uspp,only:build_uspp_dij_cpu
   use half_potential,only:build_veff_lda,build_veff_pbe
   use half_dense_solver,only:assemble_dense_gamma,solve_dense_gamma
@@ -14,6 +15,8 @@ module half_library
 #ifdef HALF_HAVE_CUDA
   use cudafor
   use half_cuda_solver,only:solve_dense_gamma_cuda_full
+  use half_cuda_potential,only:build_veff_cuda
+  use half_cuda_assembly,only:cuda_hs_operator_t,prepare_hs_operator_cuda,apply_hs_operator_cuda,destroy_hs_operator_cuda
 #endif
   implicit none
   private
@@ -33,6 +36,13 @@ module half_library
     integer(i32)::request_grid(3)=0_i32,request_nions=0_i32,request_ntypes=0_i32
     real(dp)::request_lattice(3,3)=0.0_dp
     logical::has_request_geometry=.false.
+    type(plane_wave_basis_t)::apply_basis
+    type(paw_species_t),allocatable::apply_paw(:)
+    real(dp)::apply_kpoint(3)=0.0_dp
+    logical::apply_ready=.false.
+#ifdef HALF_HAVE_CUDA
+    type(cuda_hs_operator_t)::gpu_apply_operator
+#endif
     real(dp)::encut=0.0_dp,e_hartree=0.0_dp,e_xc=0.0_dp,e_xc_potential=0.0_dp
     integer::backend=HALF_BACKEND_AUTO
     character(len=3)::solver='evd'
@@ -210,6 +220,11 @@ contains
 
   subroutine context_clear(self)
     class(half_context_t),intent(inout)::self
+#ifdef HALF_HAVE_CUDA
+    if(self%gpu_apply_operator%n>0)call destroy_hs_operator_cuda(self%gpu_apply_operator)
+#endif
+    if(allocated(self%apply_paw))deallocate(self%apply_paw)
+    self%apply_ready=.false.;self%apply_kpoint=0.0_dp
     if(allocated(self%potcars))deallocate(self%potcars)
     if(allocated(self%veff))deallocate(self%veff)
     if(allocated(self%request_species))deallocate(self%request_species)
@@ -304,26 +319,88 @@ contains
   end subroutine
 
   subroutine context_apply_hs(self,kpoint,psi,hpsi,spsi,status,message)
-    class(half_context_t),intent(in)::self
+    class(half_context_t),intent(inout)::self
     real(dp),intent(in)::kpoint(3)
     complex(dp),intent(in)::psi(:,:)
     complex(dp),allocatable,intent(out)::hpsi(:,:),spsi(:,:)
     integer,intent(out)::status
     character(len=*),intent(out)::message
-    complex(dp),allocatable::h(:,:),s(:,:)
-    type(plane_wave_basis_t)::basis
+    complex(dp),allocatable::grid(:),real_grid(:),weighted_grid(:),local_grid(:),coeff(:),dcoeff(:),qcoeff(:)
+    integer::n,ngrid,ib,it,iat,a
+#ifdef HALF_HAVE_CUDA
+    real(dp),device,allocatable::dveff(:)
+    complex(dp),device,allocatable::dpsi(:,:),dhpsi(:,:),dspsi(:,:)
+    real(dp)::eh,exc
+#endif
     if(self%backend==HALF_BACKEND_CUDA)then
 #ifdef HALF_HAVE_CUDA
-      status=HALF_ERROR_UNAVAILABLE;message='CUDA host H/S apply is not available in ABI v1; use half_solve_kpoint';return
+      if(.not.self%apply_ready.or.any(self%apply_kpoint/=kpoint))then
+        if(self%gpu_apply_operator%n>0)call destroy_hs_operator_cuda(self%gpu_apply_operator)
+        call self%make_basis(kpoint,self%apply_basis,status,message)
+        if(status/=HALF_SUCCESS)return
+        call build_veff_cuda(self%charge,self%potcars,self%crystal,self%use_pbe,dveff,eh,exc,.false.)
+        call prepare_hs_operator_cuda(dveff,self%apply_basis,self%potcars,self%crystal, &
+          self%gpu_apply_operator,self%use_uspp)
+        deallocate(dveff)
+        self%apply_kpoint=kpoint;self%apply_ready=.true.
+      end if
+      n=int(self%apply_basis%npw)
+      if(size(psi,1)/=n)then
+        status=HALF_ERROR_INVALID_ARGUMENT;message='state leading dimension does not match plane-wave basis';return
+      end if
+      allocate(dpsi(n,size(psi,2)),dhpsi(n,size(psi,2)),dspsi(n,size(psi,2)))
+      dpsi=psi
+      call apply_hs_operator_cuda(self%gpu_apply_operator,dpsi,dhpsi,dspsi)
+      allocate(hpsi(n,size(psi,2)),spsi(n,size(psi,2)))
+      hpsi=dhpsi;spsi=dspsi
+      status=HALF_SUCCESS;message='';return
 #else
       status=HALF_ERROR_UNAVAILABLE;message='CUDA backend is not compiled';return
 #endif
     end if
-    call self%assemble_hs(kpoint,h,s,status,message);if(status/=HALF_SUCCESS)return
-    if(size(psi,1)/=size(h,1))then
+#ifdef HALF_HAVE_MKL
+    if(.not.self%apply_ready.or.any(self%apply_kpoint/=kpoint))then
+      if(allocated(self%apply_paw))deallocate(self%apply_paw)
+      call prepare(self,kpoint,self%apply_basis,self%apply_paw,status,message)
+      if(status/=HALF_SUCCESS)return
+      self%apply_kpoint=kpoint;self%apply_ready=.true.
+    end if
+    n=int(self%apply_basis%npw);ngrid=size(self%veff)
+    if(size(psi,1)/=n)then
       status=HALF_ERROR_INVALID_ARGUMENT;message='state leading dimension does not match plane-wave basis';return
     end if
-    hpsi=matmul(h,psi);spsi=matmul(s,psi)
+    allocate(hpsi(n,size(psi,2)),spsi(n,size(psi,2)),grid(ngrid),real_grid(ngrid), &
+      weighted_grid(ngrid),local_grid(ngrid))
+    do ib=1,size(psi,2)
+      grid=(0.0_dp,0.0_dp)
+      grid(self%apply_basis%fft_index)=psi(:,ib)
+      call fft3_backward(self%apply_basis%shape,grid,real_grid)
+      weighted_grid=real_grid*self%veff
+      call fft3_forward(self%apply_basis%shape,weighted_grid,local_grid)
+      hpsi(:,ib)=self%apply_basis%kinetic*psi(:,ib)+ &
+        local_grid(self%apply_basis%fft_index)/real(ngrid,dp)
+      spsi(:,ib)=psi(:,ib)
+      do it=1,size(self%apply_paw)
+        allocate(coeff(self%apply_paw(it)%nlm),dcoeff(self%apply_paw(it)%nlm), &
+          qcoeff(self%apply_paw(it)%nlm))
+        do iat=1,self%apply_paw(it)%natoms
+          do a=1,self%apply_paw(it)%nlm
+            coeff(a)=dot_product(self%apply_paw(it)%projectors(iat,a,:),psi(:,ib))
+          end do
+          dcoeff=matmul(self%apply_paw(it)%dij_atom(iat,:,:),coeff)
+          qcoeff=matmul(self%apply_paw(it)%qij,coeff)
+          do a=1,self%apply_paw(it)%nlm
+            hpsi(:,ib)=hpsi(:,ib)+self%apply_paw(it)%projectors(iat,a,:)*dcoeff(a)
+            spsi(:,ib)=spsi(:,ib)+self%apply_paw(it)%projectors(iat,a,:)*qcoeff(a)
+          end do
+        end do
+        deallocate(coeff,dcoeff,qcoeff)
+      end do
+    end do
+    status=HALF_SUCCESS;message=''
+#else
+    status=HALF_ERROR_UNAVAILABLE;message='CPU matrix-free apply requires oneMKL'
+#endif
   end subroutine
 
   subroutine context_solve_kpoint(self,kpoint,nbands,eigenvalues,eigenvectors,overlap_min,overlap_max,status,message,basis_out)

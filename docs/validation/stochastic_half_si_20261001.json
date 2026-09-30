@@ -1,0 +1,65 @@
+{
+  "system": "Si primitive cell with VASP CHGCAR and Si POTCAR on BHP6K",
+  "encut_ev": 50.0,
+  "charge_grid": [60, 60, 60],
+  "basis_size": 27,
+  "matrix_free_operator_max_abs_error": {
+    "h_psi": 5.711981690911429e-13,
+    "s_psi": 3.5566146649215975e-15,
+    "cuda_h_psi": 4.857198889371389e-12,
+    "cuda_s_psi": 3.580361673049448e-15
+  },
+  "deterministic_chebyshev_oracle": {
+    "kbt_ev": 0.5,
+    "degree": 256,
+    "chemical_potential_ev": 7.813626574496405,
+    "exact_electrons_per_spin": 4.000000000000012,
+    "chebyshev_electrons_per_spin": 4.000000211829396,
+    "exact_band_energy_ev_per_spin": 14.768049024981348,
+    "chebyshev_band_energy_ev_per_spin": 14.768050199015276,
+    "smooth_density_relative_l1_error": 5.634129398894788e-8,
+    "occupation_polynomial_max_abs_error": 8.434474230156752e-8,
+    "energy_weighted_polynomial_max_abs_error_ev": 6.860414183407215e-7
+  },
+  "random_64_probes_at_exact_mu": {
+    "electrons_per_spin": 3.827613036798531,
+    "electrons_stderr": 0.15414426495440003,
+    "band_energy_ev_per_spin": 13.871816490816304,
+    "band_energy_stderr_ev": 0.9528217514894796
+  },
+  "live_matrix_free_four_probes": {
+    "kbt_ev": 1.0,
+    "degree": 128,
+    "spectral_bounds_ev": [-7.2, 45.6],
+    "target_electrons_per_spin": 4.0,
+    "chemical_potential_ev": 7.6951355008206,
+    "electrons_per_spin": 3.999999999989976,
+    "electrons_stderr": 0.6403590471964246,
+    "band_energy_ev_per_spin": 15.224631618033794,
+    "band_energy_stderr_ev": 1.9502555618119812,
+    "occupation_polynomial_max_abs_error": 2.815694932767343e-8
+  },
+  "live_cuda_four_probes": {
+    "kbt_ev": 1.5,
+    "degree": 96,
+    "target_electrons_per_spin": 4.0,
+    "chemical_potential_ev": 7.53913906465943,
+    "electrons_per_spin": 3.999999999980301,
+    "electrons_stderr": 0.6099608671174546,
+    "band_energy_ev_per_spin": 16.01474068737003,
+    "band_energy_stderr_ev": 1.5475234308276518,
+    "occupation_polynomial_max_abs_error": 3.6721866103484047e-9
+  },
+  "live_cuda_fixed_spin": {
+    "total_electrons": 8.0,
+    "nupdown": 2.0,
+    "temperature_ev": 1.5,
+    "degree": 64,
+    "samples": 4,
+    "up_mu_ev": 8.521111615841361,
+    "down_mu_ev": 6.454045678679501,
+    "up_electrons": 5.000000020068635,
+    "down_electrons": 3.0000000000000075
+  },
+  "scope": "Correctness of generalized PAW Fermi operator and direct CPU/CUDA matrix-free API execution; not large-system total-energy accuracy."
+}

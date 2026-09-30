@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-01",
+  "system": "60 A uniformly strained Si API load test",
+  "atoms": 8000,
+  "service": {
+    "model_type": "escn",
+    "device": "cuda:0",
+    "gpu": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+    "batch_size": 3000,
+    "max_grid_points": 2000000
+  },
+  "measurements": [
+    {"grid": [30, 30, 30], "points": 27000, "seconds": 3.095353124999747, "points_per_second": 8722.752755391102, "density_mean": 0.1275460265803806},
+    {"grid": [40, 40, 40], "points": 64000, "seconds": 6.522857750000185, "points_per_second": 9811.650422699804, "density_mean": 0.06085632076847833},
+    {"grid": [55, 55, 55], "points": 166375, "seconds": 15.365105875000154, "points_per_second": 10828.106317881024, "density_mean": 0.14986817190432844},
+    {"grid": [70, 70, 70], "points": 343000, "seconds": 31.11276291700051, "points_per_second": 11024.41467236519, "density_mean": 0.1498754082664022},
+    {"grid": [85, 85, 85], "points": 614125, "seconds": 55.208846291000555, "points_per_second": 11123.670231451782, "density_mean": 0.14986866870440305},
+    {"grid": [110, 110, 110], "points": 1331000, "seconds": 119.41281983299996, "points_per_second": 11146.206930390028, "density_mean": 0.14986815938242284}
+  ],
+  "linear_fit": {
+    "model": "seconds = intercept + seconds_per_probe * probe_points",
+    "intercept_seconds": 0.6232519624213402,
+    "seconds_per_probe": 0.00008916842821311061,
+    "asymptotic_probes_per_second": 11214.731716589438,
+    "r_squared": 0.9999895679524533
+  },
+  "comparison_110_to_55": {
+    "probe_count_ratio": 8.0,
+    "single_request_speedup": 7.771688708457973,
+    "ideal_scaling_efficiency": 0.9714610885572467,
+    "single_request_time_reduction_fraction": 0.8713278365213348,
+    "target_dense_grid": [660, 660, 660],
+    "requests_with_110_cube": 216,
+    "requests_with_55_cube": 1728,
+    "estimated_serial_hours_with_110_cube": 7.164769189979997,
+    "estimated_serial_hours_with_55_cube": 7.375250820000074,
+    "full_reconstruction_time_ratio_55_over_110": 1.0293773161719107
+  },
+  "conclusion": "Latency is probe-decoder dominated and nearly linear in probe count. Reducing one request from 110^3 to 55^3 makes that request 7.77x faster and reduces its raw float32 density array by 8x, but an exact 660^3 direct-interlacing reconstruction then needs 8x more residues. Total serial GPU time is therefore unchanged within overhead and is estimated to be about 2.9% longer for 55^3. Coarse 30^3 and 40^3 density means are not converged, so latency alone must not select the physical grid."
+}

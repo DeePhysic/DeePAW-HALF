@@ -195,6 +195,30 @@ rho = normalize_once_globally(rho)
 
 结果证明完整 60 Å 晶胞和百万级稀疏 probe 可以进入当前服务，但也暴露出新的效率问题：每个余数请求都会重复计算同一个大体系的原子图和原子表示。按当前单服务串行执行 216 次约需 7 小时。
 
+### 4.4 Probe 大小与推理效率
+
+在相同的 8000 原子、60 Å Si 测试体和同一 GPU 服务上，固定结构和 residue，仅改变立方 probe 网格：
+
+| Probe 网格 | 点数 | 请求耗时 | 吞吐率 |
+|---|---:|---:|---:|
+| `30³` | 27,000 | `3.10 s` | 8,723 points/s |
+| `40³` | 64,000 | `6.52 s` | 9,812 points/s |
+| `55³` | 166,375 | `15.37 s` | 10,828 points/s |
+| `70³` | 343,000 | `31.11 s` | 11,024 points/s |
+| `85³` | 614,125 | `55.21 s` | 11,124 points/s |
+| `110³` | 1,331,000 | `119.41 s` | 11,146 points/s |
+
+线性拟合为
+
+```text
+t[s] = 0.6233 + 8.9168e-5 * Nprobe
+R² = 0.9999896
+```
+
+因此 `110³ -> 55³` 使单次请求加速 `7.77×`，接近点数减少 8 倍的理想比例。但若目标仍为完整 `660³` 密网格，`110³` 需要 216 个 residue，而 `55³` 需要 1728 个 residue。估算串行总耗时分别为 `7.16 h` 和 `7.38 h`；较小请求并不减少总 GPU 工作量，只降低单请求峰值内存并提供更细的并行任务粒度。
+
+此外，`30³` 和 `40³` 的平均密度已经明显偏离 `55³–110³` 的稳定值。因此不能只根据速度选择 probe 大小，必须同时检查密度积分、负密度、空间误差以及下游 HALF/VASP 结果。
+
 ## 5. 生产化所需改进
 
 ### 5.1 提高原子数上限
@@ -256,6 +280,8 @@ HALF 大体系电子结构：随机密度矩阵/Green's function + 确定性活�
 - pyRho FFT 验证脚本：`scripts/validate_escn_sparse_probe_pyrho.py`
 - pyRho FFT 验证数据：`docs/validation/si_sparse_probe_pyrho_fft.json`
 - 60 Å 试验报告：`docs/validation/si_60angstrom_sparse_probe_pilot.json`
+- 60 Å probe scaling 脚本：`scripts/benchmark_escn_probe_scaling.py`
+- 60 Å probe scaling 数据：`docs/validation/si_60angstrom_probe_scaling.json`
 - 相关总体设计：`docs/ESCN_LARGE_CELL_TILING.md`
 
 当前方法必须继续遵守“先外部验证，再嵌入生产接口”的顺序。在密度、电子数、HALF 能量和下游 VASP 结果全部通过之前，不应替代现有单体推理路径。

@@ -44,7 +44,12 @@ def predict(
     }
     started = time.perf_counter()
     response = session.post(f"{url.rstrip('/')}/v1/predict", json=payload, timeout=timeout)
-    response.raise_for_status()
+    if not response.ok:
+        detail = response.text.strip()
+        raise requests.HTTPError(
+            f"{response.status_code} response from eSCN service: {detail}",
+            response=response,
+        )
     result = response.json()
     arrays = {"density": decode(result["density_b64"], shape)}
     if include_uncertainty:

@@ -1,0 +1,35 @@
+{
+  "date": "2026-09-30",
+  "service": "BHP6K eSCN API on cuda:0",
+  "physical_bulk_candidate": {
+    "structure": "diamond-Si conventional 11x11x11",
+    "atoms": 10648,
+    "cell_angstrom": [59.73, 59.73, 59.73],
+    "status": "rejected_before_inference",
+    "http_status": 400,
+    "server_error": "原子数超过限制: 10648 > 10000"
+  },
+  "accepted_scale_test": {
+    "purpose": "API scale/load test only; uniformly strained Si is not a production physical structure",
+    "structure": "diamond-Si conventional 10x10x10 uniformly scaled to 60 A",
+    "atoms": 8000,
+    "cell_angstrom": [60.0, 60.0, 60.0],
+    "nearest_neighbor_angstrom": 2.598076211353316,
+    "target_dense_grid": [660, 660, 660],
+    "stride": [6, 6, 6],
+    "planned_requests": 216,
+    "tested_residue": [0, 0, 0],
+    "sparse_grid": [110, 110, 110],
+    "probe_points": 1331000,
+    "elapsed_seconds": 117.32279437499983,
+    "density": {
+      "min": -0.1648465394973755,
+      "max": 0.46371346712112427,
+      "mean": 0.1498681455355482,
+      "finite": true,
+      "negative_points": 5000
+    },
+    "status": "succeeded"
+  },
+  "conclusion": "A complete 60 A cell with 8000 atoms and 1.331 million probes fits one API request. The physical 59.73 A bulk candidate requires raising the server atom limit above 10648. Repeating the atomic graph for all 216 residues would be inefficient; graph or coefficient caching is required before a production full-grid run."
+}

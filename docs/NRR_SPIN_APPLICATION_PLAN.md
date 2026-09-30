@@ -1,12 +1,30 @@
 # Spin-resolved NRR application plan
 
-## Scientific claim
+## Central narrative
 
-DeePAW-HALF is used as a universal, spin-channel-aware initializer that makes
-large ensembles of fixed-moment electrocatalytic structures affordable.  The
-application target is not another single 0 K free-energy diagram.  It is a
-spin- and environment-resolved account of NRR/HER competition on M-N4 carbon,
-with final chemical energetics verified by matched VASP calculations.
+The paper is about releasing DeePAW for microscopic structure research at
+system sizes and ensemble sizes that are normally inaccessible to repeated
+plane-wave electronic-structure calculations.  NRR is the stress test and
+scientific demonstration, not the subject that defines the method.
+
+The evidence chain is:
+
+1. a universal DeePAW model covers 85 materials and 87 elements without
+   material-specific retraining;
+2. matched EOS, HALF0/HALFn, density, and band tests establish transferable
+   electronic-structure fidelity;
+3. DeePAW-HALF acceleration and spin-channel initialization reduce the cost of
+   repeated PAW calculations;
+4. the released capacity is spent on a genuinely large microscopic NRR
+   problem: heterogeneous active environments, explicit solvent, structural
+   fluctuations, adsorbate configurations, and competing spin states;
+5. the enlarged ensemble changes the mechanistic conclusion relative to a
+   single optimized small-cell pathway.
+
+The application target is therefore not another single 0 K free-energy
+diagram.  It is a spin-, microstructure-, and environment-resolved account of
+NRR/HER competition on M-N4 carbon, with final chemical energetics verified by
+matched VASP calculations.
 
 The present `spin-channel` implementation uses a shared total-density Harris
 operator.  It supplies controlled NUPDOWN occupations and two-channel VASP
@@ -50,10 +68,15 @@ For each fixed moment:
 
 Failure of the state-matching gate is a method diagnostic, not chemistry data.
 
-## Publication-scale extension
+## Publication-scale large-microstructure demonstration
 
-After the pilot passes, extend to Fe-, Mo-, and Ru-N4 sites and the alternating
-and distal NRR networks:
+After the pilot passes, construct a large heterogeneous interface containing
+multiple local coordination environments rather than repeating one ideal
+active site.  The production model should expose edge/defect strain,
+non-equivalent M-N4 environments, adsorbate-adsorbate interactions, and an
+explicit solvent region in the same calculation.  Extend the chemically
+resolved subset to Fe-, Mo-, and Ru-N4 sites and the alternating and distal NRR
+networks:
 
 `*N2 -> *NNH -> *NHNH/*NNH2 -> *NHNH2/*NH2NH2 -> *NH2 -> *NH3`.
 
@@ -70,6 +93,12 @@ Use explicit-water configurations rather than one optimized solvent geometry:
 - evaluate at least 50 independent snapshots per decisive intermediate;
 - refine representative minima and transition states with spin-polarized VASP;
 - report distributions and confidence intervals, not only minimum energies.
+
+The headline comparison is small-cell/single-minimum versus
+large-microstructure/ensemble sampling.  Report which spin state, intermediate
+ordering, barrier, or NRR/HER selectivity conclusion changes when the real
+microscopic environment is admitted.  System size alone is not a result; the
+large calculation must reveal a mechanism hidden by the reduced model.
 
 Potential dependence must be treated with a constant-potential or validated
 grand-canonical correction for decisive states.  Feed potential-dependent NRR
@@ -91,6 +120,8 @@ selectivity, and rate as functions of potential and pH.
 
 Proceed to the publication-scale ensemble only if the four-state Fe-N4 pilot
 passes every acceptance gate.  The Nature Communications-level contribution is
-the combination of universal 87-element validation, verified acceleration, and
-a new spin/environment-dependent NRR mechanism.  A single optimized-path free
-energy diagram is not sufficient.
+the combination of universal 87-element validation, verified acceleration,
+released large-system microstructure sampling, and a mechanism that cannot be
+recovered from the usual idealized small-cell picture.  A single optimized-path
+free-energy diagram, or a large cell that reproduces the same conclusion, is
+not sufficient.

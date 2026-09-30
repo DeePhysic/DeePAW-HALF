@@ -7,6 +7,14 @@ The v1 client sends one complete periodic structure and requests one complete
 requires the returned shape to equal the requested global shape.  Splitting
 only the response buffer cannot remove this limit.
 
+Both layers currently require three-dimensional periodicity.  The HALF request
+structure has no PBC field and its transport hard-codes `[true,true,true]`.
+Direct requests to the running eSCN service confirmed that `[true,true,false]`
+and `[false,false,false]` return HTTP 400 with the server error that the current
+model supports only three-dimensional periodic crystals.  A slab must therefore
+remain a 3D-periodic cell with explicit vacuum.  Turning PBC off is not an
+available shortcut for independent spatial tiles.
+
 Large-cell support must preserve periodicity, translational covariance, local
 atomic environments, negative density values, and one global electron-count
 normalization.  Independent normalization or clipping of tiles is forbidden.

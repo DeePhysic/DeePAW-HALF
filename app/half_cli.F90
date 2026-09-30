@@ -493,7 +493,7 @@ contains
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
     real(dp)::encut,eh,exc,smin,smax,potential_seconds,assembly_seconds,gpu_seconds,acc_tol,acc_residual,onsite_kspacing
-    real(dp)::nelect,nupdown,vbm,cbm,gap,gamma_gap
+    real(dp)::nelect,nupdown,density_electrons_raw,density_scale,vbm,cbm,gap,gamma_gap
     integer::narg,i,ios,ik,nbands,unit,npoints,nocc,gamma_index,artifact_status,acc_max_iter,acc_block_size,acc_iterations,ispin
     integer::onsite_lmax
     character(len=1024)::charge_path,potential_path,kpoints_path,arg,value,output_path,output_prefix,hdf5_path,path_spec,path_used
@@ -575,6 +575,9 @@ contains
     call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars);call validate_potcar_structure(potcars,crystal)
     nelect=0.0_dp
     do i=1,size(potcars);nelect=nelect+potcars(i)%zval*real(crystal%counts(i),dp);end do
+    call rho%normalize_electron_count(nelect,density_electrons_raw,density_scale)
+    if(parallel_root())write(0,'(A,3ES18.8)') &
+      'HALF bands: density electrons raw/target/scale=',density_electrons_raw,nelect,density_scale
     if(ispin==2)then
       if(0.5_dp*(nelect+abs(nupdown))>real(nbands,dp)+1e-12_dp) &
         call fail('NUPDOWN/NELECT require more spin bands; increase --bands')
@@ -680,10 +683,11 @@ contains
       else;open(newunit=unit,file=trim(output_path),status='replace',action='write',iostat=ios)
         if(ios/=0)call fail('cannot write output: '//trim(output_path));end if
       call write_bands_json(unit,charge_path,potential_path,path_used,xc,actual_backend,solver,encut,set,eigenvalues, &
-        plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing,ispin,nupdown)
+        plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing,ispin,nupdown, &
+        density_electrons_raw,density_scale)
       if(unit/=6)then;close(unit);call write_bands_json(6,charge_path,potential_path,path_used,xc,actual_backend,solver, &
         encut,set,eigenvalues,plane_waves,overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc, &
-        onsite_lmax,onsite_kspacing,ispin,nupdown);end if
+        onsite_lmax,onsite_kspacing,ispin,nupdown,density_electrons_raw,density_scale);end if
       if(trim(output_path)/='-')then
         call write_bands_csv(trim(output_prefix)//'.csv',set,path_x,shifted)
         call write_bands_artifacts(trim(output_prefix),set%points,path_x,eigenvalues,shifted,plane_waves,overlap_mins,vbm,artifact_status)
@@ -707,7 +711,8 @@ contains
   end subroutine
 
   subroutine write_bands_json(unit,charge,potential,kfile,xc,backend,solver,encut,set,eigenvalues,plane_waves, &
-      overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing,ispin,nupdown)
+      overlap_mins,path_x,use_uspp,vbm,cbm,gap,gamma_gap,nocc,onsite_lmax,onsite_kspacing,ispin,nupdown, &
+      density_electrons_raw,density_scale)
     integer,intent(in)::unit
     character(len=*),intent(in)::charge,potential,kfile,xc,backend,solver
     real(dp),intent(in)::encut,eigenvalues(:,:),overlap_mins(:),path_x(:),vbm,cbm,gap,gamma_gap,onsite_kspacing
@@ -715,7 +720,7 @@ contains
     integer(i64),intent(in)::plane_waves(:)
     logical,intent(in)::use_uspp
     integer,intent(in)::nocc,onsite_lmax,ispin
-    real(dp),intent(in)::nupdown
+    real(dp),intent(in)::nupdown,density_electrons_raw,density_scale
     integer::ik,ib
     write(unit,'(A)')'{';write(unit,'(A)')'  "implementation": "DeePAW-HALF 0.6.0",'
     write(unit,'(A,A,A)')'  "charge": "',trim(charge),'",';write(unit,'(A,A,A)')'  "potential": "',trim(potential),'",'
@@ -728,6 +733,8 @@ contains
     write(unit,'(A,I0,A)')'  "ispin": ',ispin,','
     write(unit,'(A,ES24.16,A)')'  "nupdown": ',nupdown,','
     if(ispin==2)write(unit,'(A)')'  "spin_channel_mode": "shared_total_density_fixed_moment",'
+    write(unit,'(A,ES24.16,A)')'  "input_density_electron_count_raw": ',density_electrons_raw,','
+    write(unit,'(A,ES24.16,A)')'  "density_normalization_scale": ',density_scale,','
     write(unit,'(A,ES24.16,A)')'  "vbm_eV": ',vbm,','
     write(unit,'(A,ES24.16,A)')'  "cbm_eV": ',cbm,','
     write(unit,'(A,ES24.16,A)')'  "sampled_band_gap_eV": ',gap,','
@@ -790,7 +797,7 @@ contains
       charges(:),reference_eigenvalues(:,:),vxc_input(:)
     complex(dp),allocatable::vectors(:,:)
     integer(i64),allocatable::plane_waves(:)
-    real(dp)::encut,kspacing,symprec,sigma,nelect,nupdown,density_electrons,mu,mu_up,mu_down, &
+    real(dp)::encut,kspacing,symprec,sigma,nelect,nupdown,density_electrons,density_electrons_raw,density_scale,mu,mu_up,mu_down, &
       band_energy,entropy_term,reference_nelect
     real(dp)::eh,exc,exv,smin,k_smin,smax,potential_seconds,assembly_seconds,gpu_seconds
     real(dp)::ewald,ewald_real,ewald_recip,ewald_self,ewald_background,atomic_reference,local_g0
@@ -904,8 +911,10 @@ contains
     call read_chgcar(trim(charge_path),crystal,rho);call read_potcar(trim(potential_path),potcars);call validate_potcar_structure(potcars,crystal)
     nelect=0.0_dp
     do it=1,size(potcars);nelect=nelect+potcars(it)%zval*real(crystal%counts(it),dp);end do
+    call rho%normalize_electron_count(nelect,density_electrons_raw,density_scale)
     density_electrons=rho%electron_count()
-    if(abs(density_electrons-nelect)>5e-4_dp)call fail('smooth CHGCAR electron count does not match POTCAR ZVAL')
+    if(parallel_root())write(0,'(A,3ES18.8)') &
+      'HALF energy: density electrons raw/target/scale=',density_electrons_raw,nelect,density_scale
     if(ispin==2)then
       if(abs(nupdown)>nelect+1e-12_dp)call fail('abs(NUPDOWN) cannot exceed NELECT')
       minimum_bands=ceiling(0.5_dp*(nelect+abs(nupdown)))
@@ -1175,11 +1184,13 @@ contains
       call write_energy_json(unit,xc,actual_backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
         have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step, &
-        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down)
+        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down, &
+        density_electrons_raw,density_scale)
       if(unit/=6)then;close(unit);call write_energy_json(6,xc,actual_backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band_energy,entropy_term, &
         eh,exv,exc,ewald,ewald_real,ewald_recip,ewald_self,ewald_background,local_g0,atomic_reference,paw_atomic, &
         have_paw_atomic,internal_energy,free_energy,smin,plane_waves,use_uspp,forces,do_forces,force_step, &
-        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down);end if
+        onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down, &
+        density_electrons_raw,density_scale);end if
       if(trim(output_path)/='-')then
         call write_energy_npz(trim(output_prefix),set%points,set%weights,eigenvalues,occupation,forces,artifact_status)
         if(artifact_status/=0)call fail('cannot write energy NPZ artifact')
@@ -1417,13 +1428,14 @@ contains
 
   subroutine write_energy_json(unit,xc,backend,solver,ismear,sigma,set,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald, &
       er,eg,es,eb,local_g0,atomic_reference,paw_atomic,have_paw_atomic,internal,free,smin,plane_waves,use_uspp, &
-      forces,have_forces,force_step,onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down)
+      forces,have_forces,force_step,onsite_lmax,onsite_iteration,onsite_dc,onsite_energy,ispin,nupdown,mu_up,mu_down, &
+      density_electrons_raw,density_scale)
     integer,intent(in)::unit,ismear,onsite_lmax,onsite_iteration,ispin
     character(len=*),intent(in)::xc,backend,solver
     type(kpoint_set_t),intent(in)::set
     real(dp),intent(in)::sigma,nelect,density_electrons,mu,band,entropy,eh,exv,exc,ewald,er,eg,es,eb,local_g0
     real(dp),intent(in)::atomic_reference,paw_atomic,internal,free,smin,onsite_dc,onsite_energy
-    real(dp),intent(in)::nupdown,mu_up,mu_down
+    real(dp),intent(in)::nupdown,mu_up,mu_down,density_electrons_raw,density_scale
     integer(i64),intent(in)::plane_waves(:)
     real(dp),intent(in)::forces(:,:),force_step
     logical,intent(in)::have_paw_atomic,use_uspp,have_forces
@@ -1456,7 +1468,10 @@ contains
       write(unit,'(A)')'  "force_kpoint_expansion": null,'
     end if
     write(unit,'(A,I0,A,I0,A)')'  "plane_wave_range": [',minval(plane_waves),', ',maxval(plane_waves),'],'
-    write(unit,'(A,ES24.16,A)')'  "electron_count": ',nelect,',';write(unit,'(A,ES24.16,A)')'  "smooth_density_electron_count": ',density_electrons,','
+    write(unit,'(A,ES24.16,A)')'  "electron_count": ',nelect,','
+    write(unit,'(A,ES24.16,A)')'  "input_density_electron_count_raw": ',density_electrons_raw,','
+    write(unit,'(A,ES24.16,A)')'  "density_normalization_scale": ',density_scale,','
+    write(unit,'(A,ES24.16,A)')'  "smooth_density_electron_count": ',density_electrons,','
     write(unit,'(A,ES24.16,A)')'  "fermi_level_eV": ',mu,',';write(unit,'(A,ES24.16,A)')'  "band_energy_eV": ',band,','
     write(unit,'(A,ES24.16,A)')'  "entropy_minus_Ts_eV": ',entropy,',';write(unit,'(A,ES24.16,A)')'  "hartree_double_counting_eV": ',-eh,','
     write(unit,'(A,ES24.16,A)')'  "xc_potential_double_counting_eV": ',-exv,',';write(unit,'(A,ES24.16,A)')'  "xc_energy_eV": ',exc,','

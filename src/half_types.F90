@@ -26,6 +26,7 @@ module half_types
   contains
     procedure :: size => charge_size
     procedure :: electron_count => charge_electron_count
+    procedure :: normalize_electron_count => charge_normalize_electron_count
   end type charge_grid_t
 
   type :: plane_wave_basis_t
@@ -78,4 +79,20 @@ contains
       nelect = sum(self%values)/real(size(self%values), dp)
     end if
   end function charge_electron_count
+
+  subroutine charge_normalize_electron_count(self,target_electrons,original_electrons,scale)
+    class(charge_grid_t),intent(inout)::self
+    real(dp),intent(in)::target_electrons
+    real(dp),intent(out),optional::original_electrons,scale
+    real(dp)::current,factor
+    if(.not.allocated(self%values))error stop 'HALF: cannot normalize an unallocated charge grid'
+    if(target_electrons<=0.0_dp.or.target_electrons/=target_electrons) &
+      error stop 'HALF: density normalization target must be positive and finite'
+    current=self%electron_count()
+    if(abs(current)<=tiny(1.0_dp).or.current/=current) &
+      error stop 'HALF: cannot normalize a charge grid with zero or non-finite integral'
+    factor=target_electrons/current;self%values=self%values*factor
+    if(present(original_electrons))original_electrons=current
+    if(present(scale))scale=factor
+  end subroutine charge_normalize_electron_count
 end module half_types

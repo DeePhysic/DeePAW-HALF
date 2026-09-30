@@ -347,6 +347,11 @@ CPU/CUDA backend selection:
   --encut 400 --bands 24 --backend cuda --ispin 2 --nupdown 2 \
   --vaspwave-h5 vaspwave-spin.h5 --output-prefix energy-spin
 
+Before either `bands` or `energy` constructs the operator, HALF uniformly
+normalizes the input charge grid to the POTCAR valence-electron count.  JSON
+output records both `input_density_electron_count_raw` and
+`density_normalization_scale`, so learned-density normalization is explicit.
+
 # Evaluate the symmetry-reduced fixed-density Harris energy.
 ./build/cuda12-cc89-release/half energy CHGCAR.smooth POTCAR \
   --encut 400 --kspacing 0.5 --bands 12 --ismear 0 --sigma 0.02 --backend cuda \

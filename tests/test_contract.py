@@ -276,6 +276,8 @@ def test_fixed_nupdown_spin_channels_are_exported_to_vasp_hdf5():
     assert "shared_total_density_fixed_moment" in cli
     assert "call compute_spin_occupations" in cli
     assert "occupation=occupation_up+occupation_down" in cli
+    assert "normalize_electron_count" in cli
+    assert "density_normalization_scale" in cli
 
 
 def test_si_finite_difference_force_parity_record():

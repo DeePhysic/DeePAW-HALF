@@ -1,6 +1,6 @@
 program half_energy_check
   use half_kinds,only:dp
-  use half_types,only:crystal_t,plane_wave_basis_t
+  use half_types,only:crystal_t,charge_grid_t,plane_wave_basis_t
   use half_math,only:inverse3
   use half_energy,only:compute_occupations,compute_spin_occupations,ewald_energy,ewald_forces
   use half_paw,only:paw_species_t
@@ -9,10 +9,11 @@ program half_energy_check
   use half_kpoints,only:kpoint_set_t,symmetrize_scalar_grid,symmetrize_atomic_vectors
   implicit none
   type(crystal_t)::crystal,shifted
+  type(charge_grid_t)::test_charge
   type(plane_wave_basis_t)::basis
   type(paw_species_t),allocatable::paw(:)
   type(kpoint_set_t)::symset
-  real(dp)::eig(2,3),weight(2),mu,band,entropy,e1,e2,ep,em,h,phase,table(8),m2table(8),dx
+  real(dp)::eig(2,3),weight(2),mu,band,entropy,e1,e2,ep,em,h,phase,table(8),m2table(8),dx,raw_electrons,density_scale
   real(dp)::analytic(2,3),numeric(2,3),inverse_lattice(3,3),delta(3)
   real(dp)::nlforce(1,3),nlnumeric(3),eval(1),focc(1),r0(3),eplus,eminus
   real(dp)::symgrid(8),symvectors(2,3),expected_vectors(2,3)
@@ -71,6 +72,12 @@ program half_energy_check
   if(abs(sum(spread(weight,2,3)*(occ_up-occ_down))-1.0_dp)>1e-12_dp.or. &
      any(occ_up<0.0_dp).or.any(occ_up>1.0_dp).or.any(occ_down<0.0_dp).or.any(occ_down>1.0_dp)) &
     error stop 'HALF: fixed-NUPDOWN channel occupation regression'
+
+  test_charge%shape=[2,2,1];allocate(test_charge%values(4));test_charge%values=[1.0_dp,2.0_dp,3.0_dp,4.0_dp]
+  call test_charge%normalize_electron_count(8.0_dp,raw_electrons,density_scale)
+  if(abs(raw_electrons-2.5_dp)>1e-14_dp.or.abs(density_scale-3.2_dp)>1e-14_dp.or. &
+     abs(test_charge%electron_count()-8.0_dp)>1e-14_dp) &
+    error stop 'HALF: charge-grid electron normalization regression'
 
   crystal%nions=2;crystal%ntypes=1;crystal%lattice=0.0_dp
   crystal%lattice(1,1)=4.0_dp;crystal%lattice(2,2)=4.0_dp;crystal%lattice(3,3)=4.0_dp

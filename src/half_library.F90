@@ -340,7 +340,7 @@ contains
         if(status/=HALF_SUCCESS)return
         call build_veff_cuda(self%charge,self%potcars,self%crystal,self%use_pbe,dveff,eh,exc,.false.)
         call prepare_hs_operator_cuda(dveff,self%apply_basis,self%potcars,self%crystal, &
-          self%gpu_apply_operator,self%use_uspp)
+          self%gpu_apply_operator,self%use_uspp,projector_tile_atoms=8)
         deallocate(dveff)
         self%apply_kpoint=kpoint;self%apply_ready=.true.
       end if

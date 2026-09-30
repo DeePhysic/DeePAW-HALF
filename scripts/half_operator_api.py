@@ -69,10 +69,11 @@ class HalfOperatorAPI:
         ))
         return hstates[:, 0].copy(), sstates[:, 0].copy()
 
-    def generalized(self, lower_ev: float, upper_ev: float) -> GeneralizedOperator:
+    def generalized(self, lower_ev: float, upper_ev: float, *,
+                    overlap_tolerance: float = 1e-11) -> GeneralizedOperator:
         return GeneralizedOperator(
             self.size, lambda v: self.apply(v)[0], lambda v: self.apply(v)[1],
-            lower_ev, upper_ev,
+            lower_ev, upper_ev, overlap_tolerance=overlap_tolerance,
         )
 
     def estimated_generalized(self, padding_ev: float = 2.0) -> GeneralizedOperator:

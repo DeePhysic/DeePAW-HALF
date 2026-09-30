@@ -9,6 +9,16 @@
     "cuda_h_psi": 4.857198889371389e-12,
     "cuda_s_psi": 3.580361673049448e-15
   },
+  "cuda_projector_tiling_si18": {
+    "atoms": 18,
+    "supercell": [3, 3, 1],
+    "projector_tile_atoms": 8,
+    "plane_waves": 293,
+    "charge_grid": [180, 180, 60],
+    "tile_sizes": [8, 8, 2],
+    "h_psi_max_abs_error": 5.262627949024364e-12,
+    "s_psi_max_abs_error": 8.586123501512914e-15
+  },
   "deterministic_chebyshev_oracle": {
     "kbt_ev": 0.5,
     "degree": 256,

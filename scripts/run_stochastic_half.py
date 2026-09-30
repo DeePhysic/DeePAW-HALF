@@ -21,16 +21,20 @@ def main() -> None:
     parser.add_argument("--degree", type=int, default=256)
     parser.add_argument("--samples", type=int, default=32)
     parser.add_argument("--seed", type=int, default=20261001)
+    parser.add_argument("--overlap-rtol", type=float, default=1e-11)
     parser.add_argument("--lower-ev", type=float)
     parser.add_argument("--upper-ev", type=float)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if (args.lower_ev is None) != (args.upper_ev is None):
         parser.error("supply both --lower-ev and --upper-ev, or neither")
+    if args.overlap_rtol <= 0:
+        parser.error("--overlap-rtol must be positive")
     with HalfOperatorAPI(args.library, args.charge, args.potcar, args.encut,
                          backend=1 if args.backend == "cpu" else 2) as api:
         operator = (api.estimated_generalized() if args.lower_ev is None else
-                    api.generalized(args.lower_ev, args.upper_ev))
+                    api.generalized(args.lower_ev, args.upper_ev,
+                                    overlap_tolerance=args.overlap_rtol))
         solver = StochasticHalf(operator, args.degree, args.samples, args.seed)
         mu = solver.find_mu(args.electrons_per_spin, args.kbt)
         report = {
@@ -42,6 +46,7 @@ def main() -> None:
             "degree": args.degree,
             "samples": args.samples,
             "seed": args.seed,
+            "overlap_rtol": args.overlap_rtol,
             "target_electrons_per_spin": args.electrons_per_spin,
             "mu_ev": mu,
             "trace": solver.trace(mu, args.kbt),

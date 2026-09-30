@@ -9,14 +9,22 @@ module half_cuda_assembly
   use half_cuda_uspp, only: build_uspp_dij_cuda_species
   implicit none
   private
+  type :: cuda_projector_channel_t
+    integer :: l=0,nrad=0
+    real(dp)::gmax=0.0_dp
+    real(dp),device,allocatable::radial(:),m2(:)
+  end type
   type,public :: cuda_paw_block_t
     integer :: natoms=0,nlm=0,nproj=0
     complex(dp),device,allocatable :: projectors(:,:)
     real(dp),device,allocatable :: dij(:,:,:),qij(:,:)
+    real(dp),device,allocatable :: positions(:,:)
+    type(cuda_projector_channel_t),allocatable::channels(:)
   end type
   type,public :: cuda_hs_operator_t
-    integer :: n=0,ngrid=0,shape(3)=0,fft_plan=0
-    real(dp),device,allocatable :: veff(:),kinetic(:)
+    integer :: n=0,ngrid=0,shape(3)=0,fft_plan=0,projector_tile_atoms=0
+    real(dp)::inv_sqrt_volume=0.0_dp
+    real(dp),device,allocatable :: veff(:),kinetic(:),qvectors(:,:)
     integer(8),device,allocatable :: fft_index(:)
     type(cuda_paw_block_t),allocatable :: paw(:)
   end type
@@ -184,6 +192,30 @@ contains
     integer::i
     i=(blockIdx%x-1)*blockDim%x+threadIdx%x
     if(i<=n)values(i)=(0.0_dp,0.0_dp)
+  end subroutine
+
+  attributes(global) subroutine copy_projector_tile_positions(source,target,natoms,first,count)
+    real(dp),device,intent(in)::source(*)
+    real(dp),device,intent(out)::target(*)
+    integer,value::natoms,first,count
+    integer::linear,iat,axis
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=3*count)then
+      iat=mod(linear-1,count)+1;axis=(linear-1)/count
+      target(linear)=source(first+iat-1+axis*natoms)
+    end if
+  end subroutine
+
+  attributes(global) subroutine copy_projector_tile_dij(source,target,natoms,nlm,first,count)
+    real(dp),device,intent(in)::source(*)
+    real(dp),device,intent(out)::target(*)
+    integer,value::natoms,nlm,first,count
+    integer::linear,iat,ab
+    linear=(blockIdx%x-1)*blockDim%x+threadIdx%x
+    if(linear<=count*nlm*nlm)then
+      iat=mod(linear-1,count)+1;ab=(linear-1)/count
+      target(linear)=source(first+iat-1+ab*natoms)
+    end if
   end subroutine
 
   attributes(global) subroutine scatter_states_kernel(states,grid,fft_index,n,ngrid,nb)
@@ -416,7 +448,7 @@ contains
     ierr=cudaDeviceSynchronize();if(ierr/=cudaSuccess)error stop 'HALF: full CUDA matrix assembly failed'
   end subroutine
 
-  subroutine prepare_hs_operator_cuda(dveff,basis,potcars,crystal,op,use_uspp,onsite_correction)
+  subroutine prepare_hs_operator_cuda(dveff,basis,potcars,crystal,op,use_uspp,onsite_correction,projector_tile_atoms)
     real(dp),device,intent(in)::dveff(:)
     type(plane_wave_basis_t),intent(in)::basis
     type(potcar_t),intent(in)::potcars(:)
@@ -424,22 +456,33 @@ contains
     type(cuda_hs_operator_t),intent(out)::op
     logical,intent(in),optional::use_uspp
     type(onsite_species_correction_t),intent(in),optional::onsite_correction(:)
+    integer,intent(in),optional::projector_tile_atoms
     real(dp),device,allocatable::dqvectors(:,:),dpositions(:,:),dradial(:),dm2(:),dcorr(:,:,:)
     real(dp),allocatable::positions(:,:),m2(:),dij(:,:),qij(:,:)
     integer::status,it,iat,ich,jch,m,mj,l,ilm,jlm,nlm,nrad,ion0
     logical::with_uspp
     complex(dp)::ilfac
     op%n=int(basis%npw);op%ngrid=size(dveff);op%shape=basis%shape
+    op%projector_tile_atoms=0;if(present(projector_tile_atoms))op%projector_tile_atoms=max(0,projector_tile_atoms)
+    op%inv_sqrt_volume=1.0_dp/sqrt(crystal%volume)
     allocate(op%veff(op%ngrid),op%kinetic(op%n),op%fft_index(op%n),op%paw(size(potcars)))
     op%veff=dveff;op%kinetic=basis%kinetic;op%fft_index=int(basis%fft_index,8)
     status=cufftPlan3d(op%fft_plan,op%shape(1),op%shape(2),op%shape(3),CUFFT_Z2Z)
     if(status/=CUFFT_SUCCESS)error stop 'HALF: matrix-free cuFFT plan creation failed'
     allocate(dqvectors(op%n,3));dqvectors=basis%qvectors;ion0=0
+    if(op%projector_tile_atoms>0)then
+      allocate(op%qvectors(op%n,3));op%qvectors=dqvectors
+    end if
     with_uspp=.false.;if(present(use_uspp))with_uspp=use_uspp
     do it=1,size(potcars)
       nlm=0;do ich=1,potcars(it)%channels;nlm=nlm+2*potcars(it)%lps(ich)+1;end do
       op%paw(it)%natoms=crystal%counts(it);op%paw(it)%nlm=nlm;op%paw(it)%nproj=crystal%counts(it)*nlm
-      allocate(op%paw(it)%projectors(op%n,op%paw(it)%nproj),op%paw(it)%qij(nlm,nlm))
+      if(op%projector_tile_atoms==0)then
+        allocate(op%paw(it)%projectors(op%n,op%paw(it)%nproj))
+      else
+        allocate(op%paw(it)%channels(potcars(it)%channels))
+      end if
+      allocate(op%paw(it)%qij(nlm,nlm))
       allocate(dij(nlm,nlm),qij(nlm,nlm));dij=0;qij=0;ilm=0
       do ich=1,potcars(it)%channels
         l=potcars(it)%lps(ich)
@@ -470,22 +513,37 @@ contains
         call add_onsite_dij_kernel<<<(size(dcorr)+255)/256,256>>>(op%paw(it)%dij,dcorr,size(dcorr))
         deallocate(dcorr)
       end if
-      allocate(positions(crystal%counts(it),3),dpositions(crystal%counts(it),3))
+      allocate(positions(crystal%counts(it),3))
       do iat=1,crystal%counts(it);positions(iat,:)=matmul(crystal%positions(ion0+iat,:),crystal%lattice);end do
-      dpositions=positions;ilm=0
+      if(op%projector_tile_atoms==0)then
+        allocate(dpositions(crystal%counts(it),3));dpositions=positions
+      else
+        allocate(op%paw(it)%positions(crystal%counts(it),3));op%paw(it)%positions=positions
+      end if
+      ilm=0
       do ich=1,potcars(it)%channels
         l=potcars(it)%lps(ich);nrad=size(potcars(it)%pspnl,1);allocate(m2(nrad),dradial(nrad),dm2(nrad))
         call spline_second_projector_host(potcars(it)%pspnl(:,ich),potcars(it)%pspnl_gmax,m2)
         dradial=potcars(it)%pspnl(:,ich);dm2=m2;ilfac=(-cmplx(0.0_dp,1.0_dp,dp))**l
+        if(op%projector_tile_atoms>0)then
+          op%paw(it)%channels(ich)%l=l;op%paw(it)%channels(ich)%nrad=nrad
+          op%paw(it)%channels(ich)%gmax=potcars(it)%pspnl_gmax
+          allocate(op%paw(it)%channels(ich)%radial(nrad),op%paw(it)%channels(ich)%m2(nrad))
+          op%paw(it)%channels(ich)%radial=dradial;op%paw(it)%channels(ich)%m2=dm2
+        end if
         do m=-l,l
           ilm=ilm+1
-          call projector_matrix_kernel<<<(op%n*crystal%counts(it)+255)/256,256>>>(op%paw(it)%projectors, &
-            dqvectors,dpositions,dradial,dm2,op%n,crystal%counts(it),nlm,ilm,l,m,nrad, &
-            potcars(it)%pspnl_gmax,1.0_dp/sqrt(crystal%volume),ilfac)
+          if(op%projector_tile_atoms==0)then
+            call projector_matrix_kernel<<<(op%n*crystal%counts(it)+255)/256,256>>>(op%paw(it)%projectors, &
+              dqvectors,dpositions,dradial,dm2,op%n,crystal%counts(it),nlm,ilm,l,m,nrad, &
+              potcars(it)%pspnl_gmax,op%inv_sqrt_volume,ilfac)
+          end if
         end do
         deallocate(m2,dradial,dm2)
       end do
-      deallocate(dij,qij,positions,dpositions);ion0=ion0+crystal%counts(it)
+      deallocate(dij,qij,positions)
+      if(allocated(dpositions))deallocate(dpositions)
+      ion0=ion0+crystal%counts(it)
     end do
     deallocate(dqvectors)
     status=cudaDeviceSynchronize();if(status/=cudaSuccess)error stop 'HALF: matrix-free operator preparation failed'
@@ -496,10 +554,11 @@ contains
     complex(dp),device,intent(in)::states(:,:)
     complex(dp),device,intent(out)::hstates(:,:),sstates(:,:)
     integer,intent(in),optional::block_size
-    complex(dp),device,allocatable::grid(:,:),coeff(:,:),dcoeff(:,:),qcoeff(:,:)
+    complex(dp),device,allocatable::grid(:,:),coeff(:,:),dcoeff(:,:),qcoeff(:,:),tile_projectors(:,:)
+    real(dp),device,allocatable::tile_positions(:,:),tile_dij(:,:,:)
     type(cublasHandle)::handle
-    complex(dp)::one,zero
-    integer::first,last,nb,chunk,ib,it,total,status
+    complex(dp)::one,zero,ilfac
+    integer::first,last,nb,chunk,ib,it,total,status,atom_first,atom_last,natoms,ich,l,m,ilm
     if(size(states,1)/=op%n.or.size(hstates,1)/=op%n.or.size(sstates,1)/=op%n.or. &
        size(hstates,2)/=size(states,2).or.size(sstates,2)/=size(states,2)) &
       error stop 'HALF: invalid matrix-free H/S block dimensions'
@@ -523,20 +582,58 @@ contains
       call gather_local_kinetic_kernel<<<(op%n*(last-first+1)+255)/256,256>>>(states(:,first:last),grid, &
         op%kinetic,op%fft_index,hstates(:,first:last),sstates(:,first:last),op%n,op%ngrid,last-first+1)
       do it=1,size(op%paw)
-        total=op%paw(it)%nproj
-        allocate(coeff(total,last-first+1),dcoeff(total,last-first+1),qcoeff(total,last-first+1))
-        status=cublasZgemm_v2(handle,CUBLAS_OP_C,CUBLAS_OP_N,total,last-first+1,op%n,one, &
-          op%paw(it)%projectors,op%n,states(:,first:last),op%n,zero,coeff,total)
-        if(status/=0)error stop 'HALF: projector contraction failed'
-        call mix_projector_coefficients_kernel<<<(size(coeff)+255)/256,256>>>(coeff,dcoeff,qcoeff, &
-          op%paw(it)%dij,op%paw(it)%qij,op%paw(it)%natoms,op%paw(it)%nlm,last-first+1)
-        status=cublasZgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_N,op%n,last-first+1,total,one, &
-          op%paw(it)%projectors,op%n,dcoeff,total,one,hstates(:,first:last),op%n)
-        if(status/=0)error stop 'HALF: nonlocal Hamiltonian application failed'
-        status=cublasZgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_N,op%n,last-first+1,total,one, &
-          op%paw(it)%projectors,op%n,qcoeff,total,one,sstates(:,first:last),op%n)
-        if(status/=0)error stop 'HALF: PAW overlap application failed'
-        deallocate(coeff,dcoeff,qcoeff)
+        if(op%projector_tile_atoms==0)then
+          total=op%paw(it)%nproj
+          allocate(coeff(total,last-first+1),dcoeff(total,last-first+1),qcoeff(total,last-first+1))
+          status=cublasZgemm_v2(handle,CUBLAS_OP_C,CUBLAS_OP_N,total,last-first+1,op%n,one, &
+            op%paw(it)%projectors,op%n,states(:,first:last),op%n,zero,coeff,total)
+          if(status/=0)error stop 'HALF: projector contraction failed'
+          call mix_projector_coefficients_kernel<<<(size(coeff)+255)/256,256>>>(coeff,dcoeff,qcoeff, &
+            op%paw(it)%dij,op%paw(it)%qij,op%paw(it)%natoms,op%paw(it)%nlm,last-first+1)
+          status=cublasZgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_N,op%n,last-first+1,total,one, &
+            op%paw(it)%projectors,op%n,dcoeff,total,one,hstates(:,first:last),op%n)
+          if(status/=0)error stop 'HALF: nonlocal Hamiltonian application failed'
+          status=cublasZgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_N,op%n,last-first+1,total,one, &
+            op%paw(it)%projectors,op%n,qcoeff,total,one,sstates(:,first:last),op%n)
+          if(status/=0)error stop 'HALF: PAW overlap application failed'
+          deallocate(coeff,dcoeff,qcoeff)
+        else
+          do atom_first=1,op%paw(it)%natoms,op%projector_tile_atoms
+            atom_last=min(op%paw(it)%natoms,atom_first+op%projector_tile_atoms-1)
+            natoms=atom_last-atom_first+1;total=natoms*op%paw(it)%nlm
+            allocate(tile_projectors(op%n,total),tile_positions(natoms,3), &
+              tile_dij(natoms,op%paw(it)%nlm,op%paw(it)%nlm))
+            call copy_projector_tile_positions<<<(3*natoms+255)/256,256>>>( &
+              op%paw(it)%positions,tile_positions,op%paw(it)%natoms,atom_first,natoms)
+            call copy_projector_tile_dij<<<(natoms*op%paw(it)%nlm**2+255)/256,256>>>( &
+              op%paw(it)%dij,tile_dij,op%paw(it)%natoms,op%paw(it)%nlm,atom_first,natoms)
+            ilm=0
+            do ich=1,size(op%paw(it)%channels)
+              l=op%paw(it)%channels(ich)%l;ilfac=(-cmplx(0.0_dp,1.0_dp,dp))**l
+              do m=-l,l
+                ilm=ilm+1
+                call projector_matrix_kernel<<<(op%n*natoms+255)/256,256>>>(tile_projectors, &
+                  op%qvectors,tile_positions,op%paw(it)%channels(ich)%radial, &
+                  op%paw(it)%channels(ich)%m2,op%n,natoms,op%paw(it)%nlm,ilm,l,m, &
+                  op%paw(it)%channels(ich)%nrad,op%paw(it)%channels(ich)%gmax, &
+                  op%inv_sqrt_volume,ilfac)
+              end do
+            end do
+            allocate(coeff(total,last-first+1),dcoeff(total,last-first+1),qcoeff(total,last-first+1))
+            status=cublasZgemm_v2(handle,CUBLAS_OP_C,CUBLAS_OP_N,total,last-first+1,op%n,one, &
+              tile_projectors,op%n,states(:,first:last),op%n,zero,coeff,total)
+            if(status/=0)error stop 'HALF: tiled projector contraction failed'
+            call mix_projector_coefficients_kernel<<<(size(coeff)+255)/256,256>>>(coeff,dcoeff,qcoeff, &
+              tile_dij,op%paw(it)%qij,natoms,op%paw(it)%nlm,last-first+1)
+            status=cublasZgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_N,op%n,last-first+1,total,one, &
+              tile_projectors,op%n,dcoeff,total,one,hstates(:,first:last),op%n)
+            if(status/=0)error stop 'HALF: tiled nonlocal Hamiltonian application failed'
+            status=cublasZgemm_v2(handle,CUBLAS_OP_N,CUBLAS_OP_N,op%n,last-first+1,total,one, &
+              tile_projectors,op%n,qcoeff,total,one,sstates(:,first:last),op%n)
+            if(status/=0)error stop 'HALF: tiled PAW overlap application failed'
+            deallocate(tile_projectors,tile_positions,tile_dij,coeff,dcoeff,qcoeff)
+          end do
+        end if
       end do
       deallocate(grid)
     end do
@@ -553,13 +650,16 @@ contains
         if(allocated(op%paw(it)%projectors))deallocate(op%paw(it)%projectors)
         if(allocated(op%paw(it)%dij))deallocate(op%paw(it)%dij)
         if(allocated(op%paw(it)%qij))deallocate(op%paw(it)%qij)
+        if(allocated(op%paw(it)%positions))deallocate(op%paw(it)%positions)
+        if(allocated(op%paw(it)%channels))deallocate(op%paw(it)%channels)
       end do
       deallocate(op%paw)
     end if
     if(allocated(op%veff))deallocate(op%veff)
     if(allocated(op%kinetic))deallocate(op%kinetic)
     if(allocated(op%fft_index))deallocate(op%fft_index)
-    op%n=0;op%ngrid=0;op%shape=0
+    if(allocated(op%qvectors))deallocate(op%qvectors)
+    op%n=0;op%ngrid=0;op%shape=0;op%projector_tile_atoms=0
   end subroutine
 
   subroutine spline_second_projector_host(y,xmax,m2)

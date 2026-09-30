@@ -1,0 +1,54 @@
+{
+  "purpose": "GPU resource and execution-path test only; uniformly strained 60 A Si and a single 110-cube sparse eSCN probe grid are not physical production inputs",
+  "atoms": 8000,
+  "cell_angstrom": [60.0, 60.0, 60.0],
+  "grid": [110, 110, 110],
+  "potcar": "PAW_PBE Si, ZVAL=4",
+  "basis_at_encut_5_ev": 5449,
+  "basis_at_encut_12_ev": 20341,
+  "target_electrons_per_spin": 16000,
+  "cuda_projector_tile_atoms": 8,
+  "automatic_generalized_lanczos": {
+    "status": "interrupted_after_more_than_six_minutes",
+    "reason": "iterative extremal eigenvalue estimation nested with the S inverse CG was expensive; subsequent load tests used explicit wide bounds",
+    "result_available": false
+  },
+  "operator_test_at_encut_12_ev": {
+    "use_uspp": true,
+    "first_hs_seconds": 7.226980267092586,
+    "cached_hs_seconds": 0.45083363191224635,
+    "h_and_s_finite": true
+  },
+  "overlap_solve_at_encut_12_ev": {
+    "cg_relative_tolerance": 1e-6,
+    "iterations": 4,
+    "relative_residual": 2.2167139196515398e-7,
+    "seconds_including_first_operator_setup": 8.799400302115828
+  },
+  "stochastic_single_probe": {
+    "kbt_ev": 5.0,
+    "degree": 32,
+    "spectral_bounds_ev": [-100.0, 100.0],
+    "overlap_relative_tolerance": 1e-6,
+    "fitted_mu_ev": 10.475510246860045,
+    "electrons_per_spin": 16000.000000001735,
+    "band_energy_ev_per_spin": 35945.968517072324,
+    "occupation_polynomial_max_abs_error": 0.003974101727817314,
+    "energy_weighted_polynomial_max_abs_error_ev": 0.06676343740659973,
+    "standard_errors_available": false
+  },
+  "stochastic_two_probes": {
+    "kbt_ev": 5.0,
+    "degree": 64,
+    "spectral_bounds_ev": [-100.0, 100.0],
+    "overlap_relative_tolerance": 1e-6,
+    "fitted_mu_ev": 10.457343183973991,
+    "electrons_per_spin": 16000.000000002534,
+    "electrons_stderr": 5.178352280396211,
+    "band_energy_ev_per_spin": 36140.04522402472,
+    "band_energy_stderr_ev": 166.36270310814868,
+    "occupation_polynomial_max_abs_error": 2.6058887790392227e-5,
+    "energy_weighted_polynomial_max_abs_error_ev": 0.00043090456486893913
+  },
+  "scope": "Demonstrates that an 8000-atom PAW H/S vector application and one stochastic Fermi trace finish without dense H/S or full projector allocation. Cutoff, charge grid, sample count and polynomial order are deliberately inadequate for Si physics."
+}

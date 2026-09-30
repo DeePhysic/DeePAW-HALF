@@ -1,0 +1,50 @@
+{
+  "implementation_commit": "08659c202ec9b65e4e9ae3cf5d1f7a71532ce5ed",
+  "system": "nc-Si-mp149-eq",
+  "charge_source": "matched VASP CHGCAR",
+  "charge_electrons": 7.9999999975,
+  "potcar_zval_electrons": 8.0,
+  "settings": {
+    "encut_eV": 520.0,
+    "kspacing_Ainv": 2.0,
+    "kpoint_symmetry": false,
+    "nbands_per_spin": 12,
+    "sigma_eV": 0.0,
+    "backend": "cuda",
+    "solver": "evd",
+    "ispin": 2
+  },
+  "cases": [
+    {
+      "nupdown": 0.0,
+      "n_up": 4.0,
+      "n_down": 4.0,
+      "band_energy_eV": 22.05749348075166,
+      "internal_energy_eV": 5.658086293618169,
+      "spin_fermi_levels_eV": [5.733907029337123, 5.733907029337123]
+    },
+    {
+      "nupdown": 2.0,
+      "n_up": 5.0,
+      "n_down": 3.0,
+      "band_energy_eV": 24.624071438051473,
+      "internal_energy_eV": 8.224664250917982,
+      "spin_fermi_levels_eV": [8.30048498663694, 5.733904271492718]
+    },
+    {
+      "nupdown": -2.0,
+      "n_up": 3.0,
+      "n_down": 5.0,
+      "internal_energy_eV": 8.224664250917982,
+      "spin_fermi_levels_eV": [5.733904271492718, 8.30048498663694]
+    }
+  ],
+  "checks": {
+    "all_hdf5_rispin": 2.0,
+    "all_hdf5_have_spin_1_and_spin_2": true,
+    "electron_count_max_abs_error": 0.0,
+    "nupdown_max_abs_error": 0.0,
+    "spin_reversal_internal_energy_abs_error_eV": 0.0
+  },
+  "note": "This validates fixed-moment spin occupations and two-channel VASP HDF5 export using the shared total-density Harris operator; it is not a self-consistent spin-density PBE calculation."
+}

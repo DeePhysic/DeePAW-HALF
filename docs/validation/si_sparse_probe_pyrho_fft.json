@@ -1,0 +1,56 @@
+{
+  "date": "2026-09-30",
+  "system": "nc-Si-mp149-eq",
+  "reference_grid": [60, 60, 60],
+  "sparse_grid": [30, 30, 30],
+  "stride": [2, 2, 2],
+  "shifted_sparse_requests": 8,
+  "reference_seconds": 9.982130417000008,
+  "sparse_total_seconds": 11.172067124000478,
+  "methods": {
+    "direct_interlacing": {
+      "max_abs": 0.003106415271759033,
+      "mae": 0.00006791341575552468,
+      "rmse": 0.00012543362383165088,
+      "relative_l1": 0.0003416816203045728,
+      "mean": 0.19822988795940075,
+      "negative_points": 805,
+      "retained_unrepresentable_high_frequency_power_fraction": 0.9974869204710853
+    },
+    "pyrho_fft_single_shifted_probe_range": {
+      "relative_l1_min": 0.0005492234654854611,
+      "relative_l1_max": 0.0005629865015821079,
+      "known_sample_max_abs_error_max": 2.384185791015625e-7
+    },
+    "pyrho_fft_consensus_all_shifted_probes": {
+      "max_abs": 0.0028185397386550903,
+      "mae": 0.00008311322816224573,
+      "rmse": 0.0001556992209036161,
+      "relative_l1": 0.0004181539413280005,
+      "mean": 0.19822991239383558,
+      "negative_points": 789,
+      "retained_unrepresentable_high_frequency_power_fraction": 7.935595468780625e-9
+    },
+    "oracle_downsample_pyrho_fft_single": {
+      "max_abs": 0.003609180450439453,
+      "mae": 0.00010346342488999325,
+      "rmse": 0.0002105786635567118,
+      "relative_l1": 0.000520538545519963
+    },
+    "oracle_downsample_pyrho_fft_consensus": {
+      "max_abs": 0.002817496657371521,
+      "mae": 0.000079080804115746,
+      "rmse": 0.00014880405775847283,
+      "relative_l1": 0.0003978662681689448,
+      "retained_unrepresentable_high_frequency_power_fraction": 7.930953783599331e-9
+    }
+  },
+  "reference": {
+    "mean": 0.19823004975965833,
+    "min": -0.18359160423278809,
+    "max": 0.5796144604682922,
+    "negative_points": 802,
+    "unrepresentable_high_frequency_power_fraction": 3.6608319420357563e-7
+  },
+  "conclusion": "pyRho Fourier interpolation is exact for band-limited periodic fields and preserves the supplied sparse samples after phase alignment, but it cannot recover Fourier modes beyond the sparse-grid Nyquist limit. For this Si density, one shifted sparse request plus pyRho is a useful lossy approximation. Averaging all eight pyRho interpolants is still less accurate than direct interlacing and removes essentially all unrepresentable high-frequency power. Production CHGCAR reconstruction should therefore use direct interlacing when all residues are available; pyRho should be an explicitly lossy reduced-request mode followed by HALF/VASP validation."
+}

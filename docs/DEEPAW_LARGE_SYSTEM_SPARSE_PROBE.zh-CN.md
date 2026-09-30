@@ -139,7 +139,29 @@ rho = normalize_once_globally(rho)
 
 正向移动原子的相对 L1 误差约为 `0.428`，说明原子平移必须使用负号。
 
-### 4.2 约 60 Å Si 大体系试验
+### 4.2 pyRho Fourier 插值测试
+
+进一步测试了是否可以只保留稀疏 probe，再使用 Materials Project pyRho 的 Fourier interpolation 恢复 `60³` 密度。pyRho 的实现对稀疏数组做 FFT，在目标频谱中零填充，再做逆 FFT；因此它是周期带限插值，而不是缺失高频信息的学习式恢复。
+
+测试比较了：
+
+1. 8 个 `30³` 移位子网格直接交错；
+2. 单个移位 `30³` 子网格经 pyRho 放大到 `60³`；
+3. 8 个子网格分别进行相位对齐的 pyRho 插值后取平均；
+4. 从同一个 `60³` 参考密度精确抽稀后再做 pyRho 的控制组。
+
+| 方法 | 相对 L1 | RMSE | 稀疏 Nyquist 外高频保留率 |
+|---|---:|---:|---:|
+| 直接交错 | `3.4168×10⁻⁴` | `1.2543×10⁻⁴` | `99.75%` |
+| 单个移位网格 + pyRho | `5.49–5.63×10⁻⁴` | 约 `2.14×10⁻⁴` | 不可恢复 |
+| 8 个 pyRho 插值平均 | `4.1815×10⁻⁴` | `1.5570×10⁻⁴` | 约 `0%` |
+| 参考密度抽稀 + pyRho | `5.2054×10⁻⁴` | `2.1058×10⁻⁴` | 约 `0%` |
+
+合成周期函数测试同时证明：当真实密度严格限制在稀疏网格 Nyquist 范围内时，移位和相位对齐后的 pyRho 插值可达到机器精度；一旦包含更高频 Fourier 分量，直接交错仍能精确保留采样值，而 pyRho 必然丢失该部分。
+
+因此 pyRho 可以作为一种**有损、少请求模式**：只进行一个或少数移位请求，获得平滑近似密度。但当所有余数子网格已经计算完成时，应直接交错，不应先分别 FFT 再平均。用于正式 CHGCAR 前，pyRho 模式必须独立通过电子数、负密度、HALF 能量/能带和 VASP SCF 检验。
+
+### 4.3 约 60 Å Si 大体系试验
 
 平衡晶格常数下构造了金刚石 Si `11×11×11` 常规胞：
 
@@ -231,6 +253,8 @@ HALF 大体系电子结构：随机密度矩阵/Green's function + 确定性活�
 
 - 外部验证脚本：`scripts/validate_escn_sparse_probe.py`
 - `60³` 验证数据：`docs/validation/si_sparse_probe_interlacing.json`
+- pyRho FFT 验证脚本：`scripts/validate_escn_sparse_probe_pyrho.py`
+- pyRho FFT 验证数据：`docs/validation/si_sparse_probe_pyrho_fft.json`
 - 60 Å 试验报告：`docs/validation/si_60angstrom_sparse_probe_pilot.json`
 - 相关总体设计：`docs/ESCN_LARGE_CELL_TILING.md`
 

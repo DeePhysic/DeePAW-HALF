@@ -61,5 +61,16 @@
     "up_electrons": 5.000000020068635,
     "down_electrons": 3.0000000000000075
   },
+  "paired_cuda_charge_difference": {
+    "comparison": "same Si geometry, VASP CHGCAR versus DeePAW CHGCAR",
+    "encut_ev": 50.0,
+    "temperature_ev": 1.5,
+    "degree": 96,
+    "paired_random_probes": 16,
+    "stochastic_band_energy_difference_ev": -0.028995335104504694,
+    "paired_stderr_ev": 0.0017996070220624616,
+    "hypothetical_unpaired_stderr_ev": 1.478851618591677,
+    "exact_generalized_band_energy_difference_ev": -0.029534911366866368
+  },
   "scope": "Correctness of generalized PAW Fermi operator and direct CPU/CUDA matrix-free API execution; not large-system total-energy accuracy."
 }

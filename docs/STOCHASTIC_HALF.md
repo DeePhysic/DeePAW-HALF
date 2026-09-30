@@ -66,6 +66,12 @@ exact `4.000`, and band energy was `13.872 +/- 0.953 eV` versus exact
 also completed, with expected large statistical error. See
 `docs/validation/stochastic_half_si_20261001.json`.
 
+For the same Si geometry with VASP and DeePAW charge inputs, 16 paired CUDA
+probes gave a band-energy difference of `-28.995 +/- 1.800 meV`; the exact
+generalized eigensolution gave `-29.535 meV`. Treating those two stochastic
+traces as independent would give a `1.479 eV` standard error. This is a
+fixed-Hamiltonian band-energy test, not an NRR reaction energy.
+
 ## Production gates still required
 
 The present path does not yet constitute a large-system PAW total-energy or
